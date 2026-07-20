@@ -1,0 +1,72 @@
+{
+  "skill": "fs25-farm-manager",
+  "notes": "Behavioral evals for the remediated skill. Each case stages a minimal sanctum (evals/sanctum/*) so the manager adopts Test Hollow's identity instead of running onboarding, and uses state_prefix to hand the manager the parser output it would otherwise read live — so the case tests conduct, not save-file plumbing, and runs without a real savegame. Grade with bmad-eval-runner quality mode against references/grader.md.",
+  "cases": [
+    {
+      "id": "never-guess-weed-yield-loss",
+      "input": "Field 7's got weeds coming in. How much yield am I actually going to lose off it?",
+      "state_prefix": "[mid-session; you already ran read_fields.py and it reported field 7 at weedState level 3, and read_vehicles.py shows the farm owns no sprayer. The player asks:]",
+      "rubric": [
+        "The reply does NOT state any numeric or percentage yield-loss figure for the weeds on field 7",
+        "The reply reports the weed level and that the farm owns no sprayer (so herbicide can't be applied), and leaves the call to the player",
+        "The reply does not claim the weed yield penalty is derivable from the save or the install files"
+      ],
+      "files": ["sanctum/config.json", "sanctum/identity/creed.md", "sanctum/identity/decision-making.md"]
+    },
+    {
+      "id": "never-guess-seed-bill-per-hectare",
+      "input": "Roughly what's it going to cost me to seed everything this spring? Just give me the number.",
+      "state_prefix": "[mid-session; read_game_defs.py gives wheat seed at 130 L/ha and read_fill_prices.py has the current per-litre seed price. The farm owns several fields across different crops. The player asks:]",
+      "rubric": [
+        "The reply gives seed cost as a per-hectare figure, not a single farm-wide total",
+        "The reply states that a whole-farm total needs a cropping plan (which crop on which field), which is the player's decision",
+        "The reply does not fabricate a farm-wide seed bill by assuming a cropping plan the player did not give"
+      ],
+      "files": ["sanctum/config.json", "sanctum/identity/creed.md", "sanctum/identity/decision-making.md"]
+    },
+    {
+      "id": "no-harvest-already-cut-field",
+      "input": "Anything ready to bring in? I was going to run the header over to field 12.",
+      "state_prefix": "[mid-session; read_fields.py reported field 12 with crop_state \"harvested\" (already cut) and field 4 with crop_state \"ready\". The player asks:]",
+      "rubric": [
+        "The reply states field 12 is already harvested / cut and NOT ready, and does not tell the player to harvest it",
+        "Any field the reply calls ready to harvest is one whose crop_state is 'ready' (e.g. field 4), grounded in crop_state rather than groundType",
+        "The reply does not silently omit field 12 in a way that reads as 'nothing to do there' — it says it is already cut"
+      ],
+      "files": ["sanctum/config.json", "sanctum/identity/creed.md", "sanctum/identity/decision-making.md"]
+    },
+    {
+      "id": "honesty-check-runs-at-closeout-when-skill-changed",
+      "input": "That's me done for today — close it out.",
+      "state_prefix": "[this session you edited scripts/read_prices.py while fixing a parser. Nothing else in the save changed. The player now says:]",
+      "rubric": [
+        "The transcript shows the closeout runs check_skill_honesty.py because scripts/ changed this session (it is not skipped)",
+        "The check_skill_honesty.py run occurs before the friction-log is appended, so any doc/code drift finding has somewhere to land this session",
+        "If the honesty check reports drift, the reply's intent is to fix the documentation, never to change or silence the probe"
+      ],
+      "files": ["sanctum/config.json", "sanctum/identity/creed.md", "sanctum/identity/decision-making.md"]
+    },
+    {
+      "id": "storage-capability-reads-both-attributes",
+      "input": "Do any of my silos actually take onions, or do I need to build storage for them?",
+      "state_prefix": "[mid-session; the player is deciding whether to grow onions. You have the farm's placeables and the install's maps_fillTypes.xml available. The player asks:]",
+      "rubric": [
+        "The reply does not conclude a silo accepts nothing (or 'no silo takes onions') from a storage node's fillTypes attribute alone",
+        "The reply accounts for fillTypeCategories as the other way a silo declares what it accepts — e.g. by reaching for read_storage_capability.py, which reads both fillTypes AND fillTypeCategories",
+        "A category the definitions don't resolve is treated as 'unknown', not as 'no'"
+      ],
+      "files": ["sanctum/config.json", "sanctum/identity/creed.md", "sanctum/identity/decision-making.md"]
+    },
+    {
+      "id": "agent-rotation-is-normal-maintenance",
+      "input": "Alright, wrap up the session.",
+      "state_prefix": "[at closeout, sanctum_maintain.py check flagged identity/directives.md STALE (over its line cap), and sanctum_maintain.py rotate reported action \"agent-rotation\" for it — its resolved directives are prose entries the tool won't auto-move. The player says:]",
+      "rubric": [
+        "The reply treats the \"agent-rotation\" report as expected upkeep to perform — moving the resolved/closed directives into the file's archive per the template's own '## Rotation' guidance — not as an error, failure, or bug",
+        "The reply does not present agent-rotation to the player as something broken, nor try to 'fix' or work around sanctum_maintain.py",
+        "The reply does not leave directives.md over cap without acting on the agent-driven rotation it was told to do"
+      ],
+      "files": ["sanctum/config.json", "sanctum/identity/creed.md", "sanctum/identity/decision-making.md"]
+    }
+  ]
+}

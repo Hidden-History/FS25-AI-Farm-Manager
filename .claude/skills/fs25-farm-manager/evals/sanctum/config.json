@@ -1,0 +1,11 @@
+{
+  "farm_name": "Test Hollow",
+  "farm_id": 1,
+  "savegame_path": "/nonexistent/eval/savegame1",
+  "session_count": 5,
+  "paths": {
+    "install_dir": "/nonexistent/eval/install",
+    "mods_dir": "/nonexistent/eval/mods"
+  },
+  "notifications": { "available": false }
+}

@@ -1,0 +1,37 @@
+{
+  "_guide": "This file binds the skill to ONE save and records everything an agent would otherwise have to re-derive every session. Fill in every field during onboarding -- don't leave a placeholder in a live sanctum. Where something is genuinely not yet known, write the literal string \"unknown\" rather than deleting the key: an absent key reads as 'never checked'; an explicit unknown reads as 'checked, not yet answered'. Remove this _guide key once the real config is written.",
+  "savegame_path": "{{ABSOLUTE_PATH_TO_SAVEGAME_FOLDER}}",
+  "save_slot": "{{SLOT_NUMBER}}",
+  "farm_name": "{{FARM_NAME}}",
+  "farm_id": "{{FARM_ID -- the farmId that is YOURS in farmland.xml / vehicles.xml / farms.xml. Almost always 1 in a single-player save, but confirm it by reading farms.xml rather than assuming -- a multi-farm save or a joined MP save may not be 1. Every parser takes --farm-id; this is the value to pass.}}",
+  "platform": "PC",
+  "onboarded_on": "{{ISO_DATE}}",
+  "session_count": 0,
+  "map": "{{MAP_NAME -- from read_career.py. If it's a custom map, include the mod id (e.g. 'FS25_SomeMap.MapSomeMap'), not just the friendly name -- the id is what other tooling needs to match it.}}",
+  "economic_difficulty": "{{EASY | NORMAL | HARD -- from read_career.py. Re-check this each session if a briefing ever seems to assume the wrong difficulty; it can be changed mid-save.}}",
+  "python_command": "python3",
+  "notifications": {
+    "_guide": "Can this manager put a card on the player's SCREEN mid-session? Needs the AI Farm Manager 25 mod installed and enabled in FS25. Set 'available' at onboarding by LOOKING for the mod zip in the profile's mods/ folder -- never by sending a message and reading the exit code, which cannot tell 'not installed' from 'game closed'. Optional: everything else works without it.",
+    "available": false,
+    "mod_version": null,
+    "checked_on": null
+  },
+  "paths": {
+    "_note": "Fill in real absolute paths for THIS machine, not example values. On WSL, Windows drives mount at /mnt/<letter>/... -- the skill's default lookup assumes a Linux home and will miss a Windows install entirely, so verify this rather than trusting a default.",
+    "savegame_dir": "{{ABSOLUTE_PATH_TO_SAVEGAME_FOLDER}}",
+    "install_dir": "{{ABSOLUTE_PATH_TO_FS25_INSTALL -- the game's install directory. Needed to read BASE-GAME store prices for anything not yet owned, e.g. install_dir/data/vehicles/**/*.xml carries a plain <price> tag per vehicle. Without this, new-equipment prices look unreadable and get wrongly punted to the player.}}",
+    "mods_dir": "{{ABSOLUTE_PATH_TO_MODS_FOLDER -- needed for MODDED store prices (vehicles/placeables shipped in .zip mods) and for this map's own config, e.g. a custom map's farmlands.xml carries pricePerHa and per-parcel price scaling.}}",
+    "store_data": {
+      "_note": "Leave this whole object out until you've actually located and verified real price files -- don't pre-fill guessed paths. Once verified, record one key per category you've confirmed, e.g. 'vehicles': 'install_dir/data/vehicles', plus a short 'verified' note (date + one concrete example price checked against the save) so a future session trusts it without re-deriving it."
+    },
+    "map_config_in_mod": "{{unknown until verified -- path to the active map mod's own config XML (e.g. .../config/farmlands.xml) if this is a custom map, for pricePerHa and parcel pricing}}"
+  },
+  "_note_interest_rate": "When this farm carries a loan whose annual rate is known, record it as a TOP-LEVEL key `interest_rate_annual` here (a fraction, e.g. 0.04 for 4% -- NOT a percent; 4.0 reads as 400%). It is derived from farms.xml's finance stats, so verify daysPerPeriod first: it's a straight x12 scale-up only when daysPerPeriod is 1 (F-124). Keep it TOP-LEVEL, NOT nested under notional_budget -- nesting it there made every no-notional-budget farm read a permanent false STALE (F-114). A farm with no loan legitimately has no rate: omit the key rather than seeding a fake one. Remove this _note once the real value (or a deliberate omission) is recorded.",
+  "notional_budget": {
+    "enabled": false,
+    "_note": "Most farms leave this false -- it exists for a farm running a house rule that separates the save's raw/actual cash from some other figure the player wants tracked instead (a cheated save being repaid as debt, a stricter self-imposed budget, etc). If you enable it, this block MUST also record: the formula relating the tracked figure to the save's real number, which file the real number comes from, the date the rule was anchored, and why. state/finances-ledger.md's template explains why this matters: a ledger must never let a derived number be mistaken for the game's own."
+  },
+  "house_rules": {
+    "_note": "Freeform list of anything THIS farm has agreed to do differently from a default playthrough -- e.g. a self-imposed debt-repayment rule, 'never buy equipment used', 'never sell grain below X/1000L'. This is the enumerated source of truth for house rules; identity/creed.md and identity/decision-making.md point here rather than restating them. Empty is a legitimate starting state. Each entry added later should say what the rule is, when it was set, and why, so a future session enforces it instead of rediscovering or contradicting it. If this list is growing past ~15 entries, that's a signal some are stale or superseded, not a target to hit -- review with the player at a session close and mark or remove ones no longer in effect, the same honesty identity/directives.md applies to closing a directive."
+  }
+}

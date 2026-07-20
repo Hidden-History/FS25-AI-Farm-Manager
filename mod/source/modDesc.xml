@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<modDesc descVersion="107">
+    <author>Parzival</author>
+    <version>2.2.1.0</version>
+
+    <title>
+        <en>AI Farm Manager 25</en>
+    </title>
+
+    <description>
+        <en><![CDATA[Shows a designed on-screen notification whenever an external "Farm Manager" process running on the same PC (for example, a Claude Code automation skill) sends one.
+
+The mod watches a small bridge file on disk and, the moment a message appears, draws a card: a rounded, severity-coloured panel (green / blue / amber / red) with a farm glyph, a title, the in-game time it arrived, and word-wrapped body text. Recent cards stack, so a new one arrives with its context instead of replacing it.
+
+If the panel cannot be drawn for any reason, the mod falls back to the game's own native notification rather than going silent.
+
+Nothing else is touched: no gameplay system is modified and the game's save files are never written. Client-side only, safe for singleplayer and multiplayer.
+
+The panel has two modes, toggled with Ctrl+Period (rebindable in Controls as "AI Farm Manager: show/hide overlay panel"). ON, the default, keeps the panel on screen: header, cards and reply bar stay up and cards wait until you answer or dismiss them. OFF turns it back into a transient notifier where each card fades out on its own. Unanswered cards are kept either way - they return when the panel comes back on, even after a restart.
+
+Cards that offer actions show clickable buttons (acknowledge, yes/no, dismiss). Bring up the mouse cursor the way you already do for other mods (for example AutoDrive's middle mouse button or Courseplay's right mouse button) and click. The reply bar at the panel's bottom opens a text box for a free-text message. Your answers are written to modSettings/FS25_AIFarmManager25/replies.xml for the Farm Manager process to read. Without a cursor on screen the mod is a passive notifier.
+
+The bridge is modSettings/FS25_AIFarmManager25/notify.xml. Optional: modSettings/FS25_AIFarmManager25/settings.xml overrides the panel's position, width, text size and background opacity.]]></en>
+    </description>
+
+    <iconFilename>icon_FarmManager25.dds</iconFilename>
+
+    <multiplayer supported="true" />
+
+    <extraSourceFiles>
+        <!-- Ordered: theme data first, renderer second (one shared per-mod
+             global env; the theme file creates the FarmManager25 table and
+             the renderer extends it). -->
+        <sourceFile filename="FarmManagerTheme.lua" />
+        <sourceFile filename="FarmManager25.lua" />
+    </extraSourceFiles>
+
+    <!-- The overlay mode toggle (S155 rework): flips the panel between
+         persistent (default) and transient. Clicks route off the ENGINE's
+         shared cursor state, which this mod only ever reads: raise the
+         cursor with whatever you already use (AutoDrive MMB, Courseplay
+         RMB). Default key from the O4 collision scan (2026-07-19): the live
+         merged inputBinding.xml + every installed mod's modDesc verified
+         free of KEY_lctrl KEY_period (bare KEY_period is PUSH_TO_TALK). -->
+    <actions>
+        <action name="FM25_TOGGLE_OVERLAY" category="GLOBAL" axisType="HALF" />
+    </actions>
+    <inputBinding>
+        <actionBinding action="FM25_TOGGLE_OVERLAY">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_period" />
+        </actionBinding>
+    </inputBinding>
+    <l10n>
+        <text name="input_FM25_TOGGLE_OVERLAY">
+            <en>AI Farm Manager: show/hide overlay panel</en>
+        </text>
+    </l10n>
+</modDesc>
