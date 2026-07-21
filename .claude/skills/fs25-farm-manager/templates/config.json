@@ -9,6 +9,8 @@
   "session_count": 0,
   "map": "{{MAP_NAME -- from read_career.py. If it's a custom map, include the mod id (e.g. 'FS25_SomeMap.MapSomeMap'), not just the friendly name -- the id is what other tooling needs to match it.}}",
   "economic_difficulty": "{{EASY | NORMAL | HARD -- from read_career.py. Re-check this each session if a briefing ever seems to assume the wrong difficulty; it can be changed mid-save.}}",
+  "days_per_period": "{{INTEGER -- from read_environment.py's `days_per_period` (the live <daysPerPeriod>); cross-check against read_career.py's `planned_days_per_period`. How many in-game days each season lasts -- it paces crop growth and drives the interest-rate x12 scaling (see _note_interest_rate below, F-124). Re-check each session if timing advice seems to assume the wrong pace; it can be changed mid-save.}}",
+  "growth_mode": "{{INTEGER -- from read_career.py's `growth_mode`. The save's crop-growth mode setting (seasonal growth vs. paused vs. grow-anywhere); it shapes whether planting/harvest-window advice applies at all. Re-check if a briefing assumes seasonal growth that isn't on.}}",
   "python_command": "python3",
   "notifications": {
     "_guide": "Can this manager put a card on the player's SCREEN mid-session? Needs the AI Farm Manager 25 mod installed and enabled in FS25. Set 'available' at onboarding by LOOKING for the mod zip in the profile's mods/ folder -- never by sending a message and reading the exit code, which cannot tell 'not installed' from 'game closed'. Optional: everything else works without it.",

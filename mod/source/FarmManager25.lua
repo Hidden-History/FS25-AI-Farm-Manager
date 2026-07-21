@@ -61,10 +61,14 @@
     A card WITH <actions> draws an affordance row (ack -> check, yesno ->
     thumb_up/thumb_down, always a close/dismiss X). Clicks route whenever the
     ENGINE's shared mouse cursor is on screen (g_inputBinding state -- raised
-    by AutoDrive's MMB, Courseplay's RMB, or any other cursor mod). This mod
-    only ever READS that shared state; it never writes it (the S155 rework
-    dropped the standalone cursor toggle -- whoever raises the cursor owns
-    it). Ctrl+Period (FM25_TOGGLE_OVERLAY) instead toggles the OVERLAY
+    by AutoDrive's MMB, Courseplay's RMB, this mod's own Ctrl+Comma cursor
+    toggle, or any other cursor mod). Click-gating only READS that shared
+    state; the ONE place the mod writes it is the standalone cursor toggle
+    (FM25_TOGGLE_CURSOR, added S157 so the overlay is reachable ON FOOT, where
+    AD's MMB / CP's RMB -- both vehicle-context -- cannot raise it; the S155
+    assumption that they always could was disproven in on-foot play). Whoever
+    raised the cursor owns it. Ctrl+Period (FM25_TOGGLE_OVERLAY) instead
+    toggles the OVERLAY
     between its two modes: ON (default) is a persistent always-on panel --
     header, cards and reply bar stay up and cards do not auto-expire; OFF is
     the original transient pop-up notifier where each card fades after its
@@ -284,6 +288,13 @@ FarmManager25.DESIGN = {
     lineGapPx      = 3,
     titleGapPx     = 12,     -- mockup title-baseline -> body-top gap ~12-14dp (was 5)
     cardGapPx      = 9,      -- mockup-confirmed (9.6dp)
+    -- S157: the visible card window is capped at a FIXED count, not the screen
+    -- height. Before this, the only limit was "don't draw below the screen
+    -- edge", so 8 modest cards legitimately filled ~80% of the screen. The cap
+    -- is measured as this many AVERAGE cards' worth of height (renderStack), so
+    -- it is a soft ~4, not a hard count: a stack of tall cards shows fewer, and
+    -- older cards beyond the window scroll into view on the mouse wheel.
+    maxVisibleCards = 4,
     pillGapPx      = 9,      -- gap between the banner header and the first card
     affordHeightPx = 26,     -- affordance button height
     affordWidthPx  = 40,
@@ -329,6 +340,14 @@ FarmManager25.textReplySeq      = 0      -- uniquifies free-text reply ids withi
 -- dismiss, answer, OFF-mode expiry) sets it; update() flushes state.xml once
 -- per tick, so state.xml always mirrors the live stack.
 FarmManager25.stateDirty        = false
+-- S157: the mouse-wheel scroll offset -- how many of the NEWEST cards the
+-- visible window is scrolled PAST. 0 = anchored on the newest (the default a
+-- new arrival snaps back to); clamped each drawn frame in renderStack to a
+-- full last page. panelRect is the whole-panel bounds the wheel hit-tests
+-- against -- recorded each drawn frame, nil on every path that does not draw
+-- (the headerRect discipline: an off-screen panel must not eat the wheel).
+FarmManager25.scrollOffset      = 0
+FarmManager25.panelRect         = nil
 
 
 -- ---------------------------------------------------------------------------
@@ -945,16 +964,18 @@ end
 --  READS the state every mod shares (g_inputBinding:getShowMouseCursor();
 --  the gate AutoDrive uses at AutoDrive.lua:596-601 and Courseplay consumes
 --  vehicle-wide). Whoever raised the cursor -- AutoDrive MMB, Courseplay
---  RMB, any cursor mod, or this mod's own toggle below -- owns hiding it.
+--  RMB, any cursor mod, or this mod's own Ctrl+Comma cursor toggle
+--  (FM25_TOGGLE_CURSOR, below) -- owns hiding it.
 function FarmManager25:cursorIsShown()
     return g_inputBinding ~= nil and g_inputBinding:getShowMouseCursor()
 end
 
 --- The overlay mode toggle (FM25_TOGGLE_OVERLAY, default Ctrl+Period):
 --  flip the panel between persistent (ON, the default) and transient (OFF).
---  The mod never writes the engine cursor -- whoever raises it (AutoDrive's
---  MMB, Courseplay's RMB, any cursor mod) owns it; click-gating reads
---  cursorIsShown() like every other consumer. Guarded while a real menu owns
+--  This toggle never writes the engine cursor (only FM25_TOGGLE_CURSOR does)
+--  -- whoever raises it (AutoDrive's MMB, Courseplay's RMB, that key, any
+--  cursor mod) owns it; click-gating reads cursorIsShown() like every other
+--  consumer. Guarded while a real menu owns
 --  the screen (a keypress under a menu is the menu's, not ours). Switching
 --  to OFF re-arms every live card with a fresh read window: their ages
 --  predate the mode and would otherwise expire them on the spot. The new
@@ -978,8 +999,42 @@ function FarmManager25:onToggleOverlay()
     end
 end
 
---- Register FM25_TOGGLE_OVERLAY so it SURVIVES engine input-context rebuilds
---  -- the S153 live-test root cause. The engine re-runs
+--- The standalone cursor toggle (FM25_TOGGLE_CURSOR, default Ctrl+Comma):
+--  raise/lower the ENGINE's shared mouse cursor so the overlay is reachable
+--  ON FOOT. The S155 design assumed AutoDrive's MMB / Courseplay's RMB would
+--  always be on hand to raise the cursor; the owner's on-foot playtest
+--  disproved it -- both are VEHICLE-context bindings, so out of a vehicle the
+--  cursor could not come up at all and the overlay was dead. This is the ONE
+--  place the mod WRITES the shared cursor; every gate elsewhere still only
+--  READS it (cursorIsShown), so read-only consumers are unaffected.
+--
+--  Toggles off the SAME shared state every consumer reads, so it cooperates
+--  instead of fighting: whoever last set the cursor (AD, CP, any cursor mod,
+--  or this key), one press reads the live state and flips it. Works
+--  identically in a vehicle. Unlike the click-driven open/close the BP-064
+--  next-tick defer was written for, this action is KEY-triggered -- there is
+--  no closing click for setShowMouseCursor(false) to eat, so it applies
+--  inline with no defer. Guarded while a real menu owns the screen (that
+--  keypress is the menu's, exactly like onToggleOverlay) and nil-tolerant on
+--  g_inputBinding (absent input surface => no-op, never a raise on nothing).
+function FarmManager25:onToggleCursor()
+    local ok, err = pcall(function()
+        if g_inputBinding == nil then
+            return
+        end
+        if g_gui ~= nil and g_gui:getIsGuiVisible() then
+            return
+        end
+        g_inputBinding:setShowMouseCursor(not g_inputBinding:getShowMouseCursor())
+    end)
+    if not ok then
+        print("FarmManager25: cursor toggle failed -- " .. tostring(err))
+    end
+end
+
+--- Register both GLOBAL keybinds (FM25_TOGGLE_OVERLAY, FM25_TOGGLE_CURSOR) so
+--  they SURVIVE engine input-context rebuilds -- the S153 live-test root
+--  cause. The engine re-runs
 --  PlayerInputComponent.registerGlobalPlayerActionEvents on every rebuild and
 --  a one-shot registerActionEvent at load is silently discarded with it; the
 --  fix is Courseplay's shape (Courseplay.lua:141-152, installed from
@@ -987,8 +1042,9 @@ end
 --  registration is re-applied every time it runs. superFunc FIRST, then ours.
 --  The hint text is left visible on purpose (unlike CP, which hides its own).
 --
---  Failure/absence costs ONLY the key: the overlay stays in whatever mode
---  state.xml loaded, clicks still route off any raised cursor, nothing latches.
+--  Failure/absence costs ONLY the affected key: the overlay stays in whatever
+--  mode state.xml loaded, clicks still route off any raised cursor (from the
+--  cursor key or AD/CP), nothing latches.
 function FarmManager25:installOverlayToggleHook()
     if self.hookInstalled then
         return   -- idempotent across map loads; one wrap, ever
@@ -1018,6 +1074,23 @@ function FarmManager25:installOverlayToggleHook()
                 end)
                 if not okR then
                     print("FarmManager25: toggle registration failed -- the overlay mode key is off this pass; the panel stays in its current mode -- " .. tostring(errR))
+                end
+                -- Independent of the overlay pcall on purpose: a failure in one
+                -- key's registration must not cost the other. Same Courseplay
+                -- shape, same trigger flags (down-edge, startActive).
+                local okC, errC = pcall(function()
+                    if InputAction ~= nil and InputAction.FM25_TOGGLE_CURSOR ~= nil then
+                        g_inputBinding:registerActionEvent(
+                            InputAction.FM25_TOGGLE_CURSOR, FarmManager25,
+                            FarmManager25.onToggleCursor,
+                            false,   -- triggerUp
+                            true,    -- triggerDown
+                            false,   -- triggerAlways
+                            true)    -- startActive
+                    end
+                end)
+                if not okC then
+                    print("FarmManager25: cursor registration failed -- the cursor key is off this pass; raise the cursor with AutoDrive/Courseplay instead -- " .. tostring(errC))
                 end
             end)
     end)
@@ -1189,6 +1262,8 @@ function FarmManager25:loadMap(name)
     self.interactiveOk      = true
     self.affordanceRects    = nil
     self.inputBarRect       = nil
+    self.panelRect          = nil
+    FarmManager25.scrollOffset = 0
     -- loadState populates the stack directly (not via push), so it must not
     -- arm the dirty-flush -- we would re-save what we just read.
     self.stateDirty         = false
@@ -1214,15 +1289,18 @@ function FarmManager25:deleteMap()
     -- on the way out (saveState no-ops when stateFolder is nil, i.e. the
     -- dedicated-server path never got this far).
     self:saveState()
-    -- No manual input teardown here, on purpose: FM25_TOGGLE_OVERLAY is
-    -- owned by the survives-rebuild hook (installOverlayToggleHook, the
-    -- Courseplay shape) -- its lifecycle is the engine's global-action
-    -- rebuild pass, which clears and re-registers on its own schedule, not
-    -- loadMap/deleteMap. The BP-064 leak warning was about the OLD one-shot
-    -- self-scoped registerActionEvent, which is gone. The cursor needs no
-    -- release either: this mod never raises it.
+    -- No manual input teardown here, on purpose: both keybinds
+    -- (FM25_TOGGLE_OVERLAY, FM25_TOGGLE_CURSOR) are owned by the
+    -- survives-rebuild hook (installOverlayToggleHook, the Courseplay shape)
+    -- -- their lifecycle is the engine's global-action rebuild pass, which
+    -- clears and re-registers on its own schedule, not loadMap/deleteMap. The
+    -- BP-064 leak warning was about the OLD one-shot self-scoped
+    -- registerActionEvent, which is gone. The cursor needs no release either:
+    -- the mission-end input-context teardown resets it, and FM25_TOGGLE_CURSOR
+    -- only flips the shared state the engine already owns.
     self.affordanceRects    = nil
     self.inputBarRect       = nil
+    self.panelRect          = nil
     self.stateFolder   = nil
     self.filePath      = nil
     self.queue         = {}
@@ -1364,6 +1442,10 @@ function FarmManager25:push(n)
     -- LT-8: the stack changed -> the persisted store is stale. Flushed once at
     -- the end of update() so a burst of arrivals coalesces to a single write.
     self.stateDirty = true
+    -- S157: a new arrival snaps the scroll window back to the newest. The
+    -- newest card is the one that matters -- it must not land hidden behind a
+    -- scroll the player left parked on older history.
+    FarmManager25.scrollOffset = 0
 end
 
 function FarmManager25:update(dt)
@@ -1689,7 +1771,6 @@ function FarmManager25:drawInputBar(top, alpha)
 end
 
 function FarmManager25:renderStack()
-    local theme = FarmManager25.THEME
     local top = self.panelTop
 
     -- OFF mode: the header is as visible as the most-visible card, so it
@@ -1705,40 +1786,72 @@ function FarmManager25:renderStack()
         self.headerRect = nil
         self.affordanceRects = nil
         self.inputBarRect = nil
+        self.panelRect = nil
         return
     end
 
-    -- Measure first: the backdrop panel must be drawn BEHIND everything, so
-    -- its height -- banner + visible cards + reply bar -- is needed up front.
-    -- Card heights are re-derived in drawCard from the same helpers; the two
-    -- passes cannot disagree because they call the same functions.
+    -- The window is bounded by TWO budgets, and the smaller wins.
     --
-    -- FIT-WINDOW (S155, the LT-5 fix): walk NEWEST-first and keep only the
-    -- cards that fit between the panel top and the screen bottom. The old
-    -- code drew every live card; a tall stack pushed the oldest cards' (and
-    -- the reply bar's) geometry below y=0 -- drawn, invisible, and with
-    -- affordance rects that could never be clicked. Overflowed cards stay in
-    -- the store and are announced by a "+N more" line, whose height is
-    -- always reserved in the budget so showing it never causes the overflow
-    -- it reports.
+    -- screenBudget is the LT-5 guard, unchanged in intent: never draw a card
+    -- (or the reply bar) below the screen edge. Both overflow lines ("+N more"
+    -- older, "N newer" when scrolled) have their height reserved here so
+    -- showing one never causes the overflow it reports.
+    --
+    -- capBudget (S157) is the owner ask: cap the window at a FIXED ~4 cards'
+    -- worth of height, NOT "whatever is left down to the screen bottom". The
+    -- old code used screenBudget alone, so 8 modest cards legitimately filled
+    -- ~80% of the screen before the old single "+N more" ever engaged. The cap
+    -- is measured, not a hard count: a representative card is a 2-line body
+    -- plus the universal dismiss affordance row every card carries since LT-6
+    -- (a row-less baseline would over-estimate a real card and let ~5 show),
+    -- sized through the SAME cardHeight helper the real cards use so the two
+    -- can never drift.
     local moreH = self.timeSize + self.cardGap
-    local budget = top - (self.bannerH + self.pillGap + self.inputBarH
-                          + self.insetY + moreH + 0.01)
+    local screenBudget = top - (self.bannerH + self.pillGap + self.inputBarH
+                                + self.insetY + moreH * 2 + 0.01)
+    local sampleLines = { "", "" }
+    local avgCardH = self:cardHeight(sampleLines, self.interactiveOk and self.affordH or 0)
+    local capBudget = FarmManager25.DESIGN.maxVisibleCards * (avgCardH + self.cardGap)
+    local budget = math.min(screenBudget, capBudget)
+
+    -- Clamp the scroll offset to a FULL last page (total - maxVisibleCards):
+    -- scrolling only exists when there are more cards than the cap fits, and
+    -- the furthest scroll still fills the window from the oldest card. Written
+    -- back so a burst of wheel ticks past the end cannot accumulate forever.
+    local totalVisible = 0
+    for _, n in ipairs(self.stack) do
+        if FarmManager25.alphaOf(n) > 0 then
+            totalVisible = totalVisible + 1
+        end
+    end
+    local scrollMax = math.max(0, totalVisible - FarmManager25.DESIGN.maxVisibleCards)
+    FarmManager25.scrollOffset = clamp(FarmManager25.scrollOffset, 0, scrollMax)
+    local offset = FarmManager25.scrollOffset
+
+    -- Walk NEWEST-first. Skip `offset` newest cards (scrolled past -> counted
+    -- as hiddenNewer), fill the budget from there toward older, and count
+    -- everything older than the window as hiddenOlder. The window is thus a
+    -- contiguous slice anchored `offset` cards back from the newest.
     local newestFirst = {}
-    local hidden = 0
     local cardsH = 0
+    local hiddenNewer = 0
+    local hiddenOlder = 0
+    local seen = 0
     for i = #self.stack, 1, -1 do
         local n = self.stack[i]
         local a = FarmManager25.alphaOf(n)
         if a > 0 then
-            if hidden > 0 then
-                hidden = hidden + 1   -- the window is contiguous from the newest
+            seen = seen + 1
+            if seen <= offset then
+                hiddenNewer = hiddenNewer + 1
+            elseif hiddenOlder > 0 then
+                hiddenOlder = hiddenOlder + 1   -- window already closed below
             else
                 local lines = self:linesFor(n)
                 local buttons = self:affordanceButtons(n)
                 local h = self:cardHeight(lines, buttons ~= nil and self.affordH or 0)
                 if #newestFirst > 0 and cardsH + h + self.cardGap > budget then
-                    hidden = 1
+                    hiddenOlder = 1
                 else
                     table.insert(newestFirst, { n = n, a = a })
                     cardsH = cardsH + h + self.cardGap
@@ -1750,17 +1863,13 @@ function FarmManager25:renderStack()
     for i = #newestFirst, 1, -1 do
         table.insert(visible, newestFirst[i])   -- back to oldest-first for drawing
     end
-    local panelH = self.bannerH + self.pillGap + (hidden > 0 and moreH or 0)
-                   + cardsH + self.inputBarH + self.insetY
 
-    -- Backdrop: olive edge ring, then the dark panel inset by the ring.
-    self:roundedRect(FarmManager25.UV_CARD_L, FarmManager25.UV_CARD_M, FarmManager25.UV_CARD_R,
-                     self.panelLeft, top - panelH, self.panelW, panelH,
-                     theme.panel.border, peak)
-    self:roundedRect(FarmManager25.UV_CARD_L, FarmManager25.UV_CARD_M, FarmManager25.UV_CARD_R,
-                     self.panelLeft + self.borderW, top - panelH + self.borderH,
-                     self.panelW - self.borderW * 2, panelH - self.borderH * 2,
-                     theme.panel.bg, peak)
+    -- No shared backdrop panel (S157): it reused the CARD 3-slice atlas
+    -- graphic -- baked for a card's ~56px height -- stretched to the panel's
+    -- whole (card-count-dependent) height, so its corner radius distorted at
+    -- heights far from the design. Every card, the banner and the reply bar
+    -- draw their own correctly-proportioned backgrounds, so nothing here
+    -- depended on it for grouping.
 
     -- Rebuilt from scratch every drawn frame -- a rect from a frame that no
     -- longer exists must not take a click.
@@ -1768,15 +1877,16 @@ function FarmManager25:renderStack()
 
     top = top - self:drawBanner(top, peak) - self.pillGap
 
-    -- The overflow line sits where the hidden (oldest) cards would begin.
-    if hidden > 0 then
+    -- The older-overflow line sits where the hidden (oldest) cards would begin
+    -- -- at the top, above the visible slice.
+    if hiddenOlder > 0 then
         setTextAlignment(RenderText.ALIGN_RIGHT)
         setTextBold(false)
         local c = FarmManager25.DESIGN.timeColor
         setTextColor(c[1], c[2], c[3], peak)
         renderText(self.panelLeft + self.panelW - self.insetX - self.padX,
                    top - self.timeSize, self.timeSize,
-                   string.format("+%d more", hidden))
+                   string.format("+%d more", hiddenOlder))
         setTextAlignment(RenderText.ALIGN_LEFT)
         top = top - moreH
     end
@@ -1787,8 +1897,34 @@ function FarmManager25:renderStack()
         top = top - self:drawCard(v.n, top, v.a) - self.cardGap
     end
 
+    -- The newer-overflow hint sits just above the reply bar (the newest cards
+    -- live at the bottom): a scroll-up has hidden newer cards below, and the
+    -- player can wheel back down to them.
+    if hiddenNewer > 0 then
+        setTextAlignment(RenderText.ALIGN_RIGHT)
+        setTextBold(false)
+        local c = FarmManager25.DESIGN.timeColor
+        setTextColor(c[1], c[2], c[3], peak)
+        renderText(self.panelLeft + self.panelW - self.insetX - self.padX,
+                   top - self.timeSize, self.timeSize,
+                   string.format("%d newer", hiddenNewer))
+        setTextAlignment(RenderText.ALIGN_LEFT)
+        top = top - moreH
+    end
+
     -- The reply bar closes the panel, fading with the stack in OFF mode.
     self:drawInputBar(top, peak)
+
+    -- The whole-panel bounds for the wheel-scroll hit-test (the headerRect
+    -- discipline): from the top anchor down to the reply bar's bottom, nil on
+    -- every path that does not draw. inputBarRect was just recorded by
+    -- drawInputBar, so its bottom is this frame's true panel floor.
+    self.panelRect = {
+        x = self.panelLeft,
+        y = self.inputBarRect.y,
+        w = self.panelW,
+        h = self.panelTop - self.inputBarRect.y,
+    }
 
     -- Leave global text state as we found it: FS renders text globally and a
     -- leaked colour/bold/alignment would tint every HUD drawn after us this frame.
@@ -1819,6 +1955,7 @@ function FarmManager25:draw()
         self.headerRect = nil
         self.affordanceRects = nil
         self.inputBarRect = nil
+        self.panelRect = nil
         return
     end
 
@@ -1832,6 +1969,7 @@ function FarmManager25:draw()
         self.headerRect    = nil
         self.affordanceRects = nil
         self.inputBarRect  = nil
+        self.panelRect     = nil
         setTextBold(false)
         setTextColor(1, 1, 1, 1)
         setTextAlignment(RenderText.ALIGN_LEFT)
@@ -1978,12 +2116,37 @@ end
 
 function FarmManager25:mouseEvent(posX, posY, isDown, isUp, button)
     local ok, err = pcall(function()
+        -- Mouse-wheel scroll of the card window (S157 owner ask): reveal older
+        -- cards when more exist than the capped window shows. GIANTS delivers
+        -- the wheel to mouseEvent as a button tick -- Input.MOUSE_BUTTON_WHEEL_
+        -- UP/_DOWN, isDown on the tick. Gated exactly like a click: only while
+        -- the ENGINE cursor is up (which is also when the game stops the wheel
+        -- from zooming the camera, so the two never fight) and only over the
+        -- panel. Nil-tolerant on Input and panelRect: with either absent the
+        -- wheel falls straight through to the game, untouched. Wheel up scrolls
+        -- toward OLDER history (offset up); the frame clamps the offset.
+        if isDown and Input ~= nil and self.panelRect ~= nil
+                and self:cursorIsShown()
+                and not (g_gui ~= nil and g_gui:getIsGuiVisible()) then
+            local r = self.panelRect
+            if posX >= r.x and posX <= r.x + r.w
+                    and posY >= r.y and posY <= r.y + r.h then
+                if button == Input.MOUSE_BUTTON_WHEEL_UP then
+                    FarmManager25.scrollOffset = FarmManager25.scrollOffset + 1
+                    return
+                elseif button == Input.MOUSE_BUTTON_WHEEL_DOWN then
+                    FarmManager25.scrollOffset = math.max(0, FarmManager25.scrollOffset - 1)
+                    return
+                end
+            end
+        end
         -- THE DESIGN (S153 live-test rework): click-gating READS the shared
-        -- engine cursor -- raised by AutoDrive's MMB, Courseplay's RMB, or
-        -- any cursor mod -- because the ecosystem contract is "any cursor up
-        -- => every mod's HUD is clickable" (AutoDrive.lua:596-601; AD
-        -- watches foreign cursor changes at Specialization.lua:405). This
-        -- mod never writes that state; nothing here arms or latches. The GUI
+        -- engine cursor -- raised by AutoDrive's MMB, Courseplay's RMB, this
+        -- mod's own Ctrl+Comma toggle, or any cursor mod -- because the
+        -- ecosystem contract is "any cursor up => every mod's HUD is
+        -- clickable" (AutoDrive.lua:596-601; AD watches foreign cursor changes
+        -- at Specialization.lua:405). The click path never writes that state
+        -- (only FM25_TOGGLE_CURSOR does); nothing here arms or latches. The GUI
         -- guard stays: a menu that owns the screen must not let a stray
         -- click under it answer a card. The reply bar (LT-4) shares the
         -- exact gate chain -- affordances win when both could hit.

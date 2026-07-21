@@ -19,13 +19,12 @@
 FarmManager25 = FarmManager25 or {}
 
 FarmManager25.THEME = {
-    -- The outer backdrop frame the header, cards and input bar all sit on
-    -- (the mockup's containing panel). Drawn with the card 3-slice, tinted.
+    -- The content column geometry. S157 removed the shared backdrop rect (it
+    -- reused the CARD 3-slice atlas graphic stretched to the panel's whole,
+    -- card-count-dependent height, so its baked corner radius distorted); the
+    -- header, cards and reply bar each draw their own correctly-proportioned
+    -- background, so only the inset survives here.
     panel = {
-        bg       = {0.03, 0.03, 0.03, 0.95},
-        border   = {0.25, 0.28, 0.20, 1},    -- subtle olive edge
-        -- ring width: cardBorderPx (below) is the ONE shared border width --
-        -- panel ring, card rings and the send-button ring all draw with it
         insetPx  = 8,                        -- content inset from the panel edge
     },
 
