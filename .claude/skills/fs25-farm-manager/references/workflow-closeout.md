@@ -36,7 +36,7 @@ If no watcher was armed this session, say so and move on — there is nothing to
 
 ## Running this workflow
 
-Begin at {firstStep} and follow each step's `nextStepFile` in order through step 7. The
+Begin at {firstStep} and follow each step's `nextStepFile` in order through step 8. The
 honesty check (step 4) deliberately runs before the friction-log append (step 5), so a
 fresh doc/code drift finding always has somewhere to land this session.
 

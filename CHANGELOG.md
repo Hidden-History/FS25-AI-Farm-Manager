@@ -4,15 +4,22 @@ All notable changes to AI Farm Manager are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.2.0] - 2026-07-21
+## [2.2.3.0] - 2026-07-21
 
 ### Added
 
 - Setup now asks how you want to play — your scenario, challenge, or preset — so the
   manager's advice fits your run from the start.
 - Mouse-wheel scrolling through the on-screen card stack.
-- A dedicated keybind (Ctrl+Comma) to raise or lower the mouse cursor. The overlay is now
-  usable on foot, not just from inside a vehicle.
+- A dedicated keybind (Ctrl+Comma) to raise or lower the mouse cursor, usable on foot or in
+  a vehicle. On foot, raising it also holds your view and movement steady, so the mouse
+  moves over the panel instead of turning the camera or zooming it — click, drag, or scroll
+  the panel just like you already could in a vehicle.
+- A settings page (Ctrl+Alt+Period, on foot or in a vehicle): toggle the panel on/off, change
+  its size, reset its position, and set how long messages linger when the panel is off.
+- The manager now keeps a single running plan for your farm — read at the start of every
+  session and updated as decisions are made — instead of only tracking scattered long-term
+  notes. Nothing to set up; it starts empty and fills in as you play.
 
 ### Changed
 
@@ -31,6 +38,8 @@ All notable changes to AI Farm Manager are documented here. The format is based 
   detected and included in your totals.
 - Removed a stretched backdrop panel behind the cards that distorted their rounded corners.
   Cards now render cleanly.
+- Long notification titles no longer run past the edge of the card or overlap the timestamp —
+  they're shortened with an ellipsis when needed.
 
 ## [2.2.1.0] - 2026-07-20
 

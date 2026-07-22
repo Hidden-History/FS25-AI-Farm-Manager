@@ -6,7 +6,7 @@ nextStepFile: './step-03-save-twice.md'
 
 # Step 2: Write the closeout
 
-**Progress: Step 2 of 7** — Next: Save it twice
+**Progress: Step 2 of 8** — Next: Save it twice
 
 **Write the closeout** using `templates/session-closeout.md` as the shape. Fill in "What
 didn't work" honestly — a recommendation that missed, a contract that wasn't worth it, a

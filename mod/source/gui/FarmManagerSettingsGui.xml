@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<!-- The settings dialog layout (S158). Structure mirrors AutoDrive's verified
+     scanConfirmationGUI.xml / notificationsHistoryGUI.xml: newLayer + dimmed
+     fullscreen bg + a sized fs25_dialogBg with the three-part chrome, a
+     vertical content BoxLayout (title + separator + one button per setting),
+     and a bottom button box with Back. onOpen/onClose/onCreate are wired on the
+     root <GUI>; onClose/onCreate resolve to the inherited DialogElement
+     handlers, onOpen to our override. Each setting button's id surfaces on the
+     controller as self.<id> so refreshLabels can relabel it. Back closes via
+     the inherited onClickBack. Button text here is the initial label; the
+     controller overwrites it from live state on open. -->
+<GUI onOpen="onOpen" onClose="onClose" onCreate="onCreate">
+    <GuiElement profile="newLayer"/>
+    <Bitmap profile="dialogFullscreenBg"/>
+    <GuiElement profile="fs25_dialogBg" size="740px 520px">
+        <ThreePartBitmap profile="fs25_dialogBgMiddleSmall"/>
+        <ThreePartBitmap profile="fs25_dialogBgTopSmall"/>
+        <ThreePartBitmap profile="fs25_dialogBgBottom"/>
+
+        <BoxLayout profile="fm25_dialogContentContainer">
+            <Text profile="fm25_dialogTitle" text="AI FARM MANAGER - SETTINGS"/>
+            <ThreePartBitmap profile="fm25_dialogTitleSeparator"/>
+
+            <Button id="fm25OverlayButton" profile="fm25_settingButton"
+                    text="Panel: ON" onClick="onClickToggleOverlay"/>
+            <Button id="fm25ScaleButton" profile="fm25_settingButton"
+                    text="Panel size: 72%" onClick="onClickCycleScale"/>
+            <Button id="fm25LingerButton" profile="fm25_settingButton"
+                    text="Off-mode linger: 15s" onClick="onClickCycleLinger"/>
+            <Button profile="fm25_settingButton"
+                    text="Reset panel position" onClick="onClickResetPosition"/>
+
+            <BoxLayout profile="fm25_dialogButtonBox">
+                <Button profile="buttonBack" text="$l10n_button_back" onClick="onClickBack"/>
+            </BoxLayout>
+        </BoxLayout>
+    </GuiElement>
+</GUI>

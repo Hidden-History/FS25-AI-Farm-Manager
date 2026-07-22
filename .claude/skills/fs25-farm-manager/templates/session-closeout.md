@@ -9,7 +9,7 @@ archive_target: N/A
 reconciliation: "verification not reconstruction; never restate a friction-log entry (cite its ID); durable substance goes to the family-1 file it concerns, not here"
 format_version: 1
 parity_spec:
-  required_sections: ["## State delta", "## What we did / what changed", "## What didn't work", "## Open threads for next time", "## Directives updated", "## Frictions this session"]
+  required_sections: ["## State delta", "## What we did / what changed", "## What didn't work", "## Open threads for next time", "## Plan updated", "## Frictions this session"]
 ---
 
 # Closeout — {{DATE}} (Session #{{SESSION_NUMBER}})
@@ -34,7 +34,7 @@ purchase; keep it a table, not a running commentary.
 
 ## What we did / what changed
 
-{{3–6 bullets, highlights only. Point to `state/field-dossiers/`, `identity/directives.md`,
+{{3–6 bullets, highlights only. Point to `state/field-dossiers/`, `plans/PLAN.md`,
 `state/equipment-roster.md` for detail — they were written during the session, so this verifies.}}
 
 ## What didn't work
@@ -51,10 +51,12 @@ and complete.}}
 warning), it belongs in the durable file it concerns (`state/crop-grace-periods.md`, a field
 dossier) with just a pointer here.}}
 
-## Directives updated
+## Plan updated
 
-{{Pointer only — what changed in `identity/directives.md`, or "none this session." Never restate
-the directive text.}}
+{{Pointer only — what changed in `plans/PLAN.md` (Current focus rewritten? directives opened,
+touched, or closed?) and the session-plan file written this closeout, or "none this session."
+Never restate the plan text — `plans/sessions/{{DATE}}-session-{{SESSION_NUMBER}}.md` and
+`plans/PLAN.md` own it. See `closeout-steps/step-06-update-plan.md`.}}
 
 ## Frictions this session
 

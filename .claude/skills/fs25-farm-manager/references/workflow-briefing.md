@@ -24,8 +24,9 @@ So you proactively:
   that are the player's call.
 - Update `sanctum/state/field-dossiers/field-{id}.md` (create from `templates/field-dossier.md` if
   new) whenever a field's state materially changes or you learn something worth remembering.
-- Update `sanctum/identity/directives.md` (using `templates/directive-entry.md` for new entries)
-  whenever a long-term plan is set, changed, or completed.
+- Update `sanctum/plans/PLAN.md` — the Current focus narrative and its Standing directives
+  (using `templates/directive-entry.md` for a new directive) — whenever a long-term plan is set,
+  changed, or completed. Write as you go; closeout verifies the plan, it doesn't reconstruct it.
 - Update `sanctum/state/equipment-roster.md` when equipment is bought, sold, repaired, or flagged.
 
 - **Log harvests as they appear.** `field_state.harvested_on_owned_land` lists fields whose

@@ -16,6 +16,12 @@ guide on how to fill it; follow those rather than improvising. Fill identity fro
 co-op partner, not corporate-speak. The manager's name is Cyrus — introduce yourself by name
 when you first speak to the player. Ask before finalizing standing priorities.
 
+`init_sanctum.py` has already seeded the farm's plan — `plans/PLAN.md` (the single living plan)
+and `plans/INDEX.md` — empty-but-shaped, the same way it seeds the rosters. Don't hand-write
+them here; the plan takes its first **Current focus** and **Standing directives** as the first
+real decisions get made with the player, and the first index row is appended at the first
+closeout.
+
 ## Next
 
 Once the sanctum is written, read fully and follow: {nextStepFile}

@@ -195,6 +195,18 @@ FarmManager25.MS_PER_CHAR       = 70       -- reading speed -> auto duration
 FarmManager25.FADE_IN_MS        = 160
 FarmManager25.FADE_OUT_MS       = 260
 
+-- Factory defaults, kept as named constants so the settings page's "reset
+-- position" and scale/linger cycles have a stable origin even after
+-- loadSettings/loadState have mutated the live DESIGN values. DESIGN seeds its
+-- anchor/scale from these (one source of truth); reset restores them.
+FarmManager25.DEFAULT_ANCHOR_X  = 0.985
+FarmManager25.DEFAULT_ANCHOR_Y  = 0.86
+FarmManager25.DEFAULT_UI_SCALE  = 0.72
+-- Settings-page cycle presets (S158). Scale steps span the buildOverlays clamp
+-- (0.4-1.5); linger steps are the OFF-mode floor MIN_TTL_MS in ms.
+FarmManager25.SCALE_PRESETS     = {0.5, 0.6, 0.72, 0.85, 1.0, 1.25}
+FarmManager25.LINGER_PRESETS_MS = {10000, 15000, 30000, 60000}
+
 -- Severity -> the NAME of the native constant to fall back to (names, not
 -- values: the constant is resolved at runtime so an engine that lacks WARNING
 -- degrades instead of erroring) + the default glyph. Card COLOURS live in
@@ -303,13 +315,13 @@ FarmManager25.DESIGN = {
     timeColor      = {0.62, 0.68, 0.62, 1},
     -- Anchor: top-right, tucked under the money/clock bar, clear of the
     -- bottom-right minimap and of AutoDrive/Courseplay's left-side HUDs.
-    anchorX        = 0.985,
-    anchorY        = 0.86,
+    anchorX        = FarmManager25.DEFAULT_ANCHOR_X,
+    anchorY        = FarmManager25.DEFAULT_ANCHOR_Y,
     -- LT-7: one uniform scale on the whole overlay, applied at the single
     -- px->normalized chokepoint (buildOverlays). 0.72 is the owner's ~28%
     -- reduction -- the overlay dwarfed the neighbouring CP/AD HUDs. Tunable
     -- live via settings.xml (farmManager25.hud#scale), clamped 0.4-1.5.
-    uiScale        = 0.72,
+    uiScale        = FarmManager25.DEFAULT_UI_SCALE,
 }
 
 FarmManager25.filePath      = nil
@@ -328,6 +340,12 @@ FarmManager25.dragOffset    = nil     -- nil = not dragging; else grab offset fr
 FarmManager25.affordanceRects   = nil
 FarmManager25.interactiveOk     = true   -- latched false if the layer ever fails; cards then render one-way
 FarmManager25.hookInstalled     = false  -- the registerGlobalPlayerActionEvents hook goes in exactly once
+-- S158 Path B: true while WE hold the on-foot player-input lock. Tracked so
+-- release only ever unlocks a lock we took -- a cursor toggled in a vehicle
+-- (where we never lock) calls nothing, keeping the vehicle path byte-for-byte
+-- unchanged; a lock taken on foot then carried into a vehicle still releases,
+-- so it can never be left stuck.
+FarmManager25.cameraLocked      = false
 -- The overlay mode (S155, LT-1). ON (the default) = persistent always-on
 -- panel, cards never auto-expire; OFF = the original transient notifier.
 -- Persisted in state.xml so the player's choice survives the session.
@@ -348,6 +366,13 @@ FarmManager25.stateDirty        = false
 -- (the headerRect discipline: an off-screen panel must not eat the wheel).
 FarmManager25.scrollOffset      = 0
 FarmManager25.panelRect         = nil
+-- S158: the g_gui settings dialog. The controller instance is built once and
+-- the XML registered in loadMap; settingsGuiLoaded latches true only when
+-- g_gui:loadGui succeeded, so the settings keybind is a clean no-op when the
+-- GUI framework is absent (a dedicated server, a headless test, or a failed
+-- load) -- exactly the degrade discipline the rest of the mod uses.
+FarmManager25.settingsGui       = nil
+FarmManager25.settingsGuiLoaded = false
 
 
 -- ---------------------------------------------------------------------------
@@ -438,19 +463,35 @@ function FarmManager25:wrapText(text, fontSize, maxWidth)
         for i = 1, FarmManager25.MAX_LINES do
             trimmed[i] = lines[i]
         end
-        -- Signal truncation rather than pretending the message ended here.
-        -- The last line is already wrapped to exactly maxWidth, so appending
-        -- the ellipsis would push it PAST the panel edge and bleed outside the
-        -- background. Give the ellipsis room first, then append it.
-        local ELL  = " ..."
-        local last = trimmed[FarmManager25.MAX_LINES]
-        while last:len() > 0 and getTextWidth(fontSize, last .. ELL) > maxWidth do
-            last = last:sub(1, last:len() - 1)
-        end
-        trimmed[FarmManager25.MAX_LINES] = (last:gsub("%s+$", "")) .. ELL
+        -- Signal truncation rather than pretending the message ended here. The
+        -- "make the ellipsis room first, then append it -- else it bleeds PAST
+        -- the panel edge" logic lives in ellipsize now (the title reuses it).
+        -- force=true because a dropped-lines tail must carry the mark even when
+        -- the wrapped last line already fits maxWidth exactly.
+        trimmed[FarmManager25.MAX_LINES] =
+            FarmManager25.ellipsize(trimmed[FarmManager25.MAX_LINES], fontSize, maxWidth, true)
         return trimmed, true
     end
     return lines, false
+end
+
+--- Truncate `text` to a single line no wider than `maxWidth`, trimming from the
+--  end and appending an ellipsis. Shared by the card title (which MUST stay one
+--  line -- cardHeight budgets exactly one titleSize for it) and wrapText's
+--  overflow tail, so the "give the ellipsis room, then append" measurement is
+--  written once. `force` appends the ellipsis even when `text` already fits:
+--  wrapText's dropped-lines case needs the mark regardless, while the title
+--  omits it so a short title renders verbatim.
+function FarmManager25.ellipsize(text, fontSize, maxWidth, force)
+    if not force and getTextWidth(fontSize, text) <= maxWidth then
+        return text
+    end
+    local ELL = " ..."
+    local s = text
+    while s:len() > 0 and getTextWidth(fontSize, s .. ELL) > maxWidth do
+        s = s:sub(1, s:len() - 1)
+    end
+    return (s:gsub("%s+$", "")) .. ELL
 end
 
 --- Turn raw field values into a notification table. PURE -- no file I/O, no
@@ -693,6 +734,15 @@ function FarmManager25:loadState(folder)
         if seq ~= nil then
             FarmManager25.textReplySeq = math.floor(seq)
         end
+        -- S158: settings-page scale + OFF-mode linger. Scale is clamped to the
+        -- buildOverlays range (loadState runs BEFORE buildOverlays, so the
+        -- persisted scale seeds the first geometry build).
+        local uiScale = getXMLFloat(xml, "farmManager25State.hud#uiScale")
+        if uiScale ~= nil then d.uiScale = clamp(uiScale, 0.4, 1.5) end
+        local minTtl = getXMLFloat(xml, "farmManager25State.hud#minTtlMs")
+        if minTtl ~= nil then FarmManager25.MIN_TTL_MS = minTtl end
+        local maxTtl = getXMLFloat(xml, "farmManager25State.hud#maxTtlMs")
+        if maxTtl ~= nil then FarmManager25.MAX_TTL_MS = maxTtl end
         local count = getXMLFloat(xml, "farmManager25State.cards#count") or 0
         for i = 0, math.min(count, FarmManager25.MAX_STORE) - 1 do
             local key = string.format("farmManager25State.cards.card(%d)", i)
@@ -770,6 +820,13 @@ function FarmManager25:saveState()
             FarmManager25.overlayOn and "true" or "false")
         setXMLFloat(xml, "farmManager25State.hud#textReplySeq",
             FarmManager25.textReplySeq)
+        -- S158: the settings page's scale + OFF-mode linger are live-tunable, so
+        -- the live store carries them (like anchorX/anchorY). settings.xml stays
+        -- the hand-edited seed; state.xml (loaded after) wins, so a menu change
+        -- survives a relog.
+        setXMLFloat(xml, "farmManager25State.hud#uiScale", d.uiScale)
+        setXMLFloat(xml, "farmManager25State.hud#minTtlMs", FarmManager25.MIN_TTL_MS)
+        setXMLFloat(xml, "farmManager25State.hud#maxTtlMs", FarmManager25.MAX_TTL_MS)
         local i = 0
         for _, n in ipairs(self.stack) do
             local key = string.format("farmManager25State.cards.card(%d)", i)
@@ -981,21 +1038,76 @@ end
 --  predate the mode and would otherwise expire them on the spot. The new
 --  mode is persisted immediately -- a toggle that forgot itself on relog
 --  would read as the S153 one-shot bug all over again.
+--- Set the overlay mode and persist it. The single flip shared by the
+--  keybind (onToggleOverlay) and the settings page (cfgToggleOverlay), so the
+--  OFF-mode re-arm + saveState happen identically however the mode is changed.
+--  Deliberately WITHOUT the gui-visible guard: the settings dialog IS a
+--  visible GUI, so onToggleOverlay's guard would wrongly no-op the in-dialog
+--  toggle. The guard stays on the keybind path where it belongs.
+function FarmManager25:setOverlayOn(on)
+    FarmManager25.overlayOn = on
+    if not FarmManager25.overlayOn then
+        for _, n in ipairs(self.stack) do
+            n.ttl = n.age + FarmManager25.MIN_TTL_MS
+        end
+    end
+    self:saveState()
+end
+
 function FarmManager25:onToggleOverlay()
     local ok, err = pcall(function()
         if g_gui ~= nil and g_gui:getIsGuiVisible() then
             return
         end
-        FarmManager25.overlayOn = not FarmManager25.overlayOn
-        if not FarmManager25.overlayOn then
-            for _, n in ipairs(self.stack) do
-                n.ttl = n.age + FarmManager25.MIN_TTL_MS
-            end
-        end
-        self:saveState()
+        self:setOverlayOn(not FarmManager25.overlayOn)
     end)
     if not ok then
         print("FarmManager25: overlay toggle failed -- " .. tostring(err))
+    end
+end
+
+--- Path B (BP-067): freeze the ON-FOOT player camera + wheel-zoom while our
+--  cursor is up. Raising the shared cursor draws it and routes our mouseEvent,
+--  but on foot the camera LOOK + wheel ZOOM are separate PlayerInputComponent
+--  InputActions gated ONLY by its internal `locked` flag -- orthogonal to
+--  cursor state -- so without this the camera keeps rotating and the wheel
+--  keeps zooming under the cursor (the confirmed live-test failure). lock() is
+--  the engine's own game-pause freeze primitive; it also stops walking, which
+--  is the intended "I'm reading & answering my farm manager" modal feel.
+--
+--  ON FOOT ONLY. In a vehicle the player component isn't the active camera and
+--  AutoDrive/Courseplay already own vehicle-camera suppression, so we take the
+--  lock ONLY when getCurrentVehicle() is nil -- the in-vehicle raw-overlay path
+--  stays byte-for-byte unchanged (no lock call at all there).
+--
+--  Every access is nil-guarded: g_localPlayer, its inputComponent, and the
+--  lock/unlock methods are UNDOCUMENTED engine internals (BP-067) that a patch
+--  could rename. If any is absent we simply don't lock -- the cursor still
+--  raises and behaviour degrades to today's cursor-only state, never an error.
+--  RELEASE only ever unlocks a lock WE took (the cameraLocked flag): a cursor
+--  toggled in a vehicle -- where we never lock -- calls nothing, so the vehicle
+--  path is byte-for-byte unchanged; but a lock taken on foot then carried into
+--  a vehicle still releases on lower, so the component can never be left stuck.
+function FarmManager25.setOnFootCameraLock(lock)
+    if g_localPlayer == nil then
+        return
+    end
+    local ic = g_localPlayer.inputComponent
+    if ic == nil then
+        return
+    end
+    if lock then
+        local inVehicle = g_localPlayer.getCurrentVehicle ~= nil
+            and g_localPlayer:getCurrentVehicle() ~= nil
+        if not inVehicle and ic.lock ~= nil then
+            ic:lock()
+            FarmManager25.cameraLocked = true
+        end
+    elseif FarmManager25.cameraLocked then
+        if ic.unlock ~= nil then
+            ic:unlock()
+        end
+        FarmManager25.cameraLocked = false
     end
 end
 
@@ -1025,14 +1137,103 @@ function FarmManager25:onToggleCursor()
         if g_gui ~= nil and g_gui:getIsGuiVisible() then
             return
         end
-        g_inputBinding:setShowMouseCursor(not g_inputBinding:getShowMouseCursor())
+        local show = not g_inputBinding:getShowMouseCursor()
+        g_inputBinding:setShowMouseCursor(show)
+        -- Path B: freeze/release the on-foot camera+zoom in lockstep with the
+        -- cursor so a raised cursor on foot doesn't leave the camera rotating.
+        FarmManager25.setOnFootCameraLock(show)
     end)
     if not ok then
         print("FarmManager25: cursor toggle failed -- " .. tostring(err))
     end
 end
 
---- Register both GLOBAL keybinds (FM25_TOGGLE_OVERLAY, FM25_TOGGLE_CURSOR) so
+-- ---------------------------------------------------------------------------
+-- settings page (S158): the g_gui dialog's apply logic lives here as plain
+-- methods on FarmManager25 so it is lupa-testable; the DialogElement
+-- controller (FarmManagerSettingsGui.lua) is a thin shell that calls these.
+-- ---------------------------------------------------------------------------
+
+--- Nearest preset -> the NEXT one in the cycle (wraps). "Nearest" first so a
+--  value that drifted off the preset grid (a hand-edited settings.xml scale,
+--  say) still cycles predictably instead of snapping to preset 1.
+local function nextPreset(list, current)
+    local bestI, bestD = 1, math.huge
+    for i, v in ipairs(list) do
+        local d = math.abs(v - (current or v))
+        if d < bestD then
+            bestI, bestD = i, d
+        end
+    end
+    return list[(bestI % #list) + 1]
+end
+
+--- Settings toggle for the overlay mode: the SAME flip the Ctrl+Period keybind
+--  makes, minus the gui-visible guard (we ARE in a visible dialog here).
+function FarmManager25:cfgToggleOverlay()
+    self:setOverlayOn(not FarmManager25.overlayOn)
+end
+
+--- Cycle the overlay scale through the presets. Geometry is precomputed from
+--  uiScale in buildOverlays, so rebuild it for the change to take -- the same
+--  call loadMap makes; overlaysOk/useNativeOnly latch there as always.
+function FarmManager25:cfgCycleScale()
+    local d = FarmManager25.DESIGN
+    d.uiScale = nextPreset(FarmManager25.SCALE_PRESETS, d.uiScale)
+    self:buildOverlays()
+    self:saveState()
+end
+
+--- Cycle the OFF-mode linger floor (MIN_TTL_MS). Keep MAX_TTL_MS >= MIN so the
+--  buildNotification clamp can never invert.
+function FarmManager25:cfgCycleLinger()
+    FarmManager25.MIN_TTL_MS = nextPreset(FarmManager25.LINGER_PRESETS_MS, FarmManager25.MIN_TTL_MS)
+    if FarmManager25.MAX_TTL_MS < FarmManager25.MIN_TTL_MS then
+        FarmManager25.MAX_TTL_MS = FarmManager25.MIN_TTL_MS
+    end
+    self:saveState()
+end
+
+--- Reset the overlay to its factory anchor (top-right). Uses the DEFAULT_*
+--  constants, not the live DESIGN values, which may have been dragged/loaded
+--  away. panelLeft/panelTop are recomputed only once buildOverlays has run
+--  (panelW known) -- before that, loadMap's build applies the anchor anyway.
+function FarmManager25:cfgResetPosition()
+    local d = FarmManager25.DESIGN
+    d.anchorX = FarmManager25.DEFAULT_ANCHOR_X
+    d.anchorY = FarmManager25.DEFAULT_ANCHOR_Y
+    if self.panelW ~= nil then
+        self.panelLeft = d.anchorX - self.panelW
+        self.panelTop  = d.anchorY
+    end
+    self:saveState()
+end
+
+--- Open the settings dialog (FM25_TOGGLE_SETTINGS, default Ctrl+Alt+Period).
+--  Works on foot or in a vehicle -- no camera concern, it's a modal GUI. Same
+--  guards as the other keys: nil-tolerant on g_gui, skipped while a menu
+--  already owns the screen, and a clean no-op when the dialog never
+--  registered (headless / load failure) so the key can never throw.
+function FarmManager25:onToggleSettings()
+    local ok, err = pcall(function()
+        if g_gui == nil then
+            return
+        end
+        if g_gui:getIsGuiVisible() then
+            return
+        end
+        if not FarmManager25.settingsGuiLoaded then
+            return
+        end
+        g_gui:showDialog("FarmManagerSettings")
+    end)
+    if not ok then
+        print("FarmManager25: settings open failed -- " .. tostring(err))
+    end
+end
+
+--- Register all GLOBAL keybinds (FM25_TOGGLE_OVERLAY, FM25_TOGGLE_CURSOR,
+--  FM25_TOGGLE_SETTINGS) so
 --  they SURVIVE engine input-context rebuilds -- the S153 live-test root
 --  cause. The engine re-runs
 --  PlayerInputComponent.registerGlobalPlayerActionEvents on every rebuild and
@@ -1091,6 +1292,25 @@ function FarmManager25:installOverlayToggleHook()
                 end)
                 if not okC then
                     print("FarmManager25: cursor registration failed -- the cursor key is off this pass; raise the cursor with AutoDrive/Courseplay instead -- " .. tostring(errC))
+                end
+                -- Independent again: the settings key registers on its own so a
+                -- failure in either sibling never costs it. Same down-edge,
+                -- startActive flags. Absence costs only the settings key: the
+                -- panel + cursor keys keep working, the panel stays tunable via
+                -- settings.xml exactly as before.
+                local okS, errS = pcall(function()
+                    if InputAction ~= nil and InputAction.FM25_TOGGLE_SETTINGS ~= nil then
+                        g_inputBinding:registerActionEvent(
+                            InputAction.FM25_TOGGLE_SETTINGS, FarmManager25,
+                            FarmManager25.onToggleSettings,
+                            false,   -- triggerUp
+                            true,    -- triggerDown
+                            false,   -- triggerAlways
+                            true)    -- startActive
+                    end
+                end)
+                if not okS then
+                    print("FarmManager25: settings registration failed -- the settings key is off this pass; the panel stays tunable via settings.xml -- " .. tostring(errS))
                 end
             end)
     end)
@@ -1234,6 +1454,34 @@ function FarmManager25:buildOverlays()
 end
 
 
+--- Register the settings dialog with g_gui (S158). Guarded end to end: with
+--  g_gui absent (dedicated server / headless test), the source class not
+--  loaded, or any load failure, settingsGuiLoaded stays false and the settings
+--  key is a clean no-op. loadProfiles + loadGui is AutoDrive's exact shape
+--  (Gui.lua:3,60); the controller is instantiated ONCE (.new() BEFORE loadGui
+--  -- the "nil controller" trap, BP-064 §1) and reused across map reloads.
+--  Loaded is latched on a throw-free pass, not on loadGui's return value
+--  (its success convention varies); showDialog is itself guarded in
+--  onToggleSettings, so a mis-registered name degrades to a printed no-op.
+function FarmManager25:registerSettingsGui()
+    FarmManager25.settingsGuiLoaded = false
+    if g_gui == nil or FarmManagerSettingsGui == nil or FarmManagerSettingsGui.new == nil then
+        return
+    end
+    local ok, err = pcall(function()
+        g_gui:loadProfiles(FarmManager25.MOD_DIR .. "gui/guiProfiles.xml")
+        if FarmManager25.settingsGui == nil then
+            FarmManager25.settingsGui = FarmManagerSettingsGui.new()
+        end
+        g_gui:loadGui(FarmManager25.MOD_DIR .. "gui/FarmManagerSettingsGui.xml",
+            "FarmManagerSettings", FarmManager25.settingsGui)
+        FarmManager25.settingsGuiLoaded = true
+    end)
+    if not ok then
+        print("FarmManager25: settings GUI registration failed -- the settings key is off this session -- " .. tostring(err))
+    end
+end
+
 function FarmManager25:loadMap(name)
     -- A dedicated server has no screen, so there is nobody to notify. Bail out
     -- entirely: filePath stays nil, so update() returns immediately and we never
@@ -1264,6 +1512,9 @@ function FarmManager25:loadMap(name)
     self.inputBarRect       = nil
     self.panelRect          = nil
     FarmManager25.scrollOffset = 0
+    -- S158: a fresh map has a fresh (unlocked) player component -- drop any
+    -- stale lock intent so the flag tracks only this session's cursor.
+    FarmManager25.cameraLocked = false
     -- loadState populates the stack directly (not via push), so it must not
     -- arm the dirty-flush -- we would re-save what we just read.
     self.stateDirty         = false
@@ -1273,6 +1524,7 @@ function FarmManager25:loadMap(name)
     self:loadState(folder)        -- ...then the live store wins (mode + cards too)
     self:buildOverlays()
     self:installOverlayToggleHook()
+    self:registerSettingsGui()
 
     -- Start from a clean bridge: a message left over from a previous session
     -- is stale by definition and must not pop on load.
@@ -1660,7 +1912,21 @@ function FarmManager25:drawCard(n, top, alpha)
     setTextAlignment(RenderText.ALIGN_LEFT)
     setTextBold(true)
     setTextColor(theme.text.title[1], theme.text.title[2], theme.text.title[3], alpha)
-    renderText(textX, y, self.titleSize, n.title)
+    -- The title is a single-line header (cardHeight budgets exactly one
+    -- titleSize -- see there), so it is truncated, not wrapped: an unclamped
+    -- title ran straight through the fixed-position timestamp and off the
+    -- card's right edge. Budget = the body's text column (cardW - 3*padX -
+    -- cardGlyphW, the linesFor textW) minus room for the right-aligned stamp
+    -- when present -- its rendered width plus a padX gutter -- so title and
+    -- stamp can never collide; no stamp -> the full column. (The stamp is
+    -- measured under the title's bold state, which over-reserves a hair versus
+    -- its non-bold render -- the safe direction: the title truncates a touch
+    -- sooner, never overlaps.) ellipsize reuses wrapText's measure-and-trim.
+    local titleW = self.cardW - self.cardGlyphW - self.padX * 3
+    if n.stamp ~= nil then
+        titleW = titleW - getTextWidth(self.timeSize, n.stamp) - self.padX
+    end
+    renderText(textX, y, self.titleSize, FarmManager25.ellipsize(n.title, self.titleSize, titleW))
 
     -- timestamp, right-aligned, in the family accent. Absent if the clock was
     -- unreadable -- better a card with no time than a card with an invented one.

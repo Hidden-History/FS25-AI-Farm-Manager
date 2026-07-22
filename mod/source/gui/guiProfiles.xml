@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<!-- Settings-dialog profiles (S158). Deliberately minimal: every one extends a
+     stock base-game fs25_* / baseReference profile and overrides only spacing,
+     size or text metrics, the exact idiom AutoDrive's guiProfiles.xml uses
+     (ad_common_dialog*). A new dialog needs almost no custom profile surface
+     because the base game already ships the dialog chrome and button styles. -->
+<GUIProfiles>
+    <Profile name="fm25_dialogContentContainer" extends="fs25_dialogContentContainer">
+        <flowDirection value="vertical" />
+        <elementSpacing value="10px" />
+        <alignmentX value="center" />
+    </Profile>
+
+    <Profile name="fm25_dialogTitle" extends="baseReference" with="anchorTopStretchingX">
+        <textBold value="true"/>
+        <textLayoutMode value="resize" />
+        <textMaxNumLines value="1" />
+        <textSize value="24px"/>
+        <textUpperCase value="true"/>
+        <size value="100% 40px"/>
+    </Profile>
+
+    <Profile name="fm25_dialogTitleSeparator" extends="fs25_lineSeparatorTop">
+        <absoluteSizeOffset value="100px 0" />
+    </Profile>
+
+    <!-- A full-width setting row rendered as a clickable button. Extends the
+         stock dialog button so it inherits its visuals/behaviour; only the
+         size + text metrics are overridden for a vertical stack. -->
+    <Profile name="fm25_settingButton" extends="buttonActivate" with="anchorTopStretchingX">
+        <size value="100% 42px"/>
+        <textSize value="18px"/>
+    </Profile>
+
+    <Profile name="fm25_dialogButtonBox" extends="fs25_dialogButtonBox">
+    </Profile>
+</GUIProfiles>
