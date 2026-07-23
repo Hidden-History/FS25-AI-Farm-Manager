@@ -4,7 +4,7 @@ All notable changes to AI Farm Manager are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.3.0] - 2026-07-21
+## [2.2.3.0] - 2026-07-23
 
 ### Added
 
@@ -28,6 +28,9 @@ All notable changes to AI Farm Manager are documented here. The format is based 
 - Session history now tracks the in-game season and day, so your progress reads on the farm's
   own calendar rather than only the real-world date.
 - Shortened the mod's keybind names so they no longer get cut off in FS25's Controls menu.
+- The notification overlay now renders at higher resolution, so the cards, panel, and top bar
+  stay crisp on high-resolution (1440p/4K) displays instead of looking soft, and the scrollbar
+  sits clear of the cards.
 
 ### Fixed
 

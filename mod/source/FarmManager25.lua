@@ -223,63 +223,71 @@ FarmManager25.DEFAULT_SEVERITY = "info"
 -- Atlas regions, in atlas pixels. MIRRORS build_atlas.py -- change one, change
 -- both. The card is 3-sliced: caps keep their corner radius at any width, the
 -- middle is uniform left-to-right so stretching it is invisible.
--- 1024 with 128px cells (S155, LT-3): the owner art is 126-204px native, so
--- the old 64px cells threw away half its resolution and every draw above
--- 64px on-screen (any card glyph past 1080p) upscaled a downscale. Same
--- layout, every coordinate exactly x2; slice RATIOS (CARD_CAP/CARD_PX)
--- unchanged, so on-screen geometry is identical.
-FarmManager25.ATLAS_PX   = 1024
-FarmManager25.CARD_PX    = 128
-FarmManager25.CARD_CAP   = 40
-FarmManager25.UV_CARD_L  = {0,  0, 40, 128}
-FarmManager25.UV_CARD_M  = {40, 0, 48, 128}
-FarmManager25.UV_CARD_R  = {88, 0, 40, 128}
-FarmManager25.UV_PILL_L  = {128, 0, 40, 128}
-FarmManager25.UV_PILL_M  = {168, 0, 48, 128}
-FarmManager25.UV_PILL_R  = {216, 0, 40, 128}
+-- 2048x1024 (task103-item14, BP-070): the PROCEDURAL card/pill cells grew to
+-- 256 -- at 4K x1.5 HUD scale a card draws ~168px tall, so the old 128px cell
+-- was upscaling on screen (the primary blur mechanism). The icon grid STAYS
+-- at 128px cells: the owner sheets are 126-204px native, so bigger cells
+-- could only be filled by upscaling the art in the build (worse, and a build
+-- error there) -- 128 still covers the 40*3=120px worst-case draw. Slice
+-- RATIOS (CARD_CAP/CARD_PX) unchanged, so on-screen geometry is identical.
+-- Non-square power-of-two is proven (Courseplay iconSprite.dds 256x512).
+FarmManager25.ATLAS_W    = 2048
+FarmManager25.ATLAS_H    = 1024
+FarmManager25.CARD_PX    = 256
+FarmManager25.CARD_CAP   = 80
+FarmManager25.UV_CARD_L  = {0,   0, 80, 256}
+FarmManager25.UV_CARD_M  = {80,  0, 96, 256}
+FarmManager25.UV_CARD_R  = {176, 0, 80, 256}
+FarmManager25.UV_PILL_L  = {256, 0, 80, 256}
+FarmManager25.UV_PILL_M  = {336, 0, 96, 256}
+FarmManager25.UV_PILL_R  = {432, 0, 80, 256}
 FarmManager25.ICONS = {
-    leaf      = {  0, 128, 128, 128},
-    alert     = {128, 128, 128, 128},
-    check     = {256, 128, 128, 128},
-    briefing  = {384, 128, 128, 128},
-    contract  = {512, 128, 128, 128},
-    silo      = {640, 128, 128, 128},
-    fleet     = {768, 128, 128, 128},
-    finances  = {896, 128, 128, 128},
-    crop      = {  0, 256, 128, 128},
-    weather   = {128, 256, 128, 128},
-    harvest   = {256, 256, 128, 128},
-    field     = {384, 256, 128, 128},
-    report    = {512, 256, 128, 128},
-    equipment = {640, 256, 128, 128},
-    fuel      = {768, 256, 128, 128},
-    building  = {896, 256, 128, 128},
-    supply    = {  0, 384, 128, 128},
-    schedule  = {128, 384, 128, 128},
-    profit    = {256, 384, 128, 128},
-    worker    = {384, 384, 128, 128},
-    dealer    = {512, 384, 128, 128},
-    soil      = {640, 384, 128, 128},
-    season    = {768, 384, 128, 128},
+    leaf      = {  0, 256, 128, 128},
+    alert     = {128, 256, 128, 128},
+    check     = {256, 256, 128, 128},
+    briefing  = {384, 256, 128, 128},
+    contract  = {512, 256, 128, 128},
+    silo      = {640, 256, 128, 128},
+    fleet     = {768, 256, 128, 128},
+    finances  = {896, 256, 128, 128},
+    crop      = {  0, 384, 128, 128},
+    weather   = {128, 384, 128, 128},
+    harvest   = {256, 384, 128, 128},
+    field     = {384, 384, 128, 128},
+    report    = {512, 384, 128, 128},
+    equipment = {640, 384, 128, 128},
+    fuel      = {768, 384, 128, 128},
+    building  = {896, 384, 128, 128},
+    supply    = {  0, 512, 128, 128},
+    schedule  = {128, 512, 128, 128},
+    profit    = {256, 512, 128, 128},
+    worker    = {384, 512, 128, 128},
+    dealer    = {512, 512, 128, 128},
+    soil      = {640, 512, 128, 128},
+    season    = {768, 512, 128, 128},
     -- Interaction affordances (TASK-101 P1). Appended AFTER every pre-existing
     -- glyph so the UV layout order is stable; slots follow build_atlas.py's
     -- 8-per-row order.
-    thumb_up   = {896, 384, 128, 128},
-    thumb_down = {  0, 512, 128, 128},
-    chat       = {128, 512, 128, 128},
-    send       = {256, 512, 128, 128},
-    gear       = {384, 512, 128, 128},
-    close      = {512, 512, 128, 128},
+    thumb_up   = {896, 512, 128, 128},
+    thumb_down = {  0, 640, 128, 128},
+    chat       = {128, 640, 128, 128},
+    send       = {256, 640, 128, 128},
+    gear       = {384, 640, 128, 128},
+    close      = {512, 640, 128, 128},
     -- TASK-101 P2 (owner icon sheet 4). Same append-only rule: slots 29/30.
-    snooze     = {640, 512, 128, 128},
-    critical   = {768, 512, 128, 128},
+    snooze     = {640, 640, 128, 128},
+    critical   = {768, 640, 128, 128},
 }
 -- The header banner: owner art in COLOUR (everything else in the atlas is
--- white-on-alpha). Blitted with a {1,1,1,1} tint. 1024/198 matches the
--- plate's own 5.16:1 aspect; the on-screen height derives from the panel
--- width so the art is never stretched. MIRRORS build_atlas.py's
--- BANNER_XY/BANNER_WH.
-FarmManager25.UV_BANNER = {0, 640, 1024, 198}
+-- white-on-alpha). Blitted with a {1,1,1,1} tint. TWO packed sizes
+-- (task103-item14, BP-070 R4): with no mipmaps, detailed colour art turns to
+-- mush past ~2x minification, and the banner's draw width spans ~238 physical
+-- px (1080p x0.72) to 990 (4K x1.5). drawBanner picks the smallest slot that
+-- still covers the frame's actual pixel width. Both keep the plate's own
+-- 5.16:1 aspect; the on-screen height derives from the panel width so the art
+-- is never stretched. MIRRORS build_atlas.py's BANNER_XY/WH + BANNER_SM_XY/WH.
+FarmManager25.UV_BANNER    = {0, 768, 1280, 248}
+FarmManager25.UV_BANNER_SM = {1280, 768, 516, 100}
 
 
 -- Design tokens. Pixels at the reference screen height; converted to
@@ -315,12 +323,18 @@ FarmManager25.DESIGN = {
     timeColor      = {0.62, 0.68, 0.62, 1},
     -- Scrollbar (item 18): a click/drag affordance on the card window, drawn
     -- only when scrollMax > 0. A thin vertical bar at the panel's right inset,
-    -- inside the padX gutter so it clears the right-aligned time/overflow text.
+    -- in its OWN reserved lane outside the content column (task103-item14,
+    -- BP-070: gap >= the inter-card gap and >= 2x the track width) -- cards
+    -- never share pixels with the track. The lane is reserved whether or not
+    -- the bar is drawn, so card width never jumps when it appears.
     -- Track dim; thumb is the muted timeColor tone at full alpha so it reads
     -- against the track. Rides the button path, so it scrolls with zero camera
-    -- movement (unlike the wheel).
+    -- movement (unlike the wheel). The hit rect is wider than the 4px visual
+    -- (BP-070: 12-16 ref-px minimum target) -- grabbable without being fat.
     scrollBarWidthPx = 4,
     scrollThumbMinPx = 24,
+    scrollGapPx      = 9,     -- card right edge -> track (= cardGapPx, >= 2x track)
+    scrollHitWidthPx = 14,    -- click/drag target centred on the visual track
     scrollTrackColor = {0.24, 0.27, 0.24, 0.55},
     scrollThumbColor = {0.62, 0.68, 0.62, 0.95},
     -- Anchor: top-right, tucked under the money/clock bar, clear of the
@@ -1373,6 +1387,8 @@ function FarmManager25:buildOverlays()
         self.affordGap     = d.affordGapPx    * self.pxW
         self.scrollBarW      = d.scrollBarWidthPx * self.pxW
         self.scrollThumbMinH = d.scrollThumbMinPx * self.pxH
+        self.scrollGap       = d.scrollGapPx      * self.pxW
+        self.scrollHitW      = d.scrollHitWidthPx * self.pxW
         -- Text sizes bypass pxW/pxH (they normalize px directly), so the scale
         -- is applied to the px argument. getNormalizedScreenValues is linear in
         -- px, so this is exactly titleSize*s etc. -- proportions preserved.
@@ -1387,10 +1403,16 @@ function FarmManager25:buildOverlays()
         self.insetY  = theme.panel.insetPx * self.pxH
         self.borderW = theme.cardBorderPx  * self.pxW
         self.borderH = theme.cardBorderPx  * self.pxH
-        self.cardW   = self.panelW - self.insetX * 2
+        -- The scrollbar's lane (track + gap) is carved out of the content
+        -- column permanently -- the stable-gutter rule (BP-070): cards, reply
+        -- bar and overflow text share one right edge that never moves when
+        -- the scrollbar appears. The banner keeps the full panel width; the
+        -- lane exists only beside the scrolling content.
+        self.cardW   = self.panelW - self.insetX * 2 - self.scrollBarW - self.scrollGap
 
         -- Banner height follows the panel width at the art's own aspect
-        -- (UV_BANNER is 512x99), so the plate is never stretched.
+        -- (UV_BANNER's w/h -- both packed slots share it), so the plate is
+        -- never stretched.
         local uvB = FarmManager25.UV_BANNER
         self.bannerH = d.panelWidthPx * (uvB[4] / uvB[3]) * self.pxH
 
@@ -1737,7 +1759,7 @@ end
 
 --- Draw one atlas region. renderOverlay takes x,y as the BOTTOM-LEFT corner.
 function FarmManager25:blit(uv, x, y, w, h, c, alpha)
-    setOverlayUVs(self.atlasId, unpack(GuiUtils.getUVs(uv, {FarmManager25.ATLAS_PX, FarmManager25.ATLAS_PX})))
+    setOverlayUVs(self.atlasId, unpack(GuiUtils.getUVs(uv, {FarmManager25.ATLAS_W, FarmManager25.ATLAS_H})))
     setOverlayColor(self.atlasId, c[1], c[2], c[3], (c[4] or 1) * alpha)
     renderOverlay(self.atlasId, x, y, w, h)
 end
@@ -1961,7 +1983,17 @@ function FarmManager25:drawBanner(top, alpha)
     self.headerRect = { x = x, y = top - self.bannerH, w = self.panelW, h = self.bannerH }
     -- Owner art: plate, leaf badge and title are baked into the texture, so
     -- this is a single blit -- no renderText, nothing to compose.
-    self:blit(FarmManager25.UV_BANNER, x, top - self.bannerH, self.panelW, self.bannerH,
+    -- Two packed sizes (task103-item14, BP-070 R4): with no mipmaps, detailed
+    -- colour art aliases past ~2x minification, so the atlas carries a
+    -- pre-downsampled small slot next to the full one. Pick the smallest slot
+    -- that still covers this frame's actual pixel width (panelW is normalized
+    -- against screen width) -- never upscaling, never over-minifying. Both
+    -- slots share the plate's aspect, so bannerH holds for either.
+    local uvB = FarmManager25.UV_BANNER
+    if self.panelW * (g_screenWidth or 1920) <= FarmManager25.UV_BANNER_SM[3] then
+        uvB = FarmManager25.UV_BANNER_SM
+    end
+    self:blit(uvB, x, top - self.bannerH, self.panelW, self.bannerH,
               theme.header.tint, alpha)
     return self.bannerH
 end
@@ -2069,8 +2101,8 @@ function FarmManager25:renderStack()
     local capBudget = FarmManager25.DESIGN.maxVisibleCards * (avgCardH + self.cardGap)
     local budget = math.min(screenBudget, capBudget)
 
-    -- Clamp the scroll offset to a FULL last page (total - maxVisibleCards):
-    -- scrolling only exists when there are more cards than the cap fits, and
+    -- Clamp the scroll offset to a FULL last page (total - the ACTUAL last-page
+    -- fit): scrolling only exists when more cards live than the window fits, and
     -- the furthest scroll still fills the window from the oldest card. Written
     -- back so a burst of wheel ticks past the end cannot accumulate forever.
     local totalVisible = 0
@@ -2079,7 +2111,31 @@ function FarmManager25:renderStack()
             totalVisible = totalVisible + 1
         end
     end
-    local scrollMax = math.max(0, totalVisible - FarmManager25.DESIGN.maxVisibleCards)
+    -- The last page is measured, not counted: card heights vary and the window
+    -- is a height budget, not a fixed count, so fill `budget` from the OLDEST
+    -- card with the SAME rule the window loop below uses and take that count.
+    -- (Using maxVisibleCards here was the item-14 regression -- when the screen,
+    -- or a tall card, fits fewer than the cap, total - cap fell to 0, so the
+    -- offset clamped dead and the scrollbar never drew even though the fit-
+    -- derived "+N more" reported real overflow.) First-card-always-counts on
+    -- both sides, so the oldest-anchored fit and the newest-anchored window
+    -- agree for any height mix.
+    local lastPageFit = 0
+    local lastPageH = 0
+    for i = 1, #self.stack do
+        local n = self.stack[i]
+        if FarmManager25.alphaOf(n) > 0 then
+            local lines = self:linesFor(n)
+            local buttons = self:affordanceButtons(n)
+            local h = self:cardHeight(lines, buttons ~= nil and self.affordH or 0)
+            if lastPageFit > 0 and lastPageH + h + self.cardGap > budget then
+                break
+            end
+            lastPageFit = lastPageFit + 1
+            lastPageH = lastPageH + h + self.cardGap
+        end
+    end
+    local scrollMax = math.max(0, totalVisible - lastPageFit)
     FarmManager25.scrollOffset = clamp(FarmManager25.scrollOffset, 0, scrollMax)
     local offset = FarmManager25.scrollOffset
 
@@ -2143,7 +2199,7 @@ function FarmManager25:renderStack()
         setTextBold(false)
         local c = FarmManager25.DESIGN.timeColor
         setTextColor(c[1], c[2], c[3], peak)
-        renderText(self.panelLeft + self.panelW - self.insetX - self.padX,
+        renderText(self.panelLeft + self.insetX + self.cardW - self.padX,
                    top - self.timeSize, self.timeSize,
                    string.format("+%d more", hiddenOlder))
         setTextAlignment(RenderText.ALIGN_LEFT)
@@ -2164,7 +2220,7 @@ function FarmManager25:renderStack()
         setTextBold(false)
         local c = FarmManager25.DESIGN.timeColor
         setTextColor(c[1], c[2], c[3], peak)
-        renderText(self.panelLeft + self.panelW - self.insetX - self.padX,
+        renderText(self.panelLeft + self.insetX + self.cardW - self.padX,
                    top - self.timeSize, self.timeSize,
                    string.format("%d newer", hiddenNewer))
         setTextAlignment(RenderText.ALIGN_LEFT)
@@ -2192,7 +2248,7 @@ function FarmManager25:renderStack()
     -- Scrollbar (item 18): a click/drag affordance for the card window, drawn
     -- only when there is something to scroll (scrollMax > 0). The track spans
     -- the card viewport (banner bottom -> reply-bar top) at the panel's right
-    -- inset; the thumb's height is the visible fraction (maxVisibleCards /
+    -- inset; the thumb's height is the visible fraction (on-screen cards /
     -- total) and its Y maps the offset -- offset 0 (newest) parks the thumb at
     -- the BOTTOM, by the reply bar, matching the newest-at-bottom card order.
     -- Rides the button path in mouseEvent, so it scrolls with zero camera
@@ -2202,7 +2258,7 @@ function FarmManager25:renderStack()
         local d = FarmManager25.DESIGN
         local trackH = viewTop - viewBottom
         local trackX = self.panelLeft + self.panelW - self.insetX - self.scrollBarW
-        local frac = FarmManager25.DESIGN.maxVisibleCards / totalVisible
+        local frac = #visible / totalVisible
         if frac > 1 then frac = 1 end
         local thumbH = math.max(self.scrollThumbMinH, trackH * frac)
         if thumbH > trackH then thumbH = trackH end
@@ -2212,8 +2268,13 @@ function FarmManager25:renderStack()
                   d.scrollTrackColor, peak)
         self:blit(FarmManager25.UV_CARD_M, trackX, thumbY, self.scrollBarW, thumbH,
                   d.scrollThumbColor, peak)
-        self.scrollbarRect   = { x = trackX, y = viewBottom, w = self.scrollBarW, h = trackH }
-        self.scrollThumbRect = { x = trackX, y = thumbY, w = self.scrollBarW, h = thumbH }
+        -- Hit rects are WIDER than the 4px visual track (BP-070: 12-16 ref-px
+        -- minimum click target), centred on it. The extra width lands in the
+        -- reserved gap and the panel inset -- never over card content. The
+        -- drag math reads only y/h, so widening x/w is safe.
+        local hitPad = (self.scrollHitW - self.scrollBarW) * 0.5
+        self.scrollbarRect   = { x = trackX - hitPad, y = viewBottom, w = self.scrollHitW, h = trackH }
+        self.scrollThumbRect = { x = trackX - hitPad, y = thumbY, w = self.scrollHitW, h = thumbH }
         self.scrollTravel    = travel
         self.scrollRange     = scrollMax
     else
