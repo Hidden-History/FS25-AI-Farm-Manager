@@ -1,6 +1,8 @@
-![FS25 Farm Manager](assets/banner_FarmManager25.png)
+![AI Farm Manager](assets/banner_FarmManager25.png)
 
 # FS25 Farm Manager
+
+*Reads your save, remembers your farm, tells you what matters — read-only, always.*
 
 An AI farm manager for **one** Farming Simulator 25 savegame. It reads your save, remembers
 your farm across sessions, and — with the mod installed — becomes an always-on companion
@@ -28,8 +30,8 @@ fs25-farm-manager/
 ├── .claude/skills/
 │   ├── fs25-farm-manager/        the manager — your AI's farm knowledge
 │   │   ├── SKILL.md                what it does and when
-│   │   ├── scripts/                readers for your save, the notifier, the reply reader
-│   │   │                             and the event watcher
+│   │   ├── scripts/                readers for your save, the notifier, the reply reader,
+│   │   │                             the event watcher, and helper scripts
 │   │   ├── references/             crop timing, time mechanics, workflows
 │   │   └── templates/              used once, to set up your farm's memory
 │   ├── farm-briefing/            /farm-briefing — start a session
@@ -41,6 +43,36 @@ fs25-farm-manager/
 ```
 
 The three small skills are shortcuts into the manager; it does the work.
+
+## How the skill and mod work together
+
+The skill and the mod are two halves of one **two-way** loop — the skill decides, the mod
+displays, and your answer comes back:
+
+```
+Claude Code (the skill)                     FS25 (the mod)
+   reads your save
+   forms a recommendation
+   writes ───────────────────► modSettings/FS25_AIFarmManager25/notify.xml
+                                              reads it, draws a card (maybe with
+                                              👍/👎, a choice, or a reply box),
+                                              deletes the file to prove delivery
+                                  ◄────────── you click or type an answer;
+   read_replies.py ingests it     replies.xml  the mod appends it here
+   into the sanctum ledger
+```
+
+You don't watch for that reply by hand. The manager runs an **event-driven** loop: at the
+start of a session it arms `wait_for_event.py` under a persistent Monitor, which sits idle at
+~zero cost and wakes the manager only when the game writes a reply or writes your save; at
+closeout it disarms it. (It **polls** the two files — inotify can't see Windows-side writes
+from WSL — and never touches your save.)
+
+Install both to get the full experience: the skill is what reads and remembers your farm,
+the mod is what turns its notifications into a card on your screen and carries your answer
+back. The skill works without the mod — you just won't see on-screen cards — but the mod
+alone has nothing to read. See **Install** below for both, and **On-screen notifications**
+for how the bridge files work.
 
 ## Install
 
@@ -151,19 +183,17 @@ python3 .claude/skills/fs25-farm-manager/scripts/notify_farm_manager.py \
 **✕** to dismiss. You answer with the mouse whenever the game's shared cursor is up (raised by
 AutoDrive's middle-mouse, Courseplay's right-mouse, or any cursor mod — this mod reads that
 shared cursor, it doesn't own one). Your click is appended to
-`modSettings/FS25_AIFarmManager25/replies.xml`, and the manager reads it back, deduped so a
-double-click can't double-count.
+`modSettings/FS25_AIFarmManager25/replies.xml`; `read_replies.py` ingests it, deduped by
+`(id, action)` so a double-click can't double-count.
 
-You don't watch for that reply by hand. The manager runs an **event-driven** loop: at the
-start of a session it arms a watcher that sits idle at ~zero cost and wakes only when the game
-writes a reply or writes your save; at closeout it stands the watcher down. (It **polls** the
-files — inotify can't see Windows-side writes from WSL — and never touches your save.)
+**Ctrl+Period** toggles the overlay between its two modes: **on** (default) is a persistent
+panel — header, cards and reply box stay up and cards don't expire until you dismiss or answer
+them; **off** is the classic transient pop-up where each card fades after its time. Un-dismissed
+cards survive a restart (the mod mirrors the stack to `state.xml`).
 
-**Ctrl+Period** toggles the overlay between a persistent always-on panel (the default — cards
-stay up until you dismiss or answer them, and survive a restart via `state.xml`) and the
-classic transient pop-up where each card fades after its time. If the interactive layer ever
-fails, the mod falls back to a plain one-way card, and then to the game's own notification —
-**interactive → one-way → native**, each less capable but still delivering the message.
+If the interactive layer ever fails, the mod doesn't go quiet — it falls back to a plain
+one-way card, and if even that can't draw, to the game's own notification. **Interactive →
+one-way → native**, each less capable but still delivering the message.
 
 Move or restyle the panel without reinstalling — create
 `modSettings/FS25_AIFarmManager25/settings.xml`:
