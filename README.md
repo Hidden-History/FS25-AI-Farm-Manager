@@ -65,6 +65,10 @@ If you already have a `.claude` folder, copy the four folders inside `skills/` i
 
 ### 2. The mod (optional — only for on-screen notifications)
 
+**Get the mod:** download `FS25_AIFarmManager25.zip` from
+[KingMods](https://www.kingmods.net/en/fs25/mods/79933/ai-farm-manager) or the
+[GitHub releases](https://github.com/Hidden-History/FS25-AI-Farm-Manager/releases).
+
 Copy `mod/FS25_AIFarmManager25.zip` into your FS25 mods folder:
 
 | | |
