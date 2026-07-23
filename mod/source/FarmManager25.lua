@@ -313,6 +313,16 @@ FarmManager25.DESIGN = {
     affordGapPx    = 6,
     cardAlpha      = 0.92,
     timeColor      = {0.62, 0.68, 0.62, 1},
+    -- Scrollbar (item 18): a click/drag affordance on the card window, drawn
+    -- only when scrollMax > 0. A thin vertical bar at the panel's right inset,
+    -- inside the padX gutter so it clears the right-aligned time/overflow text.
+    -- Track dim; thumb is the muted timeColor tone at full alpha so it reads
+    -- against the track. Rides the button path, so it scrolls with zero camera
+    -- movement (unlike the wheel).
+    scrollBarWidthPx = 4,
+    scrollThumbMinPx = 24,
+    scrollTrackColor = {0.24, 0.27, 0.24, 0.55},
+    scrollThumbColor = {0.62, 0.68, 0.62, 0.95},
     -- Anchor: top-right, tucked under the money/clock bar, clear of the
     -- bottom-right minimap and of AutoDrive/Courseplay's left-side HUDs.
     anchorX        = FarmManager25.DEFAULT_ANCHOR_X,
@@ -340,12 +350,6 @@ FarmManager25.dragOffset    = nil     -- nil = not dragging; else grab offset fr
 FarmManager25.affordanceRects   = nil
 FarmManager25.interactiveOk     = true   -- latched false if the layer ever fails; cards then render one-way
 FarmManager25.hookInstalled     = false  -- the registerGlobalPlayerActionEvents hook goes in exactly once
--- S158 Path B: true while WE hold the on-foot player-input lock. Tracked so
--- release only ever unlocks a lock we took -- a cursor toggled in a vehicle
--- (where we never lock) calls nothing, keeping the vehicle path byte-for-byte
--- unchanged; a lock taken on foot then carried into a vehicle still releases,
--- so it can never be left stuck.
-FarmManager25.cameraLocked      = false
 -- The overlay mode (S155, LT-1). ON (the default) = persistent always-on
 -- panel, cards never auto-expire; OFF = the original transient notifier.
 -- Persisted in state.xml so the player's choice survives the session.
@@ -366,6 +370,16 @@ FarmManager25.stateDirty        = false
 -- (the headerRect discipline: an off-screen panel must not eat the wheel).
 FarmManager25.scrollOffset      = 0
 FarmManager25.panelRect         = nil
+-- Scrollbar (item 18): the track + thumb hit rects and the in-flight drag,
+-- same discipline as panelRect -- rebuilt every drawn frame, nil on every path
+-- that does not draw. scrollDrag is nil unless a thumb-drag is in flight (then
+-- { grab = cursorY - thumbBottomY }); scrollTravel/scrollRange carry the
+-- render-time geometry the drag needs to map a thumb Y back to a scroll offset.
+FarmManager25.scrollbarRect     = nil
+FarmManager25.scrollThumbRect   = nil
+FarmManager25.scrollDrag        = nil
+FarmManager25.scrollTravel      = 0
+FarmManager25.scrollRange       = 0
 -- S158: the g_gui settings dialog. The controller instance is built once and
 -- the XML registered in loadMap; settingsGuiLoaded latches true only when
 -- g_gui:loadGui succeeded, so the settings keybind is a clean no-op when the
@@ -1039,11 +1053,12 @@ end
 --  mode is persisted immediately -- a toggle that forgot itself on relog
 --  would read as the S153 one-shot bug all over again.
 --- Set the overlay mode and persist it. The single flip shared by the
---  keybind (onToggleOverlay) and the settings page (cfgToggleOverlay), so the
---  OFF-mode re-arm + saveState happen identically however the mode is changed.
---  Deliberately WITHOUT the gui-visible guard: the settings dialog IS a
---  visible GUI, so onToggleOverlay's guard would wrongly no-op the in-dialog
---  toggle. The guard stays on the keybind path where it belongs.
+--  keybind (onToggleOverlay) and the settings page (the dialog's
+--  onOverlayChanged calls this directly), so the OFF-mode re-arm + saveState
+--  happen identically however the mode is changed. Deliberately WITHOUT the
+--  gui-visible guard: the settings dialog IS a visible GUI, so onToggleOverlay's
+--  guard would wrongly no-op the in-dialog toggle. The guard stays on the
+--  keybind path where it belongs.
 function FarmManager25:setOverlayOn(on)
     FarmManager25.overlayOn = on
     if not FarmManager25.overlayOn then
@@ -1063,51 +1078,6 @@ function FarmManager25:onToggleOverlay()
     end)
     if not ok then
         print("FarmManager25: overlay toggle failed -- " .. tostring(err))
-    end
-end
-
---- Path B (BP-067): freeze the ON-FOOT player camera + wheel-zoom while our
---  cursor is up. Raising the shared cursor draws it and routes our mouseEvent,
---  but on foot the camera LOOK + wheel ZOOM are separate PlayerInputComponent
---  InputActions gated ONLY by its internal `locked` flag -- orthogonal to
---  cursor state -- so without this the camera keeps rotating and the wheel
---  keeps zooming under the cursor (the confirmed live-test failure). lock() is
---  the engine's own game-pause freeze primitive; it also stops walking, which
---  is the intended "I'm reading & answering my farm manager" modal feel.
---
---  ON FOOT ONLY. In a vehicle the player component isn't the active camera and
---  AutoDrive/Courseplay already own vehicle-camera suppression, so we take the
---  lock ONLY when getCurrentVehicle() is nil -- the in-vehicle raw-overlay path
---  stays byte-for-byte unchanged (no lock call at all there).
---
---  Every access is nil-guarded: g_localPlayer, its inputComponent, and the
---  lock/unlock methods are UNDOCUMENTED engine internals (BP-067) that a patch
---  could rename. If any is absent we simply don't lock -- the cursor still
---  raises and behaviour degrades to today's cursor-only state, never an error.
---  RELEASE only ever unlocks a lock WE took (the cameraLocked flag): a cursor
---  toggled in a vehicle -- where we never lock -- calls nothing, so the vehicle
---  path is byte-for-byte unchanged; but a lock taken on foot then carried into
---  a vehicle still releases on lower, so the component can never be left stuck.
-function FarmManager25.setOnFootCameraLock(lock)
-    if g_localPlayer == nil then
-        return
-    end
-    local ic = g_localPlayer.inputComponent
-    if ic == nil then
-        return
-    end
-    if lock then
-        local inVehicle = g_localPlayer.getCurrentVehicle ~= nil
-            and g_localPlayer:getCurrentVehicle() ~= nil
-        if not inVehicle and ic.lock ~= nil then
-            ic:lock()
-            FarmManager25.cameraLocked = true
-        end
-    elseif FarmManager25.cameraLocked then
-        if ic.unlock ~= nil then
-            ic:unlock()
-        end
-        FarmManager25.cameraLocked = false
     end
 end
 
@@ -1139,9 +1109,6 @@ function FarmManager25:onToggleCursor()
         end
         local show = not g_inputBinding:getShowMouseCursor()
         g_inputBinding:setShowMouseCursor(show)
-        -- Path B: freeze/release the on-foot camera+zoom in lockstep with the
-        -- cursor so a raised cursor on foot doesn't leave the camera rotating.
-        FarmManager25.setOnFootCameraLock(show)
     end)
     if not ok then
         print("FarmManager25: cursor toggle failed -- " .. tostring(err))
@@ -1154,10 +1121,11 @@ end
 -- controller (FarmManagerSettingsGui.lua) is a thin shell that calls these.
 -- ---------------------------------------------------------------------------
 
---- Nearest preset -> the NEXT one in the cycle (wraps). "Nearest" first so a
---  value that drifted off the preset grid (a hand-edited settings.xml scale,
---  say) still cycles predictably instead of snapping to preset 1.
-local function nextPreset(list, current)
+-- Index of the preset nearest to `current` (ties -> first). Backs the settings
+-- dialog's index-addressable steppers (getScaleIndex/getLingerIndex): "nearest"
+-- so a value that drifted off the preset grid (a hand-edited settings.xml scale,
+-- say) still resolves to a sensible index instead of snapping to preset 1.
+local function nearestIndex(list, current)
     local bestI, bestD = 1, math.huge
     for i, v in ipairs(list) do
         local d = math.abs(v - (current or v))
@@ -1165,29 +1133,46 @@ local function nextPreset(list, current)
             bestI, bestD = i, d
         end
     end
-    return list[(bestI % #list) + 1]
+    return bestI
 end
 
---- Settings toggle for the overlay mode: the SAME flip the Ctrl+Period keybind
---  makes, minus the gui-visible guard (we ARE in a visible dialog here).
-function FarmManager25:cfgToggleOverlay()
-    self:setOverlayOn(not FarmManager25.overlayOn)
+-- Wrap a 1-based index into [1, #list] in BOTH directions (0 -> last,
+-- #list+1 -> first). Lua's floored % keeps negatives positive, so this also
+-- absorbs any out-of-range index a stepper could hand us.
+local function wrapIndex(i, n)
+    return ((i - 1) % n) + 1
 end
 
---- Cycle the overlay scale through the presets. Geometry is precomputed from
---  uiScale in buildOverlays, so rebuild it for the change to take -- the same
---  call loadMap makes; overlaysOk/useNativeOnly latch there as always.
-function FarmManager25:cfgCycleScale()
-    local d = FarmManager25.DESIGN
-    d.uiScale = nextPreset(FarmManager25.SCALE_PRESETS, d.uiScale)
+-- The settings dialog's native ‹value› steppers apply by an explicit 1-based
+-- state index (bidirectional). getScaleIndex/getLingerIndex give the dialog the
+-- current state to setState() on open; cfgSetScaleIndex/cfgSetLingerIndex apply
+-- + persist the chosen index. Index wraps both ways so a stepper can never
+-- drive an out-of-range value. (The overlay stepper flips via setOverlayOn.)
+
+--- Current SCALE_PRESETS index for the live uiScale (nearest, for setState).
+function FarmManager25:getScaleIndex()
+    return nearestIndex(FarmManager25.SCALE_PRESETS, FarmManager25.DESIGN.uiScale)
+end
+
+--- Current LINGER_PRESETS_MS index for the live MIN_TTL_MS (nearest).
+function FarmManager25:getLingerIndex()
+    return nearestIndex(FarmManager25.LINGER_PRESETS_MS, FarmManager25.MIN_TTL_MS)
+end
+
+--- Apply SCALE_PRESETS[i], then rebuild geometry (uiScale is precomputed in
+--  buildOverlays, the same call loadMap makes) and persist.
+function FarmManager25:cfgSetScaleIndex(i)
+    local list = FarmManager25.SCALE_PRESETS
+    FarmManager25.DESIGN.uiScale = list[wrapIndex(i, #list)]
     self:buildOverlays()
     self:saveState()
 end
 
---- Cycle the OFF-mode linger floor (MIN_TTL_MS). Keep MAX_TTL_MS >= MIN so the
---  buildNotification clamp can never invert.
-function FarmManager25:cfgCycleLinger()
-    FarmManager25.MIN_TTL_MS = nextPreset(FarmManager25.LINGER_PRESETS_MS, FarmManager25.MIN_TTL_MS)
+--- Apply LINGER_PRESETS_MS[i], keeping MAX_TTL_MS >= MIN so the
+--  buildNotification clamp can never invert, and persist.
+function FarmManager25:cfgSetLingerIndex(i)
+    local list = FarmManager25.LINGER_PRESETS_MS
+    FarmManager25.MIN_TTL_MS = list[wrapIndex(i, #list)]
     if FarmManager25.MAX_TTL_MS < FarmManager25.MIN_TTL_MS then
         FarmManager25.MAX_TTL_MS = FarmManager25.MIN_TTL_MS
     end
@@ -1386,6 +1371,8 @@ function FarmManager25:buildOverlays()
         self.affordW       = d.affordWidthPx  * self.pxW
         self.affordH       = d.affordHeightPx * self.pxH
         self.affordGap     = d.affordGapPx    * self.pxW
+        self.scrollBarW      = d.scrollBarWidthPx * self.pxW
+        self.scrollThumbMinH = d.scrollThumbMinPx * self.pxH
         -- Text sizes bypass pxW/pxH (they normalize px directly), so the scale
         -- is applied to the px argument. getNormalizedScreenValues is linear in
         -- px, so this is exactly titleSize*s etc. -- proportions preserved.
@@ -1512,9 +1499,6 @@ function FarmManager25:loadMap(name)
     self.inputBarRect       = nil
     self.panelRect          = nil
     FarmManager25.scrollOffset = 0
-    -- S158: a fresh map has a fresh (unlocked) player component -- drop any
-    -- stale lock intent so the flag tracks only this session's cursor.
-    FarmManager25.cameraLocked = false
     -- loadState populates the stack directly (not via push), so it must not
     -- arm the dirty-flush -- we would re-save what we just read.
     self.stateDirty         = false
@@ -1553,6 +1537,9 @@ function FarmManager25:deleteMap()
     self.affordanceRects    = nil
     self.inputBarRect       = nil
     self.panelRect          = nil
+    self.scrollbarRect      = nil
+    self.scrollThumbRect    = nil
+    self.scrollDrag         = nil
     self.stateFolder   = nil
     self.filePath      = nil
     self.queue         = {}
@@ -2053,6 +2040,8 @@ function FarmManager25:renderStack()
         self.affordanceRects = nil
         self.inputBarRect = nil
         self.panelRect = nil
+        self.scrollbarRect = nil
+        self.scrollThumbRect = nil
         return
     end
 
@@ -2143,6 +2132,10 @@ function FarmManager25:renderStack()
 
     top = top - self:drawBanner(top, peak) - self.pillGap
 
+    -- The scroll viewport's top edge (just under the banner). The scrollbar
+    -- track spans from here down to the reply-bar top (viewBottom, below).
+    local viewTop = top
+
     -- The older-overflow line sits where the hidden (oldest) cards would begin
     -- -- at the top, above the visible slice.
     if hiddenOlder > 0 then
@@ -2178,6 +2171,10 @@ function FarmManager25:renderStack()
         top = top - moreH
     end
 
+    -- The scroll viewport's bottom edge (the reply-bar top), captured before
+    -- the reply bar consumes `top`.
+    local viewBottom = top
+
     -- The reply bar closes the panel, fading with the stack in OFF mode.
     self:drawInputBar(top, peak)
 
@@ -2191,6 +2188,38 @@ function FarmManager25:renderStack()
         w = self.panelW,
         h = self.panelTop - self.inputBarRect.y,
     }
+
+    -- Scrollbar (item 18): a click/drag affordance for the card window, drawn
+    -- only when there is something to scroll (scrollMax > 0). The track spans
+    -- the card viewport (banner bottom -> reply-bar top) at the panel's right
+    -- inset; the thumb's height is the visible fraction (maxVisibleCards /
+    -- total) and its Y maps the offset -- offset 0 (newest) parks the thumb at
+    -- the BOTTOM, by the reply bar, matching the newest-at-bottom card order.
+    -- Rides the button path in mouseEvent, so it scrolls with zero camera
+    -- movement (unlike the wheel). Same nil-on-every-undrawn-path discipline as
+    -- panelRect. scrollTravel/scrollRange hand the drag its render-time geometry.
+    if scrollMax > 0 and self.scrollBarW ~= nil and viewTop - viewBottom > 0 then
+        local d = FarmManager25.DESIGN
+        local trackH = viewTop - viewBottom
+        local trackX = self.panelLeft + self.panelW - self.insetX - self.scrollBarW
+        local frac = FarmManager25.DESIGN.maxVisibleCards / totalVisible
+        if frac > 1 then frac = 1 end
+        local thumbH = math.max(self.scrollThumbMinH, trackH * frac)
+        if thumbH > trackH then thumbH = trackH end
+        local travel = trackH - thumbH
+        local thumbY = viewBottom + (offset / scrollMax) * travel
+        self:blit(FarmManager25.UV_CARD_M, trackX, viewBottom, self.scrollBarW, trackH,
+                  d.scrollTrackColor, peak)
+        self:blit(FarmManager25.UV_CARD_M, trackX, thumbY, self.scrollBarW, thumbH,
+                  d.scrollThumbColor, peak)
+        self.scrollbarRect   = { x = trackX, y = viewBottom, w = self.scrollBarW, h = trackH }
+        self.scrollThumbRect = { x = trackX, y = thumbY, w = self.scrollBarW, h = thumbH }
+        self.scrollTravel    = travel
+        self.scrollRange     = scrollMax
+    else
+        self.scrollbarRect   = nil
+        self.scrollThumbRect = nil
+    end
 
     -- Leave global text state as we found it: FS renders text globally and a
     -- leaked colour/bold/alignment would tint every HUD drawn after us this frame.
@@ -2222,6 +2251,8 @@ function FarmManager25:draw()
         self.affordanceRects = nil
         self.inputBarRect = nil
         self.panelRect = nil
+        self.scrollbarRect = nil
+        self.scrollThumbRect = nil
         return
     end
 
@@ -2236,6 +2267,8 @@ function FarmManager25:draw()
         self.affordanceRects = nil
         self.inputBarRect  = nil
         self.panelRect     = nil
+        self.scrollbarRect = nil
+        self.scrollThumbRect = nil
         setTextBold(false)
         setTextColor(1, 1, 1, 1)
         setTextAlignment(RenderText.ALIGN_LEFT)
@@ -2386,9 +2419,11 @@ function FarmManager25:mouseEvent(posX, posY, isDown, isUp, button)
         -- cards when more exist than the capped window shows. GIANTS delivers
         -- the wheel to mouseEvent as a button tick -- Input.MOUSE_BUTTON_WHEEL_
         -- UP/_DOWN, isDown on the tick. Gated exactly like a click: only while
-        -- the ENGINE cursor is up (which is also when the game stops the wheel
-        -- from zooming the camera, so the two never fight) and only over the
-        -- panel. Nil-tolerant on Input and panelRect: with either absent the
+        -- the ENGINE cursor is up and only over the panel. On foot the wheel
+        -- ALSO zooms the camera now -- item 11's suppression lock was removed so
+        -- the wheel reaches us again (BP-067; the owner accepts that movement,
+        -- and the click/drag scrollbar is the zero-movement alternative).
+        -- Nil-tolerant on Input and panelRect: with either absent the
         -- wheel falls straight through to the game, untouched. Wheel up scrolls
         -- toward OLDER history (offset up); the frame clamps the offset.
         if isDown and Input ~= nil and self.panelRect ~= nil
@@ -2404,6 +2439,36 @@ function FarmManager25:mouseEvent(posX, posY, isDown, isUp, button)
                     FarmManager25.scrollOffset = math.max(0, FarmManager25.scrollOffset - 1)
                     return
                 end
+            end
+        end
+        -- Scrollbar drag (item 18): a click/drag on the thumb scrolls the card
+        -- window with ZERO camera movement -- button events are not contested by
+        -- the on-foot camera (unlike the wheel), so this path works whether or
+        -- not the cursor is also swinging the view. A drag in flight owns every
+        -- event until release: map the thumb's Y back to a scroll offset
+        -- (renderStack re-clamps to a full last page and redraws the thumb from
+        -- it next frame). Same gate as a click on the way IN (cursor up, no menu
+        -- owning the screen, a thumb drawn this frame).
+        if self.scrollDrag ~= nil then
+            if isUp and button == 1 then
+                self.scrollDrag = nil
+            elseif self.scrollbarRect ~= nil and self.scrollTravel > 0 then
+                local sb = self.scrollbarRect
+                local newY = clamp(posY - self.scrollDrag.grab, sb.y, sb.y + self.scrollTravel)
+                local frac = (newY - sb.y) / self.scrollTravel
+                FarmManager25.scrollOffset = clamp(math.floor(frac * self.scrollRange + 0.5),
+                                                   0, self.scrollRange)
+            end
+            return
+        end
+        if isDown and button == 1 and self:cursorIsShown()
+                and not (g_gui ~= nil and g_gui:getIsGuiVisible())
+                and self.scrollThumbRect ~= nil then
+            local t = self.scrollThumbRect
+            if posX >= t.x and posX <= t.x + t.w
+                    and posY >= t.y and posY <= t.y + t.h then
+                self.scrollDrag = { grab = posY - t.y }
+                return
             end
         end
         -- THE DESIGN (S153 live-test rework): click-gating READS the shared

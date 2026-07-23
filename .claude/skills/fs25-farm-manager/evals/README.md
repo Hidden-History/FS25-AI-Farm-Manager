@@ -22,15 +22,41 @@ Format is the canonical `bmad-eval-runner` case shape (`input` + `rubric` + `sta
 
 ## Running them
 
+One command runs the whole gate (6 cases × 3 runs = 18 executions):
+
 ```bash
-# quality mode — grade each case's output against its rubric
-bmad-eval-runner  <path-to>/fs25-farm-manager  --cases evals/cases.json
+./run-evals.sh
 ```
 
+`run-evals.sh` is the durable harness. It exists because the `bmad-eval-runner` spawns each
+case's `claude -p` in a from-scratch clean-room whose `CLAUDE_CONFIG_DIR` points at an empty
+per-case dir — so the spawn has **no auth** unless the adapter forwards a config. Two pieces
+supply that:
+
+- **`adapter.json`** (auto-discovered beside `cases.json`) is the canonical claude-code adapter
+  with `"env_passthrough": ["CLAUDE_CONFIG_DIR"]`, which tells the runner to forward the host
+  `CLAUDE_CONFIG_DIR` into each spawn (overriding the clean-room value).
+- **`run-evals.sh`** points that forwarded `CLAUDE_CONFIG_DIR` at a dedicated eval-only config
+  dir (`~/.claude-eval-only`) that carries real credentials but stays isolated from the live
+  `~/.claude` session. Before running it **refreshes** that dir's auth: if
+  `~/.claude-eval-only/.credentials.json` is missing or older than `~/.claude/.credentials.json`
+  it copies the live `.credentials.json` (and `.claude.json` if the live dir carries one) across
+  — live files are copied at runtime, so **no secret is ever hardcoded** in the script. The rest
+  of `~/.claude-eval-only` is preserved as-is.
+
+The runner records a transcript per execution and prints an `execution-summary.json`
+(`executed` / `skipped` / `failures` counts) to a fresh tmp output dir. Those counts are
+process-level (did the spawn run), not the rubric grade.
+
+To run a single case or vary the sample, invoke the runner directly (adapter still
+auto-discovered), e.g. `--case-ids storage-capability-reads-both-attributes --runs 1`.
+
+### Grading
+
 The rubrics are written to be **discriminating**: a wrong output cannot pass them (negative
-assertions, specific facts, and transcript/order checks — not "the reply is helpful"). Grade
-with the read-only grader (`bmad-eval-runner/references/grader.md`), which gives no partial
-credit.
+assertions, specific facts, and transcript/order checks — not "the reply is helpful"). Grade the
+recorded transcripts with the read-only grader (`bmad-eval-runner/references/grader.md`), which
+gives no partial credit.
 
 ## Fixtures
 

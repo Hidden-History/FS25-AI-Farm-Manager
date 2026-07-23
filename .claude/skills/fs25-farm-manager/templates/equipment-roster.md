@@ -6,8 +6,9 @@ cap_lines: 200
 cap_kb: 20
 rotation_trigger: on-resolve
 archive_target: "history/archive/equipment-roster-archive.md"
+resolved_markers: ["SOLD", "REMOVED"]
 reconciliation: "sold/removed rows MOVE to archive (never blind row-shed); split by category if the ACTIVE set exceeds cap"
-format_version: 1
+format_version: 2
 parity_spec:
   required_sections: ["## The fleet", "## Buildings & storage", "## Condition", "## Reading of it"]
 ---

@@ -48,6 +48,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 
 TEMPLATES_DIR_DEFAULT = os.path.normpath(
@@ -61,6 +62,13 @@ KB = 1024
 FRESH = "FRESH"
 STALE = "STALE"
 UNVERIFIABLE = "UNVERIFIABLE"
+
+# Sanctum structural-schema marker (DEC-268): the highest migration to_version this build
+# ships. Stored per-sanctum in config.json as `sanctum_schema_version` and advanced by the
+# `migrate` subcommand. Deliberately SEPARATE from config.json's notifications.mod_version
+# (the AI Farm Manager notification MOD's release -- a different axis). Bump this by one
+# whenever a new MANIFEST entry is appended.
+SANCTUM_SCHEMA_VERSION = 1
 
 
 class StaleManifestError(Exception):
@@ -80,6 +88,23 @@ class ArchivePathError(Exception):
     """Raised when an archive_target still contains an unresolved {token} after
     substitution -- writing a literal-brace path would collide every entity's history
     into one file (schema Section 4)."""
+
+
+class SchemaVersionError(Exception):
+    """Raised when the sanctum's version marker cannot be trusted forward-only: it is AHEAD
+    of the newest migration this build knows (sanctum written by a NEWER skill), OR the
+    sanctum's config.json is present-but-unparseable (a corrupt marker must never be guessed
+    as 'pre-migration'). migrate fails loud: applies nothing, wipes nothing, keeps any
+    backup (BP-069 pitfall 3 -- never a silent destructive fallback on an unrecognized
+    version, never a silent re-migration off a corrupt marker)."""
+
+
+class MigrationError(Exception):
+    """Raised when a migration hits an unexpected-but-clean-exit error (missing template,
+    non-UTF8 content, ENOSPC/EACCES, a FileExists race) so it is routed through this
+    script's clean-JSON / exit-nonzero contract instead of escaping as a raw traceback. The
+    pre-migration backup is already taken, so this is a clean-exit-vs-traceback correctness
+    gap, not data loss. Scoped to migrate -- other commands keep their own handling."""
 
 
 # --------------------------------------------------------------------------- #
@@ -174,7 +199,10 @@ def _parse_frontmatter(fm_inner):
             in_parity = (key == "parity_spec")
             if key == "parity_spec":
                 continue
-            meta[key] = _unquote(val)
+            if key == "resolved_markers":
+                meta[key] = [mk.upper() for mk in _parse_list_value(val, lines[i:])]
+            else:
+                meta[key] = _unquote(val)
         elif in_parity and key in ("required_sections", "required_placeholders"):
             meta[key] = _parse_list_value(val, lines[i:])
     # numeric coercions where meaningful
@@ -634,7 +662,10 @@ def cmd_reconcile(args):
 
 # A register's "resolved" markers, matched ONLY inside a designated status/resolution
 # column (H-D) -- never against Role/Notes/prose cells, where "closed cab combine" would
-# archive a LIVE machine. Covers the domain's resolved states.
+# archive a LIVE machine. Covers the domain's resolved states. This is the DEFAULT set,
+# used when a file's template declares no `resolved_markers` contract field; a register
+# whose "resolved" states differ (e.g. a roster where BOUGHT means STILL-OWNED, not done)
+# declares its own set in the template and it is re-stamped on migration (M-E2).
 RESOLVED_MARKERS = ("SOLD", "REMOVED", "RESOLVED", "CLOSED", "STOPPED", "ARCHIVED", "DONE", "BOUGHT")
 STATUS_HEADERS = {"status", "resolution", "state"}
 _SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
@@ -687,9 +718,9 @@ def _status_col(header_cells):
     return None
 
 
-def _cell_has_marker(cell):
+def _cell_has_marker(cell, markers):
     up = cell.upper()
-    return any(re.search(rf"\b{m}\b", up) for m in RESOLVED_MARKERS)
+    return any(re.search(rf"\b{m}\b", up) for m in markers)
 
 
 def _rows_under_heading(lines, data_idx, keyword):
@@ -924,10 +955,27 @@ def rotate_file(path, sanctum_dir, apply):
 
     # on-resolve: MOVE resolved rows, matched ONLY in a designated status column (H-D). A
     # register with no status column has no resolution signal -> report agent-rotation
-    # (H-HONEST), never a silent no-op that hides unbounded growth.
+    # (H-HONEST), never a silent no-op that hides unbounded growth. The resolved-marker set
+    # is per-file: a template may declare `resolved_markers` (contract field, re-stamped on
+    # migration) so a register whose "resolved" states differ from the default uses its own
+    # set; absent that field, the global RESOLVED_MARKERS default applies.
+    markers = meta.get("resolved_markers")
+    if markers is None:
+        markers = RESOLVED_MARKERS       # absent -> global default (unchanged)
+    elif not markers:
+        # PRESENT but empty/unparseable (e.g. `resolved_markers: []` or a scalar): a contract
+        # violation. Do NOT fall back to the global default (would re-introduce BOUGHT on a
+        # roster and false-archive owned rows) and do NOT silently no-op (an over-cap file with
+        # resolved rows would report a bare `none`, breaking its own H-HONEST invariant). Surface
+        # a clear per-file error naming the file, matching the result-dict idiom.
+        return {"file": path, "class": cls, "rotation_trigger": trig, "action": "error",
+                "reason": f"resolved_markers present but empty/unparseable in "
+                          f"{os.path.basename(path)} -- declare a non-empty list of marker "
+                          "words (contract violation); refusing to fall back or silently no-op"}
+
     def _resolved(idx, cells, header):
         ci = _status_col(header)
-        return ci is not None and ci < len(cells) and _cell_has_marker(cells[ci])
+        return ci is not None and ci < len(cells) and _cell_has_marker(cells[ci], markers)
 
     def _has_status_column(data_idx, row_header):
         return any(_status_col(row_header.get(i)) is not None for i in data_idx)
@@ -1084,6 +1132,462 @@ def cmd_rotate(args):
 
 
 # --------------------------------------------------------------------------- #
+# migrate -- versioned, ordered, idempotent STRUCTURAL migrations (BP-069)
+# --------------------------------------------------------------------------- #
+
+def _sanctum_config_path(sanctum_dir):
+    return os.path.join(sanctum_dir, "config.json")
+
+
+def _read_schema_version(sanctum_dir):
+    """The applied-migration marker from the sanctum's config.json. This distinguishes THREE
+    states (never conflating them -- C3):
+      - config.json ABSENT              -> 0 (legit pre-migration: nothing bound yet).
+      - config.json parses, key MISSING -> 0 (legit pre-migration: an old sanctum).
+      - config.json PRESENT but corrupt -> SchemaVersionError (fail loud; guessing 'pre-
+        migration' off a corrupt marker could silently RE-migrate an already-migrated farm).
+    A non-int marker is likewise refused rather than coerced. This marker is the keystone
+    that makes migrate idempotent + resumable (BP-069)."""
+    path = _sanctum_config_path(sanctum_dir)
+    if not os.path.isfile(path):
+        return 0
+    try:
+        raw = _read(path)
+    except OSError as e:
+        raise SchemaVersionError(
+            f"config.json is unreadable ({path}): {e}. Nothing was migrated or touched.")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as e:
+        raise SchemaVersionError(
+            f"config.json is present but unparseable ({path}): {e}. Refusing to guess the "
+            "sanctum schema version -- nothing was migrated or touched. Fix or restore "
+            "config.json (a pre-migration backup, if any, is under history/archive/).")
+    if not isinstance(data, dict):
+        raise SchemaVersionError(
+            f"config.json ({path}) is valid JSON but not an object ({type(data).__name__}). "
+            "Refusing to guess the sanctum schema version -- nothing was migrated or touched.")
+    v = data.get("sanctum_schema_version")
+    if v is None:
+        return 0
+    if not isinstance(v, int):
+        raise SchemaVersionError(
+            f"sanctum_schema_version in config.json ({path}) is not an integer: {v!r}. "
+            "Refusing to guess -- nothing was migrated or touched.")
+    return v
+
+
+def _write_schema_version(sanctum_dir, version):
+    """Advance the applied marker to `version` in config.json. JSON in / JSON out at
+    indent=2, key order preserved (an existing key keeps its position; a new key on an old
+    sanctum appends at the end). Backup-before-write + crash-atomic via _safe_write. Fails
+    loud (never a raw traceback) if config.json turned unparseable since the read (C3)."""
+    path = _sanctum_config_path(sanctum_dir)
+    current = _read(path)
+    try:
+        data = json.loads(current.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as e:
+        raise SchemaVersionError(
+            f"config.json became unparseable before the marker could be advanced ({path}): "
+            f"{e}. Re-run migrate once config.json is valid.")
+    if not isinstance(data, dict):
+        raise SchemaVersionError(
+            f"config.json ({path}) is valid JSON but not an object ({type(data).__name__}); "
+            "cannot record the schema marker. Re-run migrate once config.json is a valid object.")
+    data["sanctum_schema_version"] = version
+    _safe_write(path, json.dumps(data, indent=2) + "\n", _digest(current))
+
+
+def _backup_subtree(sanctum_dir, subdirs, to_version):
+    """Copy the touched subtrees to a dated pre-migration backup dir BEFORE any write -- the
+    single restore point for the design's 'roll back = restore from the backup' model (there
+    are no down-migrations). Returns the backup dir, which the player report names as the
+    restore location. Lives under history/archive/ so it is not itself a governed file."""
+    stamp = datetime.date.today().isoformat()
+    base = os.path.join(sanctum_dir, "history", "archive",
+                        f"pre-migration-backup-{stamp}-v{to_version}")
+    backup_dir, n = base, 2
+    while os.path.exists(backup_dir):
+        backup_dir = f"{base}-{n}"
+        n += 1
+    os.makedirs(backup_dir)
+    for sub in subdirs:
+        src = os.path.join(sanctum_dir, sub)
+        if os.path.isdir(src):
+            shutil.copytree(src, os.path.join(backup_dir, sub))
+    return backup_dir
+
+
+# ---- Entry #1: fold identity/directives.md -> plans/PLAN.md (item 7 / DEC-259) ------- #
+
+# A directive TITLE is an H3-or-deeper heading, tolerant of a missing space (`###Title`)
+# and extra hashes -- so a hand-edited heading is captured, not silently dropped (C2).
+# A structural section is a `## ` (exactly two-hash) heading, matched separately.
+_DIRECTIVE_HEADING_RE = re.compile(r"^#{3,}\s*\S")
+# A directive FIELD bullet, matched as a `key: value` bullet: `- **Status:** ...`,
+# `- Status: active`, `* Goal: ...`. Bold is optional so a hand-edited non-bold bullet is
+# still captured (R2-C2); the required `key:` anchor keeps ordinary prose bullets
+# (`- buy the barn`) from becoming signals. Used to raw-anchor conservation independently
+# of block extraction.
+_DIRECTIVE_FIELD_RE = re.compile(r"^[-*]\s+\*{0,2}[A-Za-z][^:]*:")
+
+
+def _iter_directive_region(directives_body):
+    """Yield each line OUTSIDE a structural `## ` section, so the extractor and the
+    signal-line anchor stay in lockstep (R2-P1). CONTRACT: in a directives.md the directive
+    entries come FIRST and the structural sections (`## How entries accumulate` / `## Closing
+    a directive honestly` / `## Rotation ...`) come LAST; this latches `in_structural` at the
+    first structural `## ` heading and skips everything after it. Content after that first
+    structural heading -- including any illustrative `### ` example nested in a structural
+    section -- is NOT carried into the live plan; it is superseded by plan-main and preserved
+    byte-identical in the archive. A convention-violating layout (a directive placed AFTER a
+    structural section) fails safe: that directive is not carried live, but the whole file is
+    archived byte-identical, so it is never lost."""
+    in_structural = False
+    for ln in directives_body.splitlines():
+        s = ln.strip()
+        if s.startswith("## ") and not s.startswith("###"):
+            in_structural = True
+        if in_structural:
+            continue
+        yield ln
+
+
+def _extract_directive_entries(directives_body):
+    """The directive entries from an old identity/directives.md body: each directive-heading
+    block (title + its bullet fields, INCLUDING multi-line wrapped continuation lines) up to
+    the next directive heading. Structural sections are excluded via _iter_directive_region
+    (R2-P1). The whole directives.md is archived byte-identical, so nothing is lost. Returns
+    the entry blocks, trimmed. Robust to `###Title` (no space) / deeper (C2)."""
+    entries, cur = [], None
+    for ln in _iter_directive_region(directives_body):
+        s = ln.strip()
+        if _DIRECTIVE_HEADING_RE.match(s):
+            if cur is not None:
+                entries.append(cur)
+            cur = [ln]
+        elif cur is not None:
+            cur.append(ln)
+    if cur is not None:
+        entries.append(cur)
+    return [("\n".join(e)).rstrip() for e in entries if any(x.strip() for x in e)]
+
+
+def _directive_signal_lines(directives_body):
+    """The raw source lines that MUST land in the folded plan, derived INDEPENDENTLY of
+    _extract_directive_entries so an extraction bug cannot hide a drop (C2 raw anchor): every
+    directive title (###-family heading) + every field bullet (`key: value` bullet, bold or
+    bare) OUTSIDE a structural `## ` section (shared _iter_directive_region -- R2-P1).
+    Boilerplate (the `# ` H1, intro prose, and the structural sections with any illustrative
+    `### ` / `- **...**` examples inside them) is not a signal: plan-main supersedes it and
+    the archive preserves it byte-identical."""
+    out = []
+    for ln in _iter_directive_region(directives_body):
+        s = ln.strip()
+        if _DIRECTIVE_HEADING_RE.match(s) or _DIRECTIVE_FIELD_RE.match(s):
+            out.append(ln.rstrip())
+    return out
+
+
+def _template_section_body(tmpl_body, heading):
+    """The body lines under `heading` in a template body, up to the next `## ` heading."""
+    collecting, buf = False, []
+    for ln in tmpl_body.splitlines():
+        s = ln.strip()
+        if s == heading:
+            collecting = True
+            continue
+        if collecting and s.startswith("## ") and not s.startswith("### "):
+            break
+        if collecting:
+            buf.append(ln)
+    return "\n".join(buf).strip("\n")
+
+
+def _fold_into_plan(template_text, current_focus_body, standing_directives_body):
+    """Build the new plans/PLAN.md from the plan-main.md template, replacing the bodies of
+    `## Current focus` and `## Standing directives` (heading kept, template guide prose
+    swapped for the folded content) and keeping every other section + the frontmatter +
+    intro verbatim."""
+    fm, _inner, body = _split_frontmatter(template_text)
+    replacements = {
+        "## Current focus": current_focus_body.rstrip("\n"),
+        "## Standing directives": standing_directives_body.rstrip("\n"),
+    }
+    lines = body.splitlines()
+    out, i = [], 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if s in replacements:
+            out.extend([lines[i], "", replacements[s], ""])
+            i += 1
+            while i < len(lines):
+                s2 = lines[i].strip()
+                if s2.startswith("## ") and not s2.startswith("### "):
+                    break
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    new_body = "\n".join(out).rstrip("\n") + "\n"
+    return (fm or "") + new_body
+
+
+def _migration_1_guard(sanctum_dir, templates_dir=None):
+    """Entry #1 is applied once the old identity/directives.md is gone (folded + archived).
+    A fresh farm (never had directives.md) also reads as applied -> harmless no-op advance.
+    NB: this is the coarse 'done?' gate; the fine-grained RESUME of a partial run (PLAN.md
+    folded but directives.md not yet removed) is handled inside _migration_1_apply, which
+    never re-consumes its own output (C1)."""
+    return not os.path.isfile(os.path.join(sanctum_dir, "identity", "directives.md"))
+
+
+def _plan_required_sections(templates_dir):
+    """The required H2 sections of the plan-main.md template (its structural signature)."""
+    _b, inner, _body = _split_frontmatter(_read(os.path.join(templates_dir, "plan-main.md"))
+                                          .decode("utf-8"))
+    meta = _parse_frontmatter(inner) if inner is not None else {}
+    return meta.get("required_sections", []) or []
+
+
+def _is_resumable_fold(plan_text, signal_lines):
+    """True iff plans/PLAN.md is ALREADY the folded output from a prior partial run: it
+    already contains EVERY directive signal line. Then a retry must RESUME (finish
+    archive+remove only), never re-fold its own output (C1). This is the sole reliable
+    discriminator AND it is independent of plan-main's `required_sections` (R2-N1): a folded
+    plan contains the directive signal lines; a fresh ad-hoc plan and a fresh empty-template
+    plan do NOT -> neither is a false resume. Keying on structure would let a template that
+    drops `required_sections` silently disable this guard -- so it does not. Sound because
+    _safe_write is crash-atomic (os.replace): PLAN.md is always fully-old or fully-folded,
+    never a partial write. (The directive-FREE partial-retry hole -- no signal lines to key
+    on -- is closed by the frontmatter backstop in _migration_1_apply.)"""
+    return bool(signal_lines) and all(s in plan_text for s in signal_lines)
+
+
+def _directives_already_archived(archive_dir, orig_bytes):
+    """A byte-identical directives-*.md archive already present? Returns its path or None.
+    Lets a re-entry (same-day OR cross-day retry) reuse the existing archive instead of
+    writing a duplicate copy (idempotent)."""
+    if not os.path.isdir(archive_dir):
+        return None
+    for f in sorted(os.listdir(archive_dir)):
+        if f.startswith("directives-") and f.endswith(".md"):
+            p = os.path.join(archive_dir, f)
+            if os.path.isfile(p) and _read(p) == orig_bytes:
+                return p
+    return None
+
+
+def _archive_and_remove_directives(directives_path, sanctum_dir, orig_bytes, where):
+    """Idempotent, prove-first archive+remove of directives.md: archive byte-identical (reuse
+    an existing identical copy if present), VERIFY the archive equals the original, THEN
+    staleness-checked-remove the source (a `.bak` first). Safe to re-enter after a partial
+    run -- an absent source is a no-op remove. Returns the archive path."""
+    archive_dir = os.path.join(sanctum_dir, "history", "archive")
+    archive_path = _directives_already_archived(archive_dir, orig_bytes)
+    if archive_path is None:
+        stamp = datetime.date.today().isoformat()
+        archive_path = os.path.join(archive_dir, f"directives-{stamp}.md")
+        if os.path.exists(archive_path) and _read(archive_path) != orig_bytes:
+            raise FileExistsError(archive_path)
+        _atomic_write(archive_path, orig_bytes)
+    if _read(archive_path) != orig_bytes:
+        raise ConservationError(f"{where}: archived directives.md differs from the original")
+    if os.path.isfile(directives_path):
+        if _digest(_read(directives_path)) != _digest(orig_bytes):
+            raise StaleManifestError(directives_path)
+        _atomic_write(directives_path + ".bak", orig_bytes)
+        os.remove(directives_path)
+    return archive_path
+
+
+def _migration_1_apply(sanctum_dir, templates_dir):
+    """Fold identity/directives.md into plans/PLAN.md: directive entries -> ## Standing
+    directives (verbatim); the ad-hoc plans/PLAN.md body -> ## Current focus (verbatim);
+    plan-main.md supplies frontmatter + structural sections. RESUMABLE + idempotent (C1):
+    a partial run (PLAN.md folded, directives.md still present) is detected and completed,
+    never re-folded. Conservation is three independent layers (C1/C2): whole-block, raw
+    source signal lines, and ad-hoc-body-exactly-once. Reuses _safe_write / _atomic_write /
+    ConservationError. The Cyrus-voice narrative polish of ## Current focus is a deliberate
+    later owner step -- this fold guarantees loss-free, not prose-rewritten (DEC-268)."""
+    directives_path = os.path.join(sanctum_dir, "identity", "directives.md")
+    plan_path = os.path.join(sanctum_dir, "plans", "PLAN.md")
+    tmpl_path = os.path.join(templates_dir, "plan-main.md")
+    where = "migrate:1 directives->plan"
+
+    orig_directives_bytes = _read(directives_path)
+    _dfm, _di, directives_body = _split_frontmatter(orig_directives_bytes.decode("utf-8"))
+    directive_entries = _extract_directive_entries(directives_body)
+    signal_lines = _directive_signal_lines(directives_body)
+
+    plan_exists = os.path.isfile(plan_path)
+    plan_bytes = _read(plan_path) if plan_exists else b""
+    plan_text = plan_bytes.decode("utf-8") if plan_exists else ""
+
+    # C1 RESUME: a prior partial run already folded PLAN.md but did not finish archive+remove.
+    # Detect it and RESUME (finish only) -- never re-read the folded plan as an 'ad-hoc body'.
+    if plan_exists and _is_resumable_fold(plan_text, signal_lines):
+        archive_path = _archive_and_remove_directives(
+            directives_path, sanctum_dir, orig_directives_bytes, where)
+        return {"action": "resume-complete", "from": directives_path, "plan": plan_path,
+                "archived": archive_path, "directive_entries": len(directive_entries),
+                "conservation_ok": True,
+                "changed": "completed a previously-interrupted fold "
+                           "(archived + removed identity/directives.md)"}
+
+    # R2-N1 directive-free backstop: signal-line resume can't fire when the source has NO
+    # signals, so a directive-FREE partial retry could re-consume its own ad-hoc body. An
+    # ad-hoc OLD plan carries NO frontmatter; a folded/template plan DOES. If we're about to
+    # treat a frontmatter-bearing plan as the 'ad-hoc body' with no signals to confirm a safe
+    # resume -> refuse (fail loud, backup intact), never risk a double-fold. Template-agnostic
+    # (keys on frontmatter PRESENCE, not its content) so it can't be disabled by template drift.
+    if plan_exists and not signal_lines and _split_frontmatter(plan_text)[0] is not None:
+        raise ConservationError(
+            f"{where}: plans/PLAN.md is already in the plan-lifecycle structure (has "
+            "frontmatter) but identity/directives.md is directive-free, so a safe resume "
+            "cannot be confirmed -- refusing to fold (would risk doubling the plan body). "
+            "Resolve by hand; nothing was touched.")
+
+    # C2 fail-loud: the source has directive content but NONE parsed into entries -> refuse
+    # (never silently replace real directives with template boilerplate).
+    if not directive_entries and signal_lines:
+        raise ConservationError(
+            f"{where}: identity/directives.md has directive content ({len(signal_lines)} "
+            "signal line(s)) but none parsed into entries -- refusing to fold (would silently "
+            "drop them). Fix the heading format or migrate by hand; nothing was touched.")
+
+    old_plan_body = ""
+    if plan_exists:
+        _pfm, _pi, old_plan_body = _split_frontmatter(plan_text)
+
+    template_text = _read(tmpl_path).decode("utf-8")
+    _tfm, _ti, tmpl_body = _split_frontmatter(template_text)
+
+    current_focus_body = old_plan_body.rstrip("\n") if old_plan_body.strip() \
+        else _template_section_body(tmpl_body, "## Current focus")
+    standing_directives_body = "\n\n".join(directive_entries) if directive_entries \
+        else _template_section_body(tmpl_body, "## Standing directives")
+
+    new_plan_text = _fold_into_plan(template_text, current_focus_body, standing_directives_body)
+
+    # ---- conservation-prove (three independent layers) BEFORE any source removal ----
+    # (1) whole-block: every recognized directive entry lands verbatim, INCLUDING multi-line
+    #     wrapped continuation lines (they ride with their block).
+    for e in directive_entries:
+        if e not in new_plan_text:
+            raise ConservationError(f"{where}: ## Standing directives dropped a directive entry")
+    # (2) raw-source signal lines: every source directive title + field bullet lands -- even
+    #     one whose block extraction FAILED to recognize (independent of extraction) (C2).
+    for s in signal_lines:
+        if s and s not in new_plan_text:
+            raise ConservationError(
+                f"{where}: ## Standing directives dropped a source directive line: {s.strip()!r}")
+    # (3) ad-hoc body conserved EXACTLY ONCE -- present, and not DOUBLED (double-fold) (C1).
+    if old_plan_body.strip():
+        block = old_plan_body.rstrip("\n")
+        n = new_plan_text.count(block)
+        if n == 0:
+            raise ConservationError(f"{where}: ## Current focus lost the ad-hoc plan body")
+        if n > 1:
+            raise ConservationError(
+                f"{where}: ## Current focus holds the ad-hoc plan body {n}x -- double-fold aborted")
+
+    # write the new plan (backup-before-write + crash-atomic + staleness-checked)
+    if plan_exists:
+        _safe_write(plan_path, new_plan_text, _digest(plan_bytes))
+    else:
+        _atomic_write(plan_path, new_plan_text.encode("utf-8"))
+
+    # archive byte-identical + remove the source (idempotent, prove-first, inside the helper)
+    archive_path = _archive_and_remove_directives(
+        directives_path, sanctum_dir, orig_directives_bytes, where)
+
+    return {"action": "fold", "from": directives_path, "plan": plan_path,
+            "archived": archive_path, "directive_entries": len(directive_entries),
+            "current_focus_source": plan_path if old_plan_body.strip() else "template-default",
+            "conservation_ok": True,
+            "changed": f"folded {len(directive_entries)} directive(s) from "
+                       "identity/directives.md into plans/PLAN.md and archived the original"}
+
+
+MANIFEST = [
+    {
+        "to_version": 1,
+        "description": "Fold identity/directives.md into plans/PLAN.md (## Standing "
+                       "directives) + the ad-hoc plan body into ## Current focus; archive "
+                       "the old directives.md whole (item 7 / DEC-259).",
+        "guard": _migration_1_guard,
+        "apply": _migration_1_apply,
+    },
+]
+
+
+def cmd_migrate(args):
+    sanctum = args.path
+    templates_dir = args.templates_dir
+    apply = args.apply
+    marker = _read_schema_version(sanctum)
+    latest = max((e["to_version"] for e in MANIFEST), default=0)
+
+    # Forward-only: a marker AHEAD of the newest migration this build knows means the sanctum
+    # was written by a newer skill. Fail loud, wipe nothing, keep any backup (BP-069).
+    if marker > latest:
+        raise SchemaVersionError(
+            f"sanctum_schema_version {marker} is ahead of the newest migration this skill "
+            f"knows ({latest}) -- this sanctum was written by a newer farm-manager. "
+            "Applying nothing; update the skill.")
+
+    pending = sorted((e for e in MANIFEST if e["to_version"] > marker),
+                     key=lambda e: e["to_version"])
+    if not pending:
+        return {"command": "migrate", "sanctum": sanctum, "apply": apply,
+                "from_version": marker, "to_version": marker,
+                "pending": 0, "up_to_date": True, "steps": []}
+
+    steps, cur = [], marker
+    for entry in pending:
+        step = {"to_version": entry["to_version"], "description": entry["description"]}
+        if entry["guard"](sanctum, templates_dir):
+            # Already applied (e.g. a crash-and-rerun, or a fresh farm that never had the old
+            # file) -> advance the marker only; write nothing, back up nothing (idempotent).
+            step["action"] = "already-applied"
+            step["backup"] = None
+            if apply:
+                _write_schema_version(sanctum, entry["to_version"])
+                step["marker_advanced"] = True
+            cur = entry["to_version"]
+            steps.append(step)
+            continue
+        if not apply:
+            step["action"] = "pending"
+            step["backup"] = None
+            steps.append(step)
+            continue
+        # Backup AFTER the guard, so an idempotent rerun writes nothing at all.
+        try:
+            step["backup"] = _backup_subtree(sanctum, ("identity", "plans"), entry["to_version"])
+            step.update(entry["apply"](sanctum, templates_dir))   # raises ConservationError on loss
+            _write_schema_version(sanctum, entry["to_version"])   # advance ONLY after conservation
+        except (OSError, ValueError) as e:
+            # Unexpected-but-clean-exit (missing template, non-UTF8, ENOSPC, FileExists race):
+            # route through the clean-JSON/exit-nonzero contract instead of a raw traceback.
+            # The pre-migration backup is already taken; nothing further is applied. The
+            # meaningful data-safety classes (Conservation/Stale/Schema/ArchivePath) are NOT
+            # in this tuple, so they propagate unchanged.
+            raise MigrationError(
+                f"migration to v{entry['to_version']} failed cleanly "
+                f"({type(e).__name__}: {e}); nothing further applied. "
+                f"Pre-migration backup: {step.get('backup')}")
+        step["marker_advanced"] = True
+        cur = entry["to_version"]
+        steps.append(step)
+
+    return {"command": "migrate", "sanctum": sanctum, "apply": apply,
+            "from_version": marker, "to_version": cur if apply else marker,
+            "pending": len(pending), "up_to_date": False, "steps": steps}
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
@@ -1106,6 +1610,12 @@ def build_parser():
     o.add_argument("--sanctum-dir", default=None, help="sanctum root (for resolving archive_target)")
     o.add_argument("--apply", action="store_true", help="apply changes (default: dry run)")
     o.set_defaults(func=cmd_rotate)
+
+    mg = sub.add_parser("migrate", help="apply pending versioned structural migrations")
+    mg.add_argument("path", help="the sanctum directory to migrate")
+    mg.add_argument("--templates-dir", default=TEMPLATES_DIR_DEFAULT)
+    mg.add_argument("--apply", action="store_true", help="apply changes (default: dry run)")
+    mg.set_defaults(func=cmd_migrate)
     return p
 
 
@@ -1113,7 +1623,8 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         result = args.func(args)
-    except (StaleManifestError, ConservationError, ArchivePathError) as e:
+    except (StaleManifestError, ConservationError, ArchivePathError, SchemaVersionError,
+            MigrationError) as e:
         print(json.dumps({"error": f"{type(e).__name__}: {e}"}, indent=2))
         sys.exit(2)
     print(json.dumps(result, indent=2))

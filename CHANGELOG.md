@@ -11,10 +11,10 @@ All notable changes to AI Farm Manager are documented here. The format is based 
 - Setup now asks how you want to play — your scenario, challenge, or preset — so the
   manager's advice fits your run from the start.
 - Mouse-wheel scrolling through the on-screen card stack.
-- A dedicated keybind (Ctrl+Comma) to raise or lower the mouse cursor, usable on foot or in
-  a vehicle. On foot, raising it also holds your view and movement steady, so the mouse
-  moves over the panel instead of turning the camera or zooming it — click, drag, or scroll
-  the panel just like you already could in a vehicle.
+- A draggable scrollbar on the card panel, so you can scroll through your notifications even
+  without a mouse wheel.
+- A dedicated keybind (Ctrl+Comma) to raise or lower the mouse cursor on foot, so you can
+  click, drag, and scroll the notification panel without needing to be in a vehicle.
 - A settings page (Ctrl+Alt+Period, on foot or in a vehicle): toggle the panel on/off, change
   its size, reset its position, and set how long messages linger when the panel is off.
 - The manager now keeps a single running plan for your farm — read at the start of every

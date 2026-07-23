@@ -6,8 +6,9 @@ cap_lines: 80
 cap_kb: 8
 rotation_trigger: on-resolve
 archive_target: "history/archive/husbandry-roster-archive.md"
+resolved_markers: ["SOLD", "REMOVED"]
 reconciliation: "sold/removed buildings MOVE to archive (never blind row-shed); Count is live, Last updated is its confirm-date"
-format_version: 1
+format_version: 2
 parity_spec:
   required_sections: ["## Buildings owned", "## Reading of it"]
 ---

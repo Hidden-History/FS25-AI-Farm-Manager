@@ -24,9 +24,20 @@
         <absoluteSizeOffset value="100px 0" />
     </Profile>
 
-    <!-- A full-width setting row rendered as a clickable button. Extends the
-         stock dialog button so it inherits its visuals/behaviour; only the
-         size + text metrics are overridden for a vertical stack. -->
+    <!-- A native settings row: title (left) + a ‹value› MultiTextOption stepper
+         (right) + tooltip, the exact idiom Distribution Redux uses
+         (DistributionSettingsPage.xml). The row container / stepper / title /
+         tooltip profiles are all stock base-game (fs25_multiTextOption*), so
+         this is the only local profile the redesign needs; it just constrains
+         the stock container (tuned for the wide in-game menu frame) to the
+         740px dialog's content width. -->
+    <Profile name="fm25_settingsRow" extends="fs25_multiTextOptionContainer" with="anchorTopStretchingX">
+        <size value="100% 56px"/>
+    </Profile>
+
+    <!-- The one remaining button: Reset panel position (an action, not a value,
+         so it stays a button rather than a stepper). Extends the stock dialog
+         button; only size + text metrics overridden. -->
     <Profile name="fm25_settingButton" extends="buttonActivate" with="anchorTopStretchingX">
         <size value="100% 42px"/>
         <textSize value="18px"/>
