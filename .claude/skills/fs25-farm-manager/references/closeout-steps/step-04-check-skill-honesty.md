@@ -6,7 +6,7 @@ nextStepFile: './step-05-append-friction-log.md'
 
 # Step 4: Check the skill's own honesty
 
-**Progress: Step 4 of 7** — Next: Append this session's frictions
+**Progress: Step 4 of 8** — Next: Append this session's frictions
 
 **Check the skill's own honesty, if anything in `scripts/` or `SKILL.md` changed this
 session**:

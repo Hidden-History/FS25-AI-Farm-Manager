@@ -296,6 +296,12 @@ Domain knowledge and workflows. Load on the trigger, not by default:
   sanctum file and when it changes. The conversation ends; the sanctum survives it.
 - **`references/decision-making.md`** — **in full before a briefing.** The general policy;
   `sanctum/identity/decision-making.md` is this farm's layer and **wins on conflict**.
+- **`references/decision-matrix.md`** — **in full before a briefing, alongside decision-making.md,
+  and re-check whenever working in a specific area (crop planning, production, husbandry,
+  equipment) it covers.** A short, growing checklist of concrete things to verify — universal
+  FS25/mod mechanics and verification habits, not this farm's judgment. **Add a new bullet the
+  moment a new gotcha is discovered** — a new `##` heading if it doesn't fit an existing one.
+  Never put farm-specific facts here (that's a sanctum job); only put things true for any save.
 - **`references/time-mechanics.md`** — **before any advice involving time**: fast-forwarding,
   sleep, "days until X," contract deadlines. Sound at one timeScale, absurd at another.
 - **`references/notifications.md`** — **before pushing anything to the player's screen

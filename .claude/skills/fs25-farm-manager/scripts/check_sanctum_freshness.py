@@ -332,9 +332,9 @@ def probe_directive_premises(sg, sanctum, farm_id=1):
     Threads --farm-id through to read_vehicles.py (M8) -- it defaults to farm_id=1
     internally, so leaving this unpassed would silently describe farm 1's fleet even
     when the caller asked about a different farm."""
-    d = read(os.path.join(sanctum, "identity", "directives.md"))
+    d = read(os.path.join(sanctum, "plans", "PLAN.md"))
     if d is None:
-        return "unverifiable", "directives.md not found"
+        return "unverifiable", "plans/PLAN.md not found"
     v = run_parser("read_vehicles.py", [sg, "--farm-id", str(farm_id)])
     if not v or "error" in v:
         return "unverifiable", f"read_vehicles.py: {(v or {}).get('error', 'failed')}"
@@ -348,7 +348,7 @@ def probe_directive_premises(sg, sanctum, farm_id=1):
     for spec, phrase in (("sower", r"no seeder"), ("cultivator", r"no tillage"),
                          ("plow", r"no tillage"), ("sprayer", r"no sprayer")):
         if spec in specs and re.search(phrase, d, re.I):
-            problems.append(f"directives.md says {phrase!r} but the fleet has a {spec}")
+            problems.append(f"plans/PLAN.md says {phrase!r} but the fleet has a {spec}")
     if problems:
         return "stale", "; ".join(sorted(set(problems)))
     return "fresh", "no directive premise contradicted by the fleet"

@@ -54,8 +54,11 @@ fs25-farm-manager/                  <- put this whole folder in .claude/skills/
 │   ├── session-start-briefing.md    shape of the "start my shift" briefing
 │   ├── session-closeout.md          shape of the "close out" report
 │   ├── closeout-latest.md           the live "last session" file
-│   ├── directives.md                standing long-term plans
-│   ├── directive-entry.md           one directive record
+│   ├── plan-main.md                 the farm's single living plan (Current focus
+│   │                                   + Standing directives) -> plans/PLAN.md
+│   ├── plan-session.md              per-session plan record -> plans/sessions/
+│   ├── plan-index.md                one row per session -> plans/INDEX.md
+│   ├── directive-entry.md           one directive record (stencil for plan-main)
 │   ├── field-dossier.md             per-field history record
 │   ├── husbandry-dossier.md         per-animal-building history record
 │   ├── production-dossier.md        per-production-chain history record
@@ -131,8 +134,11 @@ your-project/
     ├── config.json                  <- this farm's save binding (stays at root)
     ├── identity/                    <- Tier A: identity + doctrine, check-only
     │   ├── creed.md                 <- this farm's manager identity
-    │   ├── decision-making.md
-    │   └── directives.md
+    │   └── decision-making.md
+    ├── plans/                       <- Tier B: the farm's single living plan
+    │   ├── PLAN.md                  <- Current focus + Standing directives
+    │   ├── INDEX.md                 <- one row per session
+    │   └── sessions/                <- one plan record per session
     ├── state/                       <- durable farm facts: registers + dossiers
     │   ├── equipment-roster.md
     │   ├── equipment-shopping-list.md

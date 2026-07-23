@@ -21,6 +21,14 @@ nextStepFile: './step-05-check-notification-mod.md'
 - **What the disk genuinely cannot answer** — the three items in SKILL.md's Ground Rules
   (plus the loan interest rate, which is conditionally derivable rather than on this list —
   see the same section). Short, and neither hectares nor field ownership is on it.
+- **Scenario / playstyle** — ask this one outright, every onboarding; don't leave it implied.
+  Is the player playing this save toward a specific scenario, challenge, or preset — a no-loan
+  run, a hard-mode start-from-nothing, an organic-only game, a particular playstyle goal — or
+  just an open career? This is *player-declared intent*, the one thing the save genuinely can't
+  reveal (unlike day/season/difficulty, which it can), so it's a real judgment question, not a
+  decode target. Record the answer in `decision-making.md`'s **Self-imposed constraints** (and,
+  if it's a firm rule, in `config.json`'s `house_rules`). "Open career, no special goal" is a
+  complete answer.
 
 **Never** fold in cash, loan, land, hectares, land cost, field ownership, fleet, day,
 season, weather, or store prices — those all came from step 3, not a question.

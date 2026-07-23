@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<!-- The settings dialog layout (S158; rows redesigned item 19/S162). newLayer +
+     dimmed fullscreen bg + a sized fs25_dialogBg with the three-part chrome, a
+     vertical content BoxLayout (title + separator), then the three preferences
+     as NATIVE settings rows and the one action (Reset) as a button, and a
+     bottom button box with Back. Each preference row mirrors Distribution
+     Redux's DistributionSettingsPage.xml verbatim shape: a stock
+     fs25_multiTextOptionContainer (here narrowed to the dialog by fm25_settingsRow)
+     holding a fs25_settingsMultiTextOption ‹value› stepper (its id surfaces on
+     the controller as self.<id>, so onOpen can setTexts+setState it) with a
+     tooltip child, and a fs25_settingsMultiTextOptionTitle label. onOpen/onClose/
+     onCreate are wired on the root <GUI>; onClose/onCreate resolve to the
+     inherited DialogElement handlers, onOpen to our override. Each stepper's
+     onClick routes to a FarmManager25 apply+persist call; Back closes via the
+     inherited onClickBack. -->
+<GUI onOpen="onOpen" onClose="onClose" onCreate="onCreate">
+    <GuiElement profile="newLayer"/>
+    <Bitmap profile="dialogFullscreenBg"/>
+    <GuiElement profile="fs25_dialogBg" size="740px 520px">
+        <ThreePartBitmap profile="fs25_dialogBgMiddleSmall"/>
+        <ThreePartBitmap profile="fs25_dialogBgTopSmall"/>
+        <ThreePartBitmap profile="fs25_dialogBgBottom"/>
+
+        <BoxLayout profile="fm25_dialogContentContainer">
+            <Text profile="fm25_dialogTitle" text="AI FARM MANAGER - SETTINGS"/>
+            <ThreePartBitmap profile="fm25_dialogTitleSeparator"/>
+
+            <Bitmap profile="fm25_settingsRow" onCreate="onCreateSettingRow">
+                <MultiTextOption profile="fs25_settingsMultiTextOption" id="fm25OverlayOption"
+                                 onClick="onOverlayChanged">
+                    <Text profile="fs25_multiTextOptionTooltip" name="ignore"
+                          text="Show or hide the on-screen farm status panel."/>
+                </MultiTextOption>
+                <Text profile="fs25_settingsMultiTextOptionTitle" text="Overlay panel"/>
+            </Bitmap>
+
+            <Bitmap profile="fm25_settingsRow" onCreate="onCreateSettingRow">
+                <MultiTextOption profile="fs25_settingsMultiTextOption" id="fm25ScaleOption"
+                                 onClick="onScaleChanged">
+                    <Text profile="fs25_multiTextOptionTooltip" name="ignore"
+                          text="Scale of the overlay panel (50%-125%)."/>
+                </MultiTextOption>
+                <Text profile="fs25_settingsMultiTextOptionTitle" text="Panel size"/>
+            </Bitmap>
+
+            <Bitmap profile="fm25_settingsRow" onCreate="onCreateSettingRow">
+                <MultiTextOption profile="fs25_settingsMultiTextOption" id="fm25LingerOption"
+                                 onClick="onLingerChanged">
+                    <Text profile="fs25_multiTextOptionTooltip" name="ignore"
+                          text="How long dismissed cards linger before fading (OFF mode)."/>
+                </MultiTextOption>
+                <Text profile="fs25_settingsMultiTextOptionTitle" text="Off-mode linger"/>
+            </Bitmap>
+
+            <ThreePartBitmap profile="fm25_dialogTitleSeparator"/>
+            <Button profile="fm25_settingButton"
+                    text="Reset panel position" onClick="onClickResetPosition"/>
+
+            <BoxLayout profile="fm25_dialogButtonBox">
+                <Button profile="buttonBack" text="$l10n_button_back" onClick="onClickBack"/>
+            </BoxLayout>
+        </BoxLayout>
+    </GuiElement>
+</GUI>

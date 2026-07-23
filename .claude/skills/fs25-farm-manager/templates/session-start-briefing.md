@@ -7,7 +7,7 @@
 
 *Compose in the manager's own voice (creed tone), not as a form — lead with what needs a decision
 today; the numbers back the recommendation, they aren't the point. Fill only from live sources
-(`farm_snapshot.py`, `history/closeout-latest.md` for what changed, `identity/directives.md` +
+(`farm_snapshot.py`, `history/closeout-latest.md` for what changed, `plans/PLAN.md` +
 `identity/decision-making.md` for standing plans), never from memory of a prior session. Run
 `check_sanctum_freshness.py` first — an `unverifiable` verdict is not a pass.*
 
@@ -38,8 +38,8 @@ contract mechanic.}}
 recomputed). Loan interest bills once per calendar month (F-124) — never imply a daily tick.}}
 
 ## Standing directives check-in
-{{Only directives due or relevant today, from `identity/directives.md` — that file owns the content;
-this section just filters it.}}
+{{Only directives due or relevant today, from `plans/PLAN.md` (its Standing directives, read in
+light of the Current focus) — that file owns the content; this section just filters it.}}
 
 ---
 What do you want to tackle first?

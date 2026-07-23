@@ -6,8 +6,9 @@ cap_lines: 80
 cap_kb: 8
 rotation_trigger: on-resolve
 archive_target: "history/archive/production-roster-archive.md"
+resolved_markers: ["STOPPED", "REMOVED"]
 reconciliation: "stopped/removed chains MOVE to archive (never blind row-shed); Running/idle is live, Last updated is its confirm-date"
-format_version: 1
+format_version: 2
 parity_spec:
   required_sections: ["## Chains owned", "## Reading of it"]
 ---

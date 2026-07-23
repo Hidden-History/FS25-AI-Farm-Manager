@@ -31,11 +31,13 @@ import sys
 import json
 
 # D4 sanctum reorg: load tier is legible from the path. identity/ holds
-# creed + decision-making (Tier A, check-only) AND directives (load-tier B,
-# mutated and live-probed by check_sanctum_freshness.probe_directive_premises);
-# state/ (durable farm facts: registers + dossiers), history/ (append-only +
-# all cold archives under history/archive/). config.json stays at the sanctum
-# root -- it is the binding every parser resolves, not a tier-scoped content file.
+# creed + decision-making (Tier A, check-only); plans/ holds the farm's single
+# living plan PLAN.md (load-tier B: the Current focus narrative + Standing
+# directives, live-probed by check_sanctum_freshness.probe_directive_premises)
+# plus its INDEX.md and per-session files under plans/sessions/; state/ (durable
+# farm facts: registers + dossiers), history/ (append-only + all cold archives
+# under history/archive/). config.json stays at the sanctum root -- it is the
+# binding every parser resolves, not a tier-scoped content file.
 SKELETON_DIRS = [
     "sanctum",
     "sanctum/identity",
@@ -43,6 +45,8 @@ SKELETON_DIRS = [
     "sanctum/state/field-dossiers",
     "sanctum/state/husbandry-dossiers",
     "sanctum/state/production-dossiers",
+    "sanctum/plans",
+    "sanctum/plans/sessions",
     "sanctum/history",
     "sanctum/history/journal",
     "sanctum/history/archive",
@@ -51,7 +55,6 @@ SKELETON_DIRS = [
 # sanctum path -> template filename. Every entry here MUST have a template;
 # see TEMPLATES_DIR resolution and the hard error below.
 TEMPLATE_FILES = {
-    "sanctum/identity/directives.md": "directives.md",
     "sanctum/state/equipment-roster.md": "equipment-roster.md",
     "sanctum/history/closeout-latest.md": "closeout-latest.md",
     "sanctum/state/finances-ledger.md": "finances-ledger.md",
@@ -76,6 +79,15 @@ TEMPLATE_FILES = {
     # empty so the first closeout has an INDEX to append to. The per-session journal
     # files themselves are produced at closeout, not seed-templated.
     "sanctum/history/journal/INDEX.md": "journal/INDEX.md",
+    # The farm's single living plan (folds the former identity/directives.md + the
+    # ad-hoc plans/PLAN.md into one file): the Current focus narrative plus the Standing
+    # directives it is built from. Read at every briefing, verified at every closeout.
+    # Seeded empty-but-shaped so a new farm starts with the file rather than inventing one.
+    "sanctum/plans/PLAN.md": "plan-main.md",
+    # The plan index -- one row per session, appended each closeout (mirrors the journal
+    # index). Seeded empty so the first closeout has an INDEX to append to. The per-session
+    # plan files (plans/sessions/{{date}}-session-{{n}}.md) are produced at closeout, not seeded.
+    "sanctum/plans/INDEX.md": "plan-index.md",
 }
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates")

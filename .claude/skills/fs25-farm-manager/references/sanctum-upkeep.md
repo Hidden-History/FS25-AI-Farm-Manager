@@ -41,7 +41,9 @@ template tells you how.
 | `history/journal/{{date}}-session-{{n}}.md` | **Every closeout** — a new archive entry, same content as above. Archive is history; `history/closeout-latest.md` is the handoff. Writing only one of the two silently breaks one of them. |
 | `state/finances-ledger.md` | Row **appended at Session Start** (opening snapshot); closeout **completes that row's Notes**. **Never a second row** — see below. |
 | `state/field-dossiers/field-{id}.md` | Whenever a field's state materially changes or you learn something worth remembering. Create from `templates/field-dossier.md` if new. Verify at closeout. |
-| `identity/directives.md` | Whenever a long-term plan is set, changed, or completed (`templates/directive-entry.md` for new entries). Verify at closeout. |
+| `plans/PLAN.md` | Whenever the plan changes — the **Current focus** rewritten in place, or a **Standing directive** opened, touched, or closed (`templates/directive-entry.md` for a new entry). This is the farm's single living plan (it folds in what used to be `identity/directives.md`). Read at every briefing; updated and cross-verified against reality at every closeout (`closeout-steps/step-06-update-plan.md`). |
+| `plans/sessions/{{date}}-session-{{n}}.md` | **Every closeout** — a new per-session plan record: what was decided, what changed in `plans/PLAN.md`, and the plan-vs-reality check. Created from `templates/plan-session.md`. |
+| `plans/INDEX.md` | **Every closeout — one row APPENDED**, never rewritten: date, session #, in-game season/day, the session-plan filename, and the session's headline decision. Mirrors `history/journal/INDEX.md`. |
 | `state/equipment-roster.md` | When equipment is bought, sold, repaired, or flagged for repair. Verify at closeout. |
 | `state/equipment-shopping-list.md` | When wanted iron changes, or you look up a price — **log the price** so the lookup is never repeated. |
 | `state/field-price-watchlist.md` | When a parcel becomes interesting, or you resolve its area/cost. |

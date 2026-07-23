@@ -6,8 +6,9 @@ cap_lines: 80
 cap_kb: 8
 rotation_trigger: on-resolve
 archive_target: "history/archive/equipment-shopping-list-archive.md"
+resolved_markers: ["BOUGHT", "SOLD", "DISMISSED"]
 reconciliation: "resolved entries (bought/sold/dismissed) MOVE to archive with date + resolution, never deleted"
-format_version: 1
+format_version: 2
 parity_spec:
   required_sections: ["## Watching to buy", "## Watching to sell"]
 ---

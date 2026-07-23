@@ -1,12 +1,12 @@
 ---
-name: step-06-verify-sanctum
+name: step-07-verify-sanctum
 description: 'Walk the sanctum and verify each file against sanctum-upkeep.md — check, don''t reconstruct; watch the three that catch people.'
-nextStepFile: './step-07-signoff.md'
+nextStepFile: './step-08-signoff.md'
 ---
 
-# Step 6: Walk the sanctum and verify each file
+# Step 7: Walk the sanctum and verify each file
 
-**Progress: Step 6 of 7** — Next: Sign off
+**Progress: Step 7 of 8** — Next: Sign off
 
 **Walk the sanctum and verify each file.** `references/sanctum-upkeep.md` names every one
 and says when it changes — **read it; this step is not doable from memory.** Most files

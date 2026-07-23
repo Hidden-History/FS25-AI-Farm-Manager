@@ -1,12 +1,12 @@
 ---
 name: step-05-append-friction-log
 description: 'Append this session''s frictions to the cumulative friction-log — never overwrite; include anything the honesty check reported.'
-nextStepFile: './step-06-verify-sanctum.md'
+nextStepFile: './step-06-update-plan.md'
 ---
 
 # Step 5: Append this session's frictions
 
-**Progress: Step 5 of 7** — Next: Walk the sanctum and verify each file
+**Progress: Step 5 of 8** — Next: Update and verify the plan
 
 **Append this session's frictions to `sanctum/history/friction-log.md`** (create from
 `templates/friction-log.md` if absent). **Append — never overwrite; it is cumulative.**

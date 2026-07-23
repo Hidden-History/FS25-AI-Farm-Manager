@@ -90,6 +90,42 @@ Two things worth carrying forward from that:
      tag-name matcher would have found some and silently missed the rest. Match
      the data, not the name you expect it to have.
 
+BALES IN A STORAGE SHED -- <objectStorage>, A THIRD FILL STRUCTURE (2026-07-21)
+-------------------------------------------------------------------------------
+The owner reported bales sitting in a shed that no read could see. Confirmed a
+real detection gap: a modded storage shed holds its stock as an <objectStorage>
+block of discrete <object> children, and this parser had ZERO awareness of it.
+On this save (farmId=1):
+
+    <placeable modName="FS25_MA_shedStoragePack"
+               filename="$moddir$FS25_MA_shedStoragePack/storageLarge.xml" farmId="1">
+      <objectStorage>
+        <object className="Bale" fillType="COTTON" fillLevel="20000.000000"
+                farmId="1" isMissionBale="false" .../>
+        ... (9 such -- 9 owned cotton bales, 20000 L each = 180000 L COTTON)
+      </objectStorage>
+    </placeable>
+
+This is a THIRD fill structure, architecturally distinct from the two above.
+A <storage> node is a bare ownership/index tag whose fill lives elsewhere in the
+shared storage system (emptiness inferred from silence). An <objectStorage>
+instead writes every stored item out EXPLICITLY, each <object> carrying its own
+className/fillType/fillLevel/farmId -- exactly like <bunkerSilo> states its own
+fillLevel. So a level read here is a STATED value (verified, not inferred), and
+an <objectStorage> with no <object> children is a verified-empty shed. These
+bales are folded into stored_contents.by_fill_type (so they reach farm holdings
+like any other stock) AND reported in their own `object_storage` block (so the
+discrete-object structure survives), the same dual treatment <bunkerSilo> gets.
+
+NOTE ON LOOSE / UNSTORED BALES: bales dropped in a field or sitting on the
+ground are a DIFFERENT representation, tracked in the savegame's top-level
+items.xml -- a different file this script does not read. In this save items.xml
+is empty (`<items/>`, zero bales), so there is no live schema to calibrate a
+loose-bale reader against, and the never-guess discipline forbids building one
+blind. Loose bales are therefore OUT OF SCOPE here (a dedicated items.xml reader
+is the right home if the owner ever drops bales outdoors); the shed case above
+is the only bale representation with evidence in this save.
+
 Output contract:
     - Never returns [] / a guess for missing data. If placeables.xml is
       missing or unparsable, or no placeable in the file has a farmId
@@ -283,6 +319,73 @@ def bunker_silo_contents(placeable_elem):
     }
 
 
+def object_storage_contents(placeable_elem):
+    """Discrete stored objects -- most commonly bales -- held in an
+    <objectStorage> block. This is how modded storage sheds (observed here:
+    FS25_MA_shedStoragePack/storageLarge.xml) carry their stock: each <object>
+    child states its OWN className, fillType, fillLevel and farmId.
+
+    Unlike a <storage> node, whose emptiness is inferred from silence, an
+    <objectStorage> writes every stored item out EXPLICITLY -- so a fillLevel
+    read here is a STATED value, verified the same way <bunkerSilo>'s explicit
+    fillLevel is, and an <objectStorage> with no <object> children is a
+    verified-empty shed rather than an unreadable one. See the module docstring
+    for the full three-way structural contrast.
+
+    Returns None when the placeable has no <objectStorage> child at all (not
+    applicable), distinct from an <objectStorage> that is verifiably empty.
+    Groups by fillType (object count + summed litres) and keeps the per-object
+    detail; className is preserved so a non-bale object could never be silently
+    dropped. Only genuinely-read levels contribute to by_fill_type; an object
+    with an unparsable fillLevel is kept in `objects` with a level_note but not
+    summed, so an unknown can never masquerade as a measurement.
+    """
+    os_elem = placeable_elem.find("objectStorage")
+    if os_elem is None:
+        return None
+
+    objects = []
+    for obj in os_elem.findall("object"):
+        a = obj.attrib
+        raw_level = a.get("fillLevel")
+        try:
+            level = float(raw_level) if raw_level is not None else None
+        except ValueError:
+            level = None
+        objects.append({
+            "class_name": a.get("className"),
+            "fill_type": a.get("fillType"),
+            "fill_level_litres": level,
+            "farm_id": a.get("farmId"),
+            "is_mission_bale": a.get("isMissionBale"),
+            "filename": a.get("filename"),
+            "level_note": None if level is not None else
+                          f"fillLevel={raw_level!r} is unparsable -- level UNKNOWN, not 0.",
+        })
+
+    by_fill_type = {}
+    for o in objects:
+        if not o["fill_level_litres"]:
+            continue
+        b = by_fill_type.setdefault(o["fill_type"] or "UNSPECIFIED",
+                                    {"object_count": 0, "total_litres": 0.0})
+        b["object_count"] += 1
+        b["total_litres"] += o["fill_level_litres"]
+
+    return {
+        "state": "has_contents" if objects else "empty_confirmed",
+        "object_count": len(objects),
+        "by_fill_type": by_fill_type,
+        "objects": objects,
+        "note": (
+            "Bales/objects read directly from <objectStorage><object .../> entries, each "
+            "carrying an explicit fillLevel -- a STATED value, verified like <bunkerSilo> and "
+            "unlike a bare <storage> node whose emptiness is only inferred. An <objectStorage> "
+            "with no <object> children is a verified-empty shed."
+        ),
+    }
+
+
 def main():
     ns = parse_args(sys.argv)
     savegame_dir, farm_id = ns.savegame_dir, ns.farm_id
@@ -323,6 +426,7 @@ def main():
     storage_seen_farm_ids = set()
     owned_storage_nodes = []
     owned_bunker_silos = []
+    owned_object_storage = []
 
     for p in all_placeables:
         a = p.attrib
@@ -380,6 +484,18 @@ def main():
                     "contents": bunker,
                 })
 
+            # <objectStorage> (bales in a shed) also hangs off the placeable,
+            # like <bunkerSilo> and unlike a <storage> node -- so it is gated on
+            # the placeable's owner and collected here, next to the bunker silo.
+            object_storage = object_storage_contents(p)
+            if object_storage is not None:
+                owned_object_storage.append({
+                    "parent_placeable_unique_id": a.get("uniqueId"),
+                    "parent_placeable_filename": a.get("filename"),
+                    "parent_placeable_mod_name": a.get("modName"),
+                    "contents": object_storage,
+                })
+
     if farm_id not in seen_farm_ids:
         emit_error(
             (
@@ -424,6 +540,23 @@ def main():
                 "storage_index": None,
                 "litres": e["fill_level_litres"],
             })
+    # Bales/objects in <objectStorage> sheds fold in per (shed, fill type), one
+    # location row carrying that shed's summed litres for the type -- so the
+    # cotton bales land in the same holdings total as silo grain and bunker
+    # forage, and reach farm_snapshot.py via stored_contents.by_fill_type.
+    object_storage_by_fill_type = {}
+    for shed in owned_object_storage:
+        for ft, agg in shed["contents"]["by_fill_type"].items():
+            m = object_storage_by_fill_type.setdefault(ft, {"object_count": 0, "total_litres": 0.0})
+            m["object_count"] += agg["object_count"]
+            m["total_litres"] += agg["total_litres"]
+            entry = stored_by_fill_type.setdefault(ft, {"total_litres": 0.0, "locations": []})
+            entry["total_litres"] += agg["total_litres"]
+            entry["locations"].append({
+                "where": shed["parent_placeable_filename"],
+                "storage_index": None,
+                "litres": agg["total_litres"],
+            })
 
     confirmed_empty = [n for n in owned_storage_nodes
                        if n["contents"]["state"] == "empty_confirmed"]
@@ -448,10 +581,16 @@ def main():
             "bunker_silos_empty_confirmed_count": sum(
                 1 for b in owned_bunker_silos if b["contents"]["state"] == "empty_confirmed"
             ),
+            "object_storage_owned_count": len(owned_object_storage),
+            "object_storage_objects_count": sum(
+                s["contents"]["object_count"] for s in owned_object_storage
+            ),
             "note": (
-                "Litres actually READ from a stated level. Value them with read_fill_prices.py "
-                "(economy.xml's per-period curve) -- never read_prices.py's meanValue, which is "
-                "0 on this never-traded farm and would price stored grain at nothing."
+                "Litres actually READ from a stated level -- including bales held in "
+                "<objectStorage> sheds (each bale states its own fillLevel). Value them with "
+                "read_fill_prices.py (economy.xml's per-period curve) -- never read_prices.py's "
+                "meanValue, which is 0 on this never-traded farm and would price stored grain at "
+                "nothing."
                 if stored_by_fill_type else
                 "The farm stores nothing -- and this is a CHECKED result, not a silence. Both "
                 "storage structures state their emptiness verifiably: <bunkerSilo> writes an "
@@ -487,6 +626,23 @@ def main():
                 "verified read, not an inference from silence. This is the structure a plain "
                 "<storage> node can be compared against to see why its silence is weaker "
                 "evidence."
+            ),
+        },
+        "object_storage": {
+            "owned_count": len(owned_object_storage),
+            "total_objects": sum(s["contents"]["object_count"] for s in owned_object_storage),
+            "by_fill_type": object_storage_by_fill_type,
+            "owned": owned_object_storage,
+            "note": (
+                "Discrete stored objects -- most commonly bales -- held in an <objectStorage> "
+                "block on a placeable (observed here: a FS25_MA_shedStoragePack storage shed "
+                "holding 9 cotton bales, 20000 L each = 180000 L COTTON). Each <object> states "
+                "its own className/fillType/fillLevel EXPLICITLY, so these levels are verified "
+                "reads (like <bunkerSilo>), not inferred. These litres are ALSO folded into "
+                "stored_contents.by_fill_type above, so they count toward farm holdings; this "
+                "block preserves the per-object detail. Loose/unstored bales (dropped in a "
+                "field) live in the savegame's top-level items.xml, a different file this script "
+                "does not read -- empty on this save, so out of scope here."
             ),
         },
         "unrecognized_farm_ids": sorted(fid for fid in seen_farm_ids if fid != 0 and fid != farm_id),

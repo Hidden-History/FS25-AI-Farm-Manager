@@ -61,10 +61,14 @@
     A card WITH <actions> draws an affordance row (ack -> check, yesno ->
     thumb_up/thumb_down, always a close/dismiss X). Clicks route whenever the
     ENGINE's shared mouse cursor is on screen (g_inputBinding state -- raised
-    by AutoDrive's MMB, Courseplay's RMB, or any other cursor mod). This mod
-    only ever READS that shared state; it never writes it (the S155 rework
-    dropped the standalone cursor toggle -- whoever raises the cursor owns
-    it). Ctrl+Period (FM25_TOGGLE_OVERLAY) instead toggles the OVERLAY
+    by AutoDrive's MMB, Courseplay's RMB, this mod's own Ctrl+Comma cursor
+    toggle, or any other cursor mod). Click-gating only READS that shared
+    state; the ONE place the mod writes it is the standalone cursor toggle
+    (FM25_TOGGLE_CURSOR, added S157 so the overlay is reachable ON FOOT, where
+    AD's MMB / CP's RMB -- both vehicle-context -- cannot raise it; the S155
+    assumption that they always could was disproven in on-foot play). Whoever
+    raised the cursor owns it. Ctrl+Period (FM25_TOGGLE_OVERLAY) instead
+    toggles the OVERLAY
     between its two modes: ON (default) is a persistent always-on panel --
     header, cards and reply bar stay up and cards do not auto-expire; OFF is
     the original transient pop-up notifier where each card fades after its
@@ -191,6 +195,18 @@ FarmManager25.MS_PER_CHAR       = 70       -- reading speed -> auto duration
 FarmManager25.FADE_IN_MS        = 160
 FarmManager25.FADE_OUT_MS       = 260
 
+-- Factory defaults, kept as named constants so the settings page's "reset
+-- position" and scale/linger cycles have a stable origin even after
+-- loadSettings/loadState have mutated the live DESIGN values. DESIGN seeds its
+-- anchor/scale from these (one source of truth); reset restores them.
+FarmManager25.DEFAULT_ANCHOR_X  = 0.985
+FarmManager25.DEFAULT_ANCHOR_Y  = 0.86
+FarmManager25.DEFAULT_UI_SCALE  = 0.72
+-- Settings-page cycle presets (S158). Scale steps span the buildOverlays clamp
+-- (0.4-1.5); linger steps are the OFF-mode floor MIN_TTL_MS in ms.
+FarmManager25.SCALE_PRESETS     = {0.5, 0.6, 0.72, 0.85, 1.0, 1.25}
+FarmManager25.LINGER_PRESETS_MS = {10000, 15000, 30000, 60000}
+
 -- Severity -> the NAME of the native constant to fall back to (names, not
 -- values: the constant is resolved at runtime so an engine that lacks WARNING
 -- degrades instead of erroring) + the default glyph. Card COLOURS live in
@@ -207,63 +223,71 @@ FarmManager25.DEFAULT_SEVERITY = "info"
 -- Atlas regions, in atlas pixels. MIRRORS build_atlas.py -- change one, change
 -- both. The card is 3-sliced: caps keep their corner radius at any width, the
 -- middle is uniform left-to-right so stretching it is invisible.
--- 1024 with 128px cells (S155, LT-3): the owner art is 126-204px native, so
--- the old 64px cells threw away half its resolution and every draw above
--- 64px on-screen (any card glyph past 1080p) upscaled a downscale. Same
--- layout, every coordinate exactly x2; slice RATIOS (CARD_CAP/CARD_PX)
--- unchanged, so on-screen geometry is identical.
-FarmManager25.ATLAS_PX   = 1024
-FarmManager25.CARD_PX    = 128
-FarmManager25.CARD_CAP   = 40
-FarmManager25.UV_CARD_L  = {0,  0, 40, 128}
-FarmManager25.UV_CARD_M  = {40, 0, 48, 128}
-FarmManager25.UV_CARD_R  = {88, 0, 40, 128}
-FarmManager25.UV_PILL_L  = {128, 0, 40, 128}
-FarmManager25.UV_PILL_M  = {168, 0, 48, 128}
-FarmManager25.UV_PILL_R  = {216, 0, 40, 128}
+-- 2048x1024 (task103-item14, BP-070): the PROCEDURAL card/pill cells grew to
+-- 256 -- at 4K x1.5 HUD scale a card draws ~168px tall, so the old 128px cell
+-- was upscaling on screen (the primary blur mechanism). The icon grid STAYS
+-- at 128px cells: the owner sheets are 126-204px native, so bigger cells
+-- could only be filled by upscaling the art in the build (worse, and a build
+-- error there) -- 128 still covers the 40*3=120px worst-case draw. Slice
+-- RATIOS (CARD_CAP/CARD_PX) unchanged, so on-screen geometry is identical.
+-- Non-square power-of-two is proven (Courseplay iconSprite.dds 256x512).
+FarmManager25.ATLAS_W    = 2048
+FarmManager25.ATLAS_H    = 1024
+FarmManager25.CARD_PX    = 256
+FarmManager25.CARD_CAP   = 80
+FarmManager25.UV_CARD_L  = {0,   0, 80, 256}
+FarmManager25.UV_CARD_M  = {80,  0, 96, 256}
+FarmManager25.UV_CARD_R  = {176, 0, 80, 256}
+FarmManager25.UV_PILL_L  = {256, 0, 80, 256}
+FarmManager25.UV_PILL_M  = {336, 0, 96, 256}
+FarmManager25.UV_PILL_R  = {432, 0, 80, 256}
 FarmManager25.ICONS = {
-    leaf      = {  0, 128, 128, 128},
-    alert     = {128, 128, 128, 128},
-    check     = {256, 128, 128, 128},
-    briefing  = {384, 128, 128, 128},
-    contract  = {512, 128, 128, 128},
-    silo      = {640, 128, 128, 128},
-    fleet     = {768, 128, 128, 128},
-    finances  = {896, 128, 128, 128},
-    crop      = {  0, 256, 128, 128},
-    weather   = {128, 256, 128, 128},
-    harvest   = {256, 256, 128, 128},
-    field     = {384, 256, 128, 128},
-    report    = {512, 256, 128, 128},
-    equipment = {640, 256, 128, 128},
-    fuel      = {768, 256, 128, 128},
-    building  = {896, 256, 128, 128},
-    supply    = {  0, 384, 128, 128},
-    schedule  = {128, 384, 128, 128},
-    profit    = {256, 384, 128, 128},
-    worker    = {384, 384, 128, 128},
-    dealer    = {512, 384, 128, 128},
-    soil      = {640, 384, 128, 128},
-    season    = {768, 384, 128, 128},
+    leaf      = {  0, 256, 128, 128},
+    alert     = {128, 256, 128, 128},
+    check     = {256, 256, 128, 128},
+    briefing  = {384, 256, 128, 128},
+    contract  = {512, 256, 128, 128},
+    silo      = {640, 256, 128, 128},
+    fleet     = {768, 256, 128, 128},
+    finances  = {896, 256, 128, 128},
+    crop      = {  0, 384, 128, 128},
+    weather   = {128, 384, 128, 128},
+    harvest   = {256, 384, 128, 128},
+    field     = {384, 384, 128, 128},
+    report    = {512, 384, 128, 128},
+    equipment = {640, 384, 128, 128},
+    fuel      = {768, 384, 128, 128},
+    building  = {896, 384, 128, 128},
+    supply    = {  0, 512, 128, 128},
+    schedule  = {128, 512, 128, 128},
+    profit    = {256, 512, 128, 128},
+    worker    = {384, 512, 128, 128},
+    dealer    = {512, 512, 128, 128},
+    soil      = {640, 512, 128, 128},
+    season    = {768, 512, 128, 128},
     -- Interaction affordances (TASK-101 P1). Appended AFTER every pre-existing
     -- glyph so the UV layout order is stable; slots follow build_atlas.py's
     -- 8-per-row order.
-    thumb_up   = {896, 384, 128, 128},
-    thumb_down = {  0, 512, 128, 128},
-    chat       = {128, 512, 128, 128},
-    send       = {256, 512, 128, 128},
-    gear       = {384, 512, 128, 128},
-    close      = {512, 512, 128, 128},
+    thumb_up   = {896, 512, 128, 128},
+    thumb_down = {  0, 640, 128, 128},
+    chat       = {128, 640, 128, 128},
+    send       = {256, 640, 128, 128},
+    gear       = {384, 640, 128, 128},
+    close      = {512, 640, 128, 128},
     -- TASK-101 P2 (owner icon sheet 4). Same append-only rule: slots 29/30.
-    snooze     = {640, 512, 128, 128},
-    critical   = {768, 512, 128, 128},
+    snooze     = {640, 640, 128, 128},
+    critical   = {768, 640, 128, 128},
 }
 -- The header banner: owner art in COLOUR (everything else in the atlas is
--- white-on-alpha). Blitted with a {1,1,1,1} tint. 1024/198 matches the
--- plate's own 5.16:1 aspect; the on-screen height derives from the panel
--- width so the art is never stretched. MIRRORS build_atlas.py's
--- BANNER_XY/BANNER_WH.
-FarmManager25.UV_BANNER = {0, 640, 1024, 198}
+-- white-on-alpha). Blitted with a {1,1,1,1} tint. TWO packed sizes
+-- (task103-item14, BP-070 R4): with no mipmaps, detailed colour art turns to
+-- mush past ~2x minification, and the banner's draw width spans ~238 physical
+-- px (1080p x0.72) to 990 (4K x1.5). drawBanner picks the smallest slot that
+-- still covers the frame's actual pixel width. Both keep the plate's own
+-- 5.16:1 aspect; the on-screen height derives from the panel width so the art
+-- is never stretched. MIRRORS build_atlas.py's BANNER_XY/WH + BANNER_SM_XY/WH.
+FarmManager25.UV_BANNER    = {0, 768, 1280, 248}
+FarmManager25.UV_BANNER_SM = {1280, 768, 516, 100}
 
 
 -- Design tokens. Pixels at the reference screen height; converted to
@@ -284,21 +308,44 @@ FarmManager25.DESIGN = {
     lineGapPx      = 3,
     titleGapPx     = 12,     -- mockup title-baseline -> body-top gap ~12-14dp (was 5)
     cardGapPx      = 9,      -- mockup-confirmed (9.6dp)
+    -- S157: the visible card window is capped at a FIXED count, not the screen
+    -- height. Before this, the only limit was "don't draw below the screen
+    -- edge", so 8 modest cards legitimately filled ~80% of the screen. The cap
+    -- is measured as this many AVERAGE cards' worth of height (renderStack), so
+    -- it is a soft ~4, not a hard count: a stack of tall cards shows fewer, and
+    -- older cards beyond the window scroll into view on the mouse wheel.
+    maxVisibleCards = 4,
     pillGapPx      = 9,      -- gap between the banner header and the first card
     affordHeightPx = 26,     -- affordance button height
     affordWidthPx  = 40,
     affordGapPx    = 6,
     cardAlpha      = 0.92,
     timeColor      = {0.62, 0.68, 0.62, 1},
+    -- Scrollbar (item 18): a click/drag affordance on the card window, drawn
+    -- only when scrollMax > 0. A thin vertical bar at the panel's right inset,
+    -- in its OWN reserved lane outside the content column (task103-item14,
+    -- BP-070: gap >= the inter-card gap and >= 2x the track width) -- cards
+    -- never share pixels with the track. The lane is reserved whether or not
+    -- the bar is drawn, so card width never jumps when it appears.
+    -- Track dim; thumb is the muted timeColor tone at full alpha so it reads
+    -- against the track. Rides the button path, so it scrolls with zero camera
+    -- movement (unlike the wheel). The hit rect is wider than the 4px visual
+    -- (BP-070: 12-16 ref-px minimum target) -- grabbable without being fat.
+    scrollBarWidthPx = 4,
+    scrollThumbMinPx = 24,
+    scrollGapPx      = 9,     -- card right edge -> track (= cardGapPx, >= 2x track)
+    scrollHitWidthPx = 14,    -- click/drag target centred on the visual track
+    scrollTrackColor = {0.24, 0.27, 0.24, 0.55},
+    scrollThumbColor = {0.62, 0.68, 0.62, 0.95},
     -- Anchor: top-right, tucked under the money/clock bar, clear of the
     -- bottom-right minimap and of AutoDrive/Courseplay's left-side HUDs.
-    anchorX        = 0.985,
-    anchorY        = 0.86,
+    anchorX        = FarmManager25.DEFAULT_ANCHOR_X,
+    anchorY        = FarmManager25.DEFAULT_ANCHOR_Y,
     -- LT-7: one uniform scale on the whole overlay, applied at the single
     -- px->normalized chokepoint (buildOverlays). 0.72 is the owner's ~28%
     -- reduction -- the overlay dwarfed the neighbouring CP/AD HUDs. Tunable
     -- live via settings.xml (farmManager25.hud#scale), clamped 0.4-1.5.
-    uiScale        = 0.72,
+    uiScale        = FarmManager25.DEFAULT_UI_SCALE,
 }
 
 FarmManager25.filePath      = nil
@@ -329,6 +376,31 @@ FarmManager25.textReplySeq      = 0      -- uniquifies free-text reply ids withi
 -- dismiss, answer, OFF-mode expiry) sets it; update() flushes state.xml once
 -- per tick, so state.xml always mirrors the live stack.
 FarmManager25.stateDirty        = false
+-- S157: the mouse-wheel scroll offset -- how many of the NEWEST cards the
+-- visible window is scrolled PAST. 0 = anchored on the newest (the default a
+-- new arrival snaps back to); clamped each drawn frame in renderStack to a
+-- full last page. panelRect is the whole-panel bounds the wheel hit-tests
+-- against -- recorded each drawn frame, nil on every path that does not draw
+-- (the headerRect discipline: an off-screen panel must not eat the wheel).
+FarmManager25.scrollOffset      = 0
+FarmManager25.panelRect         = nil
+-- Scrollbar (item 18): the track + thumb hit rects and the in-flight drag,
+-- same discipline as panelRect -- rebuilt every drawn frame, nil on every path
+-- that does not draw. scrollDrag is nil unless a thumb-drag is in flight (then
+-- { grab = cursorY - thumbBottomY }); scrollTravel/scrollRange carry the
+-- render-time geometry the drag needs to map a thumb Y back to a scroll offset.
+FarmManager25.scrollbarRect     = nil
+FarmManager25.scrollThumbRect   = nil
+FarmManager25.scrollDrag        = nil
+FarmManager25.scrollTravel      = 0
+FarmManager25.scrollRange       = 0
+-- S158: the g_gui settings dialog. The controller instance is built once and
+-- the XML registered in loadMap; settingsGuiLoaded latches true only when
+-- g_gui:loadGui succeeded, so the settings keybind is a clean no-op when the
+-- GUI framework is absent (a dedicated server, a headless test, or a failed
+-- load) -- exactly the degrade discipline the rest of the mod uses.
+FarmManager25.settingsGui       = nil
+FarmManager25.settingsGuiLoaded = false
 
 
 -- ---------------------------------------------------------------------------
@@ -419,19 +491,35 @@ function FarmManager25:wrapText(text, fontSize, maxWidth)
         for i = 1, FarmManager25.MAX_LINES do
             trimmed[i] = lines[i]
         end
-        -- Signal truncation rather than pretending the message ended here.
-        -- The last line is already wrapped to exactly maxWidth, so appending
-        -- the ellipsis would push it PAST the panel edge and bleed outside the
-        -- background. Give the ellipsis room first, then append it.
-        local ELL  = " ..."
-        local last = trimmed[FarmManager25.MAX_LINES]
-        while last:len() > 0 and getTextWidth(fontSize, last .. ELL) > maxWidth do
-            last = last:sub(1, last:len() - 1)
-        end
-        trimmed[FarmManager25.MAX_LINES] = (last:gsub("%s+$", "")) .. ELL
+        -- Signal truncation rather than pretending the message ended here. The
+        -- "make the ellipsis room first, then append it -- else it bleeds PAST
+        -- the panel edge" logic lives in ellipsize now (the title reuses it).
+        -- force=true because a dropped-lines tail must carry the mark even when
+        -- the wrapped last line already fits maxWidth exactly.
+        trimmed[FarmManager25.MAX_LINES] =
+            FarmManager25.ellipsize(trimmed[FarmManager25.MAX_LINES], fontSize, maxWidth, true)
         return trimmed, true
     end
     return lines, false
+end
+
+--- Truncate `text` to a single line no wider than `maxWidth`, trimming from the
+--  end and appending an ellipsis. Shared by the card title (which MUST stay one
+--  line -- cardHeight budgets exactly one titleSize for it) and wrapText's
+--  overflow tail, so the "give the ellipsis room, then append" measurement is
+--  written once. `force` appends the ellipsis even when `text` already fits:
+--  wrapText's dropped-lines case needs the mark regardless, while the title
+--  omits it so a short title renders verbatim.
+function FarmManager25.ellipsize(text, fontSize, maxWidth, force)
+    if not force and getTextWidth(fontSize, text) <= maxWidth then
+        return text
+    end
+    local ELL = " ..."
+    local s = text
+    while s:len() > 0 and getTextWidth(fontSize, s .. ELL) > maxWidth do
+        s = s:sub(1, s:len() - 1)
+    end
+    return (s:gsub("%s+$", "")) .. ELL
 end
 
 --- Turn raw field values into a notification table. PURE -- no file I/O, no
@@ -674,6 +762,15 @@ function FarmManager25:loadState(folder)
         if seq ~= nil then
             FarmManager25.textReplySeq = math.floor(seq)
         end
+        -- S158: settings-page scale + OFF-mode linger. Scale is clamped to the
+        -- buildOverlays range (loadState runs BEFORE buildOverlays, so the
+        -- persisted scale seeds the first geometry build).
+        local uiScale = getXMLFloat(xml, "farmManager25State.hud#uiScale")
+        if uiScale ~= nil then d.uiScale = clamp(uiScale, 0.4, 1.5) end
+        local minTtl = getXMLFloat(xml, "farmManager25State.hud#minTtlMs")
+        if minTtl ~= nil then FarmManager25.MIN_TTL_MS = minTtl end
+        local maxTtl = getXMLFloat(xml, "farmManager25State.hud#maxTtlMs")
+        if maxTtl ~= nil then FarmManager25.MAX_TTL_MS = maxTtl end
         local count = getXMLFloat(xml, "farmManager25State.cards#count") or 0
         for i = 0, math.min(count, FarmManager25.MAX_STORE) - 1 do
             local key = string.format("farmManager25State.cards.card(%d)", i)
@@ -751,6 +848,13 @@ function FarmManager25:saveState()
             FarmManager25.overlayOn and "true" or "false")
         setXMLFloat(xml, "farmManager25State.hud#textReplySeq",
             FarmManager25.textReplySeq)
+        -- S158: the settings page's scale + OFF-mode linger are live-tunable, so
+        -- the live store carries them (like anchorX/anchorY). settings.xml stays
+        -- the hand-edited seed; state.xml (loaded after) wins, so a menu change
+        -- survives a relog.
+        setXMLFloat(xml, "farmManager25State.hud#uiScale", d.uiScale)
+        setXMLFloat(xml, "farmManager25State.hud#minTtlMs", FarmManager25.MIN_TTL_MS)
+        setXMLFloat(xml, "farmManager25State.hud#maxTtlMs", FarmManager25.MAX_TTL_MS)
         local i = 0
         for _, n in ipairs(self.stack) do
             local key = string.format("farmManager25State.cards.card(%d)", i)
@@ -945,41 +1049,192 @@ end
 --  READS the state every mod shares (g_inputBinding:getShowMouseCursor();
 --  the gate AutoDrive uses at AutoDrive.lua:596-601 and Courseplay consumes
 --  vehicle-wide). Whoever raised the cursor -- AutoDrive MMB, Courseplay
---  RMB, any cursor mod, or this mod's own toggle below -- owns hiding it.
+--  RMB, any cursor mod, or this mod's own Ctrl+Comma cursor toggle
+--  (FM25_TOGGLE_CURSOR, below) -- owns hiding it.
 function FarmManager25:cursorIsShown()
     return g_inputBinding ~= nil and g_inputBinding:getShowMouseCursor()
 end
 
 --- The overlay mode toggle (FM25_TOGGLE_OVERLAY, default Ctrl+Period):
 --  flip the panel between persistent (ON, the default) and transient (OFF).
---  The mod never writes the engine cursor -- whoever raises it (AutoDrive's
---  MMB, Courseplay's RMB, any cursor mod) owns it; click-gating reads
---  cursorIsShown() like every other consumer. Guarded while a real menu owns
+--  This toggle never writes the engine cursor (only FM25_TOGGLE_CURSOR does)
+--  -- whoever raises it (AutoDrive's MMB, Courseplay's RMB, that key, any
+--  cursor mod) owns it; click-gating reads cursorIsShown() like every other
+--  consumer. Guarded while a real menu owns
 --  the screen (a keypress under a menu is the menu's, not ours). Switching
 --  to OFF re-arms every live card with a fresh read window: their ages
 --  predate the mode and would otherwise expire them on the spot. The new
 --  mode is persisted immediately -- a toggle that forgot itself on relog
 --  would read as the S153 one-shot bug all over again.
+--- Set the overlay mode and persist it. The single flip shared by the
+--  keybind (onToggleOverlay) and the settings page (the dialog's
+--  onOverlayChanged calls this directly), so the OFF-mode re-arm + saveState
+--  happen identically however the mode is changed. Deliberately WITHOUT the
+--  gui-visible guard: the settings dialog IS a visible GUI, so onToggleOverlay's
+--  guard would wrongly no-op the in-dialog toggle. The guard stays on the
+--  keybind path where it belongs.
+function FarmManager25:setOverlayOn(on)
+    FarmManager25.overlayOn = on
+    if not FarmManager25.overlayOn then
+        for _, n in ipairs(self.stack) do
+            n.ttl = n.age + FarmManager25.MIN_TTL_MS
+        end
+    end
+    self:saveState()
+end
+
 function FarmManager25:onToggleOverlay()
     local ok, err = pcall(function()
         if g_gui ~= nil and g_gui:getIsGuiVisible() then
             return
         end
-        FarmManager25.overlayOn = not FarmManager25.overlayOn
-        if not FarmManager25.overlayOn then
-            for _, n in ipairs(self.stack) do
-                n.ttl = n.age + FarmManager25.MIN_TTL_MS
-            end
-        end
-        self:saveState()
+        self:setOverlayOn(not FarmManager25.overlayOn)
     end)
     if not ok then
         print("FarmManager25: overlay toggle failed -- " .. tostring(err))
     end
 end
 
---- Register FM25_TOGGLE_OVERLAY so it SURVIVES engine input-context rebuilds
---  -- the S153 live-test root cause. The engine re-runs
+--- The standalone cursor toggle (FM25_TOGGLE_CURSOR, default Ctrl+Comma):
+--  raise/lower the ENGINE's shared mouse cursor so the overlay is reachable
+--  ON FOOT. The S155 design assumed AutoDrive's MMB / Courseplay's RMB would
+--  always be on hand to raise the cursor; the owner's on-foot playtest
+--  disproved it -- both are VEHICLE-context bindings, so out of a vehicle the
+--  cursor could not come up at all and the overlay was dead. This is the ONE
+--  place the mod WRITES the shared cursor; every gate elsewhere still only
+--  READS it (cursorIsShown), so read-only consumers are unaffected.
+--
+--  Toggles off the SAME shared state every consumer reads, so it cooperates
+--  instead of fighting: whoever last set the cursor (AD, CP, any cursor mod,
+--  or this key), one press reads the live state and flips it. Works
+--  identically in a vehicle. Unlike the click-driven open/close the BP-064
+--  next-tick defer was written for, this action is KEY-triggered -- there is
+--  no closing click for setShowMouseCursor(false) to eat, so it applies
+--  inline with no defer. Guarded while a real menu owns the screen (that
+--  keypress is the menu's, exactly like onToggleOverlay) and nil-tolerant on
+--  g_inputBinding (absent input surface => no-op, never a raise on nothing).
+function FarmManager25:onToggleCursor()
+    local ok, err = pcall(function()
+        if g_inputBinding == nil then
+            return
+        end
+        if g_gui ~= nil and g_gui:getIsGuiVisible() then
+            return
+        end
+        local show = not g_inputBinding:getShowMouseCursor()
+        g_inputBinding:setShowMouseCursor(show)
+    end)
+    if not ok then
+        print("FarmManager25: cursor toggle failed -- " .. tostring(err))
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- settings page (S158): the g_gui dialog's apply logic lives here as plain
+-- methods on FarmManager25 so it is lupa-testable; the DialogElement
+-- controller (FarmManagerSettingsGui.lua) is a thin shell that calls these.
+-- ---------------------------------------------------------------------------
+
+-- Index of the preset nearest to `current` (ties -> first). Backs the settings
+-- dialog's index-addressable steppers (getScaleIndex/getLingerIndex): "nearest"
+-- so a value that drifted off the preset grid (a hand-edited settings.xml scale,
+-- say) still resolves to a sensible index instead of snapping to preset 1.
+local function nearestIndex(list, current)
+    local bestI, bestD = 1, math.huge
+    for i, v in ipairs(list) do
+        local d = math.abs(v - (current or v))
+        if d < bestD then
+            bestI, bestD = i, d
+        end
+    end
+    return bestI
+end
+
+-- Wrap a 1-based index into [1, #list] in BOTH directions (0 -> last,
+-- #list+1 -> first). Lua's floored % keeps negatives positive, so this also
+-- absorbs any out-of-range index a stepper could hand us.
+local function wrapIndex(i, n)
+    return ((i - 1) % n) + 1
+end
+
+-- The settings dialog's native ‹value› steppers apply by an explicit 1-based
+-- state index (bidirectional). getScaleIndex/getLingerIndex give the dialog the
+-- current state to setState() on open; cfgSetScaleIndex/cfgSetLingerIndex apply
+-- + persist the chosen index. Index wraps both ways so a stepper can never
+-- drive an out-of-range value. (The overlay stepper flips via setOverlayOn.)
+
+--- Current SCALE_PRESETS index for the live uiScale (nearest, for setState).
+function FarmManager25:getScaleIndex()
+    return nearestIndex(FarmManager25.SCALE_PRESETS, FarmManager25.DESIGN.uiScale)
+end
+
+--- Current LINGER_PRESETS_MS index for the live MIN_TTL_MS (nearest).
+function FarmManager25:getLingerIndex()
+    return nearestIndex(FarmManager25.LINGER_PRESETS_MS, FarmManager25.MIN_TTL_MS)
+end
+
+--- Apply SCALE_PRESETS[i], then rebuild geometry (uiScale is precomputed in
+--  buildOverlays, the same call loadMap makes) and persist.
+function FarmManager25:cfgSetScaleIndex(i)
+    local list = FarmManager25.SCALE_PRESETS
+    FarmManager25.DESIGN.uiScale = list[wrapIndex(i, #list)]
+    self:buildOverlays()
+    self:saveState()
+end
+
+--- Apply LINGER_PRESETS_MS[i], keeping MAX_TTL_MS >= MIN so the
+--  buildNotification clamp can never invert, and persist.
+function FarmManager25:cfgSetLingerIndex(i)
+    local list = FarmManager25.LINGER_PRESETS_MS
+    FarmManager25.MIN_TTL_MS = list[wrapIndex(i, #list)]
+    if FarmManager25.MAX_TTL_MS < FarmManager25.MIN_TTL_MS then
+        FarmManager25.MAX_TTL_MS = FarmManager25.MIN_TTL_MS
+    end
+    self:saveState()
+end
+
+--- Reset the overlay to its factory anchor (top-right). Uses the DEFAULT_*
+--  constants, not the live DESIGN values, which may have been dragged/loaded
+--  away. panelLeft/panelTop are recomputed only once buildOverlays has run
+--  (panelW known) -- before that, loadMap's build applies the anchor anyway.
+function FarmManager25:cfgResetPosition()
+    local d = FarmManager25.DESIGN
+    d.anchorX = FarmManager25.DEFAULT_ANCHOR_X
+    d.anchorY = FarmManager25.DEFAULT_ANCHOR_Y
+    if self.panelW ~= nil then
+        self.panelLeft = d.anchorX - self.panelW
+        self.panelTop  = d.anchorY
+    end
+    self:saveState()
+end
+
+--- Open the settings dialog (FM25_TOGGLE_SETTINGS, default Ctrl+Alt+Period).
+--  Works on foot or in a vehicle -- no camera concern, it's a modal GUI. Same
+--  guards as the other keys: nil-tolerant on g_gui, skipped while a menu
+--  already owns the screen, and a clean no-op when the dialog never
+--  registered (headless / load failure) so the key can never throw.
+function FarmManager25:onToggleSettings()
+    local ok, err = pcall(function()
+        if g_gui == nil then
+            return
+        end
+        if g_gui:getIsGuiVisible() then
+            return
+        end
+        if not FarmManager25.settingsGuiLoaded then
+            return
+        end
+        g_gui:showDialog("FarmManagerSettings")
+    end)
+    if not ok then
+        print("FarmManager25: settings open failed -- " .. tostring(err))
+    end
+end
+
+--- Register all GLOBAL keybinds (FM25_TOGGLE_OVERLAY, FM25_TOGGLE_CURSOR,
+--  FM25_TOGGLE_SETTINGS) so
+--  they SURVIVE engine input-context rebuilds -- the S153 live-test root
+--  cause. The engine re-runs
 --  PlayerInputComponent.registerGlobalPlayerActionEvents on every rebuild and
 --  a one-shot registerActionEvent at load is silently discarded with it; the
 --  fix is Courseplay's shape (Courseplay.lua:141-152, installed from
@@ -987,8 +1242,9 @@ end
 --  registration is re-applied every time it runs. superFunc FIRST, then ours.
 --  The hint text is left visible on purpose (unlike CP, which hides its own).
 --
---  Failure/absence costs ONLY the key: the overlay stays in whatever mode
---  state.xml loaded, clicks still route off any raised cursor, nothing latches.
+--  Failure/absence costs ONLY the affected key: the overlay stays in whatever
+--  mode state.xml loaded, clicks still route off any raised cursor (from the
+--  cursor key or AD/CP), nothing latches.
 function FarmManager25:installOverlayToggleHook()
     if self.hookInstalled then
         return   -- idempotent across map loads; one wrap, ever
@@ -1018,6 +1274,42 @@ function FarmManager25:installOverlayToggleHook()
                 end)
                 if not okR then
                     print("FarmManager25: toggle registration failed -- the overlay mode key is off this pass; the panel stays in its current mode -- " .. tostring(errR))
+                end
+                -- Independent of the overlay pcall on purpose: a failure in one
+                -- key's registration must not cost the other. Same Courseplay
+                -- shape, same trigger flags (down-edge, startActive).
+                local okC, errC = pcall(function()
+                    if InputAction ~= nil and InputAction.FM25_TOGGLE_CURSOR ~= nil then
+                        g_inputBinding:registerActionEvent(
+                            InputAction.FM25_TOGGLE_CURSOR, FarmManager25,
+                            FarmManager25.onToggleCursor,
+                            false,   -- triggerUp
+                            true,    -- triggerDown
+                            false,   -- triggerAlways
+                            true)    -- startActive
+                    end
+                end)
+                if not okC then
+                    print("FarmManager25: cursor registration failed -- the cursor key is off this pass; raise the cursor with AutoDrive/Courseplay instead -- " .. tostring(errC))
+                end
+                -- Independent again: the settings key registers on its own so a
+                -- failure in either sibling never costs it. Same down-edge,
+                -- startActive flags. Absence costs only the settings key: the
+                -- panel + cursor keys keep working, the panel stays tunable via
+                -- settings.xml exactly as before.
+                local okS, errS = pcall(function()
+                    if InputAction ~= nil and InputAction.FM25_TOGGLE_SETTINGS ~= nil then
+                        g_inputBinding:registerActionEvent(
+                            InputAction.FM25_TOGGLE_SETTINGS, FarmManager25,
+                            FarmManager25.onToggleSettings,
+                            false,   -- triggerUp
+                            true,    -- triggerDown
+                            false,   -- triggerAlways
+                            true)    -- startActive
+                    end
+                end)
+                if not okS then
+                    print("FarmManager25: settings registration failed -- the settings key is off this pass; the panel stays tunable via settings.xml -- " .. tostring(errS))
                 end
             end)
     end)
@@ -1093,6 +1385,10 @@ function FarmManager25:buildOverlays()
         self.affordW       = d.affordWidthPx  * self.pxW
         self.affordH       = d.affordHeightPx * self.pxH
         self.affordGap     = d.affordGapPx    * self.pxW
+        self.scrollBarW      = d.scrollBarWidthPx * self.pxW
+        self.scrollThumbMinH = d.scrollThumbMinPx * self.pxH
+        self.scrollGap       = d.scrollGapPx      * self.pxW
+        self.scrollHitW      = d.scrollHitWidthPx * self.pxW
         -- Text sizes bypass pxW/pxH (they normalize px directly), so the scale
         -- is applied to the px argument. getNormalizedScreenValues is linear in
         -- px, so this is exactly titleSize*s etc. -- proportions preserved.
@@ -1107,10 +1403,16 @@ function FarmManager25:buildOverlays()
         self.insetY  = theme.panel.insetPx * self.pxH
         self.borderW = theme.cardBorderPx  * self.pxW
         self.borderH = theme.cardBorderPx  * self.pxH
-        self.cardW   = self.panelW - self.insetX * 2
+        -- The scrollbar's lane (track + gap) is carved out of the content
+        -- column permanently -- the stable-gutter rule (BP-070): cards, reply
+        -- bar and overflow text share one right edge that never moves when
+        -- the scrollbar appears. The banner keeps the full panel width; the
+        -- lane exists only beside the scrolling content.
+        self.cardW   = self.panelW - self.insetX * 2 - self.scrollBarW - self.scrollGap
 
         -- Banner height follows the panel width at the art's own aspect
-        -- (UV_BANNER is 512x99), so the plate is never stretched.
+        -- (UV_BANNER's w/h -- both packed slots share it), so the plate is
+        -- never stretched.
         local uvB = FarmManager25.UV_BANNER
         self.bannerH = d.panelWidthPx * (uvB[4] / uvB[3]) * self.pxH
 
@@ -1161,6 +1463,34 @@ function FarmManager25:buildOverlays()
 end
 
 
+--- Register the settings dialog with g_gui (S158). Guarded end to end: with
+--  g_gui absent (dedicated server / headless test), the source class not
+--  loaded, or any load failure, settingsGuiLoaded stays false and the settings
+--  key is a clean no-op. loadProfiles + loadGui is AutoDrive's exact shape
+--  (Gui.lua:3,60); the controller is instantiated ONCE (.new() BEFORE loadGui
+--  -- the "nil controller" trap, BP-064 §1) and reused across map reloads.
+--  Loaded is latched on a throw-free pass, not on loadGui's return value
+--  (its success convention varies); showDialog is itself guarded in
+--  onToggleSettings, so a mis-registered name degrades to a printed no-op.
+function FarmManager25:registerSettingsGui()
+    FarmManager25.settingsGuiLoaded = false
+    if g_gui == nil or FarmManagerSettingsGui == nil or FarmManagerSettingsGui.new == nil then
+        return
+    end
+    local ok, err = pcall(function()
+        g_gui:loadProfiles(FarmManager25.MOD_DIR .. "gui/guiProfiles.xml")
+        if FarmManager25.settingsGui == nil then
+            FarmManager25.settingsGui = FarmManagerSettingsGui.new()
+        end
+        g_gui:loadGui(FarmManager25.MOD_DIR .. "gui/FarmManagerSettingsGui.xml",
+            "FarmManagerSettings", FarmManager25.settingsGui)
+        FarmManager25.settingsGuiLoaded = true
+    end)
+    if not ok then
+        print("FarmManager25: settings GUI registration failed -- the settings key is off this session -- " .. tostring(err))
+    end
+end
+
 function FarmManager25:loadMap(name)
     -- A dedicated server has no screen, so there is nobody to notify. Bail out
     -- entirely: filePath stays nil, so update() returns immediately and we never
@@ -1189,6 +1519,8 @@ function FarmManager25:loadMap(name)
     self.interactiveOk      = true
     self.affordanceRects    = nil
     self.inputBarRect       = nil
+    self.panelRect          = nil
+    FarmManager25.scrollOffset = 0
     -- loadState populates the stack directly (not via push), so it must not
     -- arm the dirty-flush -- we would re-save what we just read.
     self.stateDirty         = false
@@ -1198,6 +1530,7 @@ function FarmManager25:loadMap(name)
     self:loadState(folder)        -- ...then the live store wins (mode + cards too)
     self:buildOverlays()
     self:installOverlayToggleHook()
+    self:registerSettingsGui()
 
     -- Start from a clean bridge: a message left over from a previous session
     -- is stale by definition and must not pop on load.
@@ -1214,15 +1547,21 @@ function FarmManager25:deleteMap()
     -- on the way out (saveState no-ops when stateFolder is nil, i.e. the
     -- dedicated-server path never got this far).
     self:saveState()
-    -- No manual input teardown here, on purpose: FM25_TOGGLE_OVERLAY is
-    -- owned by the survives-rebuild hook (installOverlayToggleHook, the
-    -- Courseplay shape) -- its lifecycle is the engine's global-action
-    -- rebuild pass, which clears and re-registers on its own schedule, not
-    -- loadMap/deleteMap. The BP-064 leak warning was about the OLD one-shot
-    -- self-scoped registerActionEvent, which is gone. The cursor needs no
-    -- release either: this mod never raises it.
+    -- No manual input teardown here, on purpose: both keybinds
+    -- (FM25_TOGGLE_OVERLAY, FM25_TOGGLE_CURSOR) are owned by the
+    -- survives-rebuild hook (installOverlayToggleHook, the Courseplay shape)
+    -- -- their lifecycle is the engine's global-action rebuild pass, which
+    -- clears and re-registers on its own schedule, not loadMap/deleteMap. The
+    -- BP-064 leak warning was about the OLD one-shot self-scoped
+    -- registerActionEvent, which is gone. The cursor needs no release either:
+    -- the mission-end input-context teardown resets it, and FM25_TOGGLE_CURSOR
+    -- only flips the shared state the engine already owns.
     self.affordanceRects    = nil
     self.inputBarRect       = nil
+    self.panelRect          = nil
+    self.scrollbarRect      = nil
+    self.scrollThumbRect    = nil
+    self.scrollDrag         = nil
     self.stateFolder   = nil
     self.filePath      = nil
     self.queue         = {}
@@ -1364,6 +1703,10 @@ function FarmManager25:push(n)
     -- LT-8: the stack changed -> the persisted store is stale. Flushed once at
     -- the end of update() so a burst of arrivals coalesces to a single write.
     self.stateDirty = true
+    -- S157: a new arrival snaps the scroll window back to the newest. The
+    -- newest card is the one that matters -- it must not land hidden behind a
+    -- scroll the player left parked on older history.
+    FarmManager25.scrollOffset = 0
 end
 
 function FarmManager25:update(dt)
@@ -1416,7 +1759,7 @@ end
 
 --- Draw one atlas region. renderOverlay takes x,y as the BOTTOM-LEFT corner.
 function FarmManager25:blit(uv, x, y, w, h, c, alpha)
-    setOverlayUVs(self.atlasId, unpack(GuiUtils.getUVs(uv, {FarmManager25.ATLAS_PX, FarmManager25.ATLAS_PX})))
+    setOverlayUVs(self.atlasId, unpack(GuiUtils.getUVs(uv, {FarmManager25.ATLAS_W, FarmManager25.ATLAS_H})))
     setOverlayColor(self.atlasId, c[1], c[2], c[3], (c[4] or 1) * alpha)
     renderOverlay(self.atlasId, x, y, w, h)
 end
@@ -1578,7 +1921,21 @@ function FarmManager25:drawCard(n, top, alpha)
     setTextAlignment(RenderText.ALIGN_LEFT)
     setTextBold(true)
     setTextColor(theme.text.title[1], theme.text.title[2], theme.text.title[3], alpha)
-    renderText(textX, y, self.titleSize, n.title)
+    -- The title is a single-line header (cardHeight budgets exactly one
+    -- titleSize -- see there), so it is truncated, not wrapped: an unclamped
+    -- title ran straight through the fixed-position timestamp and off the
+    -- card's right edge. Budget = the body's text column (cardW - 3*padX -
+    -- cardGlyphW, the linesFor textW) minus room for the right-aligned stamp
+    -- when present -- its rendered width plus a padX gutter -- so title and
+    -- stamp can never collide; no stamp -> the full column. (The stamp is
+    -- measured under the title's bold state, which over-reserves a hair versus
+    -- its non-bold render -- the safe direction: the title truncates a touch
+    -- sooner, never overlaps.) ellipsize reuses wrapText's measure-and-trim.
+    local titleW = self.cardW - self.cardGlyphW - self.padX * 3
+    if n.stamp ~= nil then
+        titleW = titleW - getTextWidth(self.timeSize, n.stamp) - self.padX
+    end
+    renderText(textX, y, self.titleSize, FarmManager25.ellipsize(n.title, self.titleSize, titleW))
 
     -- timestamp, right-aligned, in the family accent. Absent if the clock was
     -- unreadable -- better a card with no time than a card with an invented one.
@@ -1626,7 +1983,17 @@ function FarmManager25:drawBanner(top, alpha)
     self.headerRect = { x = x, y = top - self.bannerH, w = self.panelW, h = self.bannerH }
     -- Owner art: plate, leaf badge and title are baked into the texture, so
     -- this is a single blit -- no renderText, nothing to compose.
-    self:blit(FarmManager25.UV_BANNER, x, top - self.bannerH, self.panelW, self.bannerH,
+    -- Two packed sizes (task103-item14, BP-070 R4): with no mipmaps, detailed
+    -- colour art aliases past ~2x minification, so the atlas carries a
+    -- pre-downsampled small slot next to the full one. Pick the smallest slot
+    -- that still covers this frame's actual pixel width (panelW is normalized
+    -- against screen width) -- never upscaling, never over-minifying. Both
+    -- slots share the plate's aspect, so bannerH holds for either.
+    local uvB = FarmManager25.UV_BANNER
+    if self.panelW * (g_screenWidth or 1920) <= FarmManager25.UV_BANNER_SM[3] then
+        uvB = FarmManager25.UV_BANNER_SM
+    end
+    self:blit(uvB, x, top - self.bannerH, self.panelW, self.bannerH,
               theme.header.tint, alpha)
     return self.bannerH
 end
@@ -1689,7 +2056,6 @@ function FarmManager25:drawInputBar(top, alpha)
 end
 
 function FarmManager25:renderStack()
-    local theme = FarmManager25.THEME
     local top = self.panelTop
 
     -- OFF mode: the header is as visible as the most-visible card, so it
@@ -1705,40 +2071,98 @@ function FarmManager25:renderStack()
         self.headerRect = nil
         self.affordanceRects = nil
         self.inputBarRect = nil
+        self.panelRect = nil
+        self.scrollbarRect = nil
+        self.scrollThumbRect = nil
         return
     end
 
-    -- Measure first: the backdrop panel must be drawn BEHIND everything, so
-    -- its height -- banner + visible cards + reply bar -- is needed up front.
-    -- Card heights are re-derived in drawCard from the same helpers; the two
-    -- passes cannot disagree because they call the same functions.
+    -- The window is bounded by TWO budgets, and the smaller wins.
     --
-    -- FIT-WINDOW (S155, the LT-5 fix): walk NEWEST-first and keep only the
-    -- cards that fit between the panel top and the screen bottom. The old
-    -- code drew every live card; a tall stack pushed the oldest cards' (and
-    -- the reply bar's) geometry below y=0 -- drawn, invisible, and with
-    -- affordance rects that could never be clicked. Overflowed cards stay in
-    -- the store and are announced by a "+N more" line, whose height is
-    -- always reserved in the budget so showing it never causes the overflow
-    -- it reports.
+    -- screenBudget is the LT-5 guard, unchanged in intent: never draw a card
+    -- (or the reply bar) below the screen edge. Both overflow lines ("+N more"
+    -- older, "N newer" when scrolled) have their height reserved here so
+    -- showing one never causes the overflow it reports.
+    --
+    -- capBudget (S157) is the owner ask: cap the window at a FIXED ~4 cards'
+    -- worth of height, NOT "whatever is left down to the screen bottom". The
+    -- old code used screenBudget alone, so 8 modest cards legitimately filled
+    -- ~80% of the screen before the old single "+N more" ever engaged. The cap
+    -- is measured, not a hard count: a representative card is a 2-line body
+    -- plus the universal dismiss affordance row every card carries since LT-6
+    -- (a row-less baseline would over-estimate a real card and let ~5 show),
+    -- sized through the SAME cardHeight helper the real cards use so the two
+    -- can never drift.
     local moreH = self.timeSize + self.cardGap
-    local budget = top - (self.bannerH + self.pillGap + self.inputBarH
-                          + self.insetY + moreH + 0.01)
+    local screenBudget = top - (self.bannerH + self.pillGap + self.inputBarH
+                                + self.insetY + moreH * 2 + 0.01)
+    local sampleLines = { "", "" }
+    local avgCardH = self:cardHeight(sampleLines, self.interactiveOk and self.affordH or 0)
+    local capBudget = FarmManager25.DESIGN.maxVisibleCards * (avgCardH + self.cardGap)
+    local budget = math.min(screenBudget, capBudget)
+
+    -- Clamp the scroll offset to a FULL last page (total - the ACTUAL last-page
+    -- fit): scrolling only exists when more cards live than the window fits, and
+    -- the furthest scroll still fills the window from the oldest card. Written
+    -- back so a burst of wheel ticks past the end cannot accumulate forever.
+    local totalVisible = 0
+    for _, n in ipairs(self.stack) do
+        if FarmManager25.alphaOf(n) > 0 then
+            totalVisible = totalVisible + 1
+        end
+    end
+    -- The last page is measured, not counted: card heights vary and the window
+    -- is a height budget, not a fixed count, so fill `budget` from the OLDEST
+    -- card with the SAME rule the window loop below uses and take that count.
+    -- (Using maxVisibleCards here was the item-14 regression -- when the screen,
+    -- or a tall card, fits fewer than the cap, total - cap fell to 0, so the
+    -- offset clamped dead and the scrollbar never drew even though the fit-
+    -- derived "+N more" reported real overflow.) First-card-always-counts on
+    -- both sides, so the oldest-anchored fit and the newest-anchored window
+    -- agree for any height mix.
+    local lastPageFit = 0
+    local lastPageH = 0
+    for i = 1, #self.stack do
+        local n = self.stack[i]
+        if FarmManager25.alphaOf(n) > 0 then
+            local lines = self:linesFor(n)
+            local buttons = self:affordanceButtons(n)
+            local h = self:cardHeight(lines, buttons ~= nil and self.affordH or 0)
+            if lastPageFit > 0 and lastPageH + h + self.cardGap > budget then
+                break
+            end
+            lastPageFit = lastPageFit + 1
+            lastPageH = lastPageH + h + self.cardGap
+        end
+    end
+    local scrollMax = math.max(0, totalVisible - lastPageFit)
+    FarmManager25.scrollOffset = clamp(FarmManager25.scrollOffset, 0, scrollMax)
+    local offset = FarmManager25.scrollOffset
+
+    -- Walk NEWEST-first. Skip `offset` newest cards (scrolled past -> counted
+    -- as hiddenNewer), fill the budget from there toward older, and count
+    -- everything older than the window as hiddenOlder. The window is thus a
+    -- contiguous slice anchored `offset` cards back from the newest.
     local newestFirst = {}
-    local hidden = 0
     local cardsH = 0
+    local hiddenNewer = 0
+    local hiddenOlder = 0
+    local seen = 0
     for i = #self.stack, 1, -1 do
         local n = self.stack[i]
         local a = FarmManager25.alphaOf(n)
         if a > 0 then
-            if hidden > 0 then
-                hidden = hidden + 1   -- the window is contiguous from the newest
+            seen = seen + 1
+            if seen <= offset then
+                hiddenNewer = hiddenNewer + 1
+            elseif hiddenOlder > 0 then
+                hiddenOlder = hiddenOlder + 1   -- window already closed below
             else
                 local lines = self:linesFor(n)
                 local buttons = self:affordanceButtons(n)
                 local h = self:cardHeight(lines, buttons ~= nil and self.affordH or 0)
                 if #newestFirst > 0 and cardsH + h + self.cardGap > budget then
-                    hidden = 1
+                    hiddenOlder = 1
                 else
                     table.insert(newestFirst, { n = n, a = a })
                     cardsH = cardsH + h + self.cardGap
@@ -1750,17 +2174,13 @@ function FarmManager25:renderStack()
     for i = #newestFirst, 1, -1 do
         table.insert(visible, newestFirst[i])   -- back to oldest-first for drawing
     end
-    local panelH = self.bannerH + self.pillGap + (hidden > 0 and moreH or 0)
-                   + cardsH + self.inputBarH + self.insetY
 
-    -- Backdrop: olive edge ring, then the dark panel inset by the ring.
-    self:roundedRect(FarmManager25.UV_CARD_L, FarmManager25.UV_CARD_M, FarmManager25.UV_CARD_R,
-                     self.panelLeft, top - panelH, self.panelW, panelH,
-                     theme.panel.border, peak)
-    self:roundedRect(FarmManager25.UV_CARD_L, FarmManager25.UV_CARD_M, FarmManager25.UV_CARD_R,
-                     self.panelLeft + self.borderW, top - panelH + self.borderH,
-                     self.panelW - self.borderW * 2, panelH - self.borderH * 2,
-                     theme.panel.bg, peak)
+    -- No shared backdrop panel (S157): it reused the CARD 3-slice atlas
+    -- graphic -- baked for a card's ~56px height -- stretched to the panel's
+    -- whole (card-count-dependent) height, so its corner radius distorted at
+    -- heights far from the design. Every card, the banner and the reply bar
+    -- draw their own correctly-proportioned backgrounds, so nothing here
+    -- depended on it for grouping.
 
     -- Rebuilt from scratch every drawn frame -- a rect from a frame that no
     -- longer exists must not take a click.
@@ -1768,15 +2188,20 @@ function FarmManager25:renderStack()
 
     top = top - self:drawBanner(top, peak) - self.pillGap
 
-    -- The overflow line sits where the hidden (oldest) cards would begin.
-    if hidden > 0 then
+    -- The scroll viewport's top edge (just under the banner). The scrollbar
+    -- track spans from here down to the reply-bar top (viewBottom, below).
+    local viewTop = top
+
+    -- The older-overflow line sits where the hidden (oldest) cards would begin
+    -- -- at the top, above the visible slice.
+    if hiddenOlder > 0 then
         setTextAlignment(RenderText.ALIGN_RIGHT)
         setTextBold(false)
         local c = FarmManager25.DESIGN.timeColor
         setTextColor(c[1], c[2], c[3], peak)
-        renderText(self.panelLeft + self.panelW - self.insetX - self.padX,
+        renderText(self.panelLeft + self.insetX + self.cardW - self.padX,
                    top - self.timeSize, self.timeSize,
-                   string.format("+%d more", hidden))
+                   string.format("+%d more", hiddenOlder))
         setTextAlignment(RenderText.ALIGN_LEFT)
         top = top - moreH
     end
@@ -1787,8 +2212,75 @@ function FarmManager25:renderStack()
         top = top - self:drawCard(v.n, top, v.a) - self.cardGap
     end
 
+    -- The newer-overflow hint sits just above the reply bar (the newest cards
+    -- live at the bottom): a scroll-up has hidden newer cards below, and the
+    -- player can wheel back down to them.
+    if hiddenNewer > 0 then
+        setTextAlignment(RenderText.ALIGN_RIGHT)
+        setTextBold(false)
+        local c = FarmManager25.DESIGN.timeColor
+        setTextColor(c[1], c[2], c[3], peak)
+        renderText(self.panelLeft + self.insetX + self.cardW - self.padX,
+                   top - self.timeSize, self.timeSize,
+                   string.format("%d newer", hiddenNewer))
+        setTextAlignment(RenderText.ALIGN_LEFT)
+        top = top - moreH
+    end
+
+    -- The scroll viewport's bottom edge (the reply-bar top), captured before
+    -- the reply bar consumes `top`.
+    local viewBottom = top
+
     -- The reply bar closes the panel, fading with the stack in OFF mode.
     self:drawInputBar(top, peak)
+
+    -- The whole-panel bounds for the wheel-scroll hit-test (the headerRect
+    -- discipline): from the top anchor down to the reply bar's bottom, nil on
+    -- every path that does not draw. inputBarRect was just recorded by
+    -- drawInputBar, so its bottom is this frame's true panel floor.
+    self.panelRect = {
+        x = self.panelLeft,
+        y = self.inputBarRect.y,
+        w = self.panelW,
+        h = self.panelTop - self.inputBarRect.y,
+    }
+
+    -- Scrollbar (item 18): a click/drag affordance for the card window, drawn
+    -- only when there is something to scroll (scrollMax > 0). The track spans
+    -- the card viewport (banner bottom -> reply-bar top) at the panel's right
+    -- inset; the thumb's height is the visible fraction (on-screen cards /
+    -- total) and its Y maps the offset -- offset 0 (newest) parks the thumb at
+    -- the BOTTOM, by the reply bar, matching the newest-at-bottom card order.
+    -- Rides the button path in mouseEvent, so it scrolls with zero camera
+    -- movement (unlike the wheel). Same nil-on-every-undrawn-path discipline as
+    -- panelRect. scrollTravel/scrollRange hand the drag its render-time geometry.
+    if scrollMax > 0 and self.scrollBarW ~= nil and viewTop - viewBottom > 0 then
+        local d = FarmManager25.DESIGN
+        local trackH = viewTop - viewBottom
+        local trackX = self.panelLeft + self.panelW - self.insetX - self.scrollBarW
+        local frac = #visible / totalVisible
+        if frac > 1 then frac = 1 end
+        local thumbH = math.max(self.scrollThumbMinH, trackH * frac)
+        if thumbH > trackH then thumbH = trackH end
+        local travel = trackH - thumbH
+        local thumbY = viewBottom + (offset / scrollMax) * travel
+        self:blit(FarmManager25.UV_CARD_M, trackX, viewBottom, self.scrollBarW, trackH,
+                  d.scrollTrackColor, peak)
+        self:blit(FarmManager25.UV_CARD_M, trackX, thumbY, self.scrollBarW, thumbH,
+                  d.scrollThumbColor, peak)
+        -- Hit rects are WIDER than the 4px visual track (BP-070: 12-16 ref-px
+        -- minimum click target), centred on it. The extra width lands in the
+        -- reserved gap and the panel inset -- never over card content. The
+        -- drag math reads only y/h, so widening x/w is safe.
+        local hitPad = (self.scrollHitW - self.scrollBarW) * 0.5
+        self.scrollbarRect   = { x = trackX - hitPad, y = viewBottom, w = self.scrollHitW, h = trackH }
+        self.scrollThumbRect = { x = trackX - hitPad, y = thumbY, w = self.scrollHitW, h = thumbH }
+        self.scrollTravel    = travel
+        self.scrollRange     = scrollMax
+    else
+        self.scrollbarRect   = nil
+        self.scrollThumbRect = nil
+    end
 
     -- Leave global text state as we found it: FS renders text globally and a
     -- leaked colour/bold/alignment would tint every HUD drawn after us this frame.
@@ -1819,6 +2311,9 @@ function FarmManager25:draw()
         self.headerRect = nil
         self.affordanceRects = nil
         self.inputBarRect = nil
+        self.panelRect = nil
+        self.scrollbarRect = nil
+        self.scrollThumbRect = nil
         return
     end
 
@@ -1832,6 +2327,9 @@ function FarmManager25:draw()
         self.headerRect    = nil
         self.affordanceRects = nil
         self.inputBarRect  = nil
+        self.panelRect     = nil
+        self.scrollbarRect = nil
+        self.scrollThumbRect = nil
         setTextBold(false)
         setTextColor(1, 1, 1, 1)
         setTextAlignment(RenderText.ALIGN_LEFT)
@@ -1978,12 +2476,69 @@ end
 
 function FarmManager25:mouseEvent(posX, posY, isDown, isUp, button)
     local ok, err = pcall(function()
+        -- Mouse-wheel scroll of the card window (S157 owner ask): reveal older
+        -- cards when more exist than the capped window shows. GIANTS delivers
+        -- the wheel to mouseEvent as a button tick -- Input.MOUSE_BUTTON_WHEEL_
+        -- UP/_DOWN, isDown on the tick. Gated exactly like a click: only while
+        -- the ENGINE cursor is up and only over the panel. On foot the wheel
+        -- ALSO zooms the camera now -- item 11's suppression lock was removed so
+        -- the wheel reaches us again (BP-067; the owner accepts that movement,
+        -- and the click/drag scrollbar is the zero-movement alternative).
+        -- Nil-tolerant on Input and panelRect: with either absent the
+        -- wheel falls straight through to the game, untouched. Wheel up scrolls
+        -- toward OLDER history (offset up); the frame clamps the offset.
+        if isDown and Input ~= nil and self.panelRect ~= nil
+                and self:cursorIsShown()
+                and not (g_gui ~= nil and g_gui:getIsGuiVisible()) then
+            local r = self.panelRect
+            if posX >= r.x and posX <= r.x + r.w
+                    and posY >= r.y and posY <= r.y + r.h then
+                if button == Input.MOUSE_BUTTON_WHEEL_UP then
+                    FarmManager25.scrollOffset = FarmManager25.scrollOffset + 1
+                    return
+                elseif button == Input.MOUSE_BUTTON_WHEEL_DOWN then
+                    FarmManager25.scrollOffset = math.max(0, FarmManager25.scrollOffset - 1)
+                    return
+                end
+            end
+        end
+        -- Scrollbar drag (item 18): a click/drag on the thumb scrolls the card
+        -- window with ZERO camera movement -- button events are not contested by
+        -- the on-foot camera (unlike the wheel), so this path works whether or
+        -- not the cursor is also swinging the view. A drag in flight owns every
+        -- event until release: map the thumb's Y back to a scroll offset
+        -- (renderStack re-clamps to a full last page and redraws the thumb from
+        -- it next frame). Same gate as a click on the way IN (cursor up, no menu
+        -- owning the screen, a thumb drawn this frame).
+        if self.scrollDrag ~= nil then
+            if isUp and button == 1 then
+                self.scrollDrag = nil
+            elseif self.scrollbarRect ~= nil and self.scrollTravel > 0 then
+                local sb = self.scrollbarRect
+                local newY = clamp(posY - self.scrollDrag.grab, sb.y, sb.y + self.scrollTravel)
+                local frac = (newY - sb.y) / self.scrollTravel
+                FarmManager25.scrollOffset = clamp(math.floor(frac * self.scrollRange + 0.5),
+                                                   0, self.scrollRange)
+            end
+            return
+        end
+        if isDown and button == 1 and self:cursorIsShown()
+                and not (g_gui ~= nil and g_gui:getIsGuiVisible())
+                and self.scrollThumbRect ~= nil then
+            local t = self.scrollThumbRect
+            if posX >= t.x and posX <= t.x + t.w
+                    and posY >= t.y and posY <= t.y + t.h then
+                self.scrollDrag = { grab = posY - t.y }
+                return
+            end
+        end
         -- THE DESIGN (S153 live-test rework): click-gating READS the shared
-        -- engine cursor -- raised by AutoDrive's MMB, Courseplay's RMB, or
-        -- any cursor mod -- because the ecosystem contract is "any cursor up
-        -- => every mod's HUD is clickable" (AutoDrive.lua:596-601; AD
-        -- watches foreign cursor changes at Specialization.lua:405). This
-        -- mod never writes that state; nothing here arms or latches. The GUI
+        -- engine cursor -- raised by AutoDrive's MMB, Courseplay's RMB, this
+        -- mod's own Ctrl+Comma toggle, or any cursor mod -- because the
+        -- ecosystem contract is "any cursor up => every mod's HUD is
+        -- clickable" (AutoDrive.lua:596-601; AD watches foreign cursor changes
+        -- at Specialization.lua:405). The click path never writes that state
+        -- (only FM25_TOGGLE_CURSOR does); nothing here arms or latches. The GUI
         -- guard stays: a menu that owns the screen must not let a stray
         -- click under it answer a card. The reply bar (LT-4) shares the
         -- exact gate chain -- affordances win when both could hit.

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="107">
     <author>Parzival</author>
-    <version>2.2.1.0</version>
+    <version>2.2.3.0</version>
 
     <title>
         <en>AI Farm Manager 25</en>
@@ -16,9 +16,11 @@ If the panel cannot be drawn for any reason, the mod falls back to the game's ow
 
 Nothing else is touched: no gameplay system is modified and the game's save files are never written. Client-side only, safe for singleplayer and multiplayer.
 
-The panel has two modes, toggled with Ctrl+Period (rebindable in Controls as "AI Farm Manager: show/hide overlay panel"). ON, the default, keeps the panel on screen: header, cards and reply bar stay up and cards wait until you answer or dismiss them. OFF turns it back into a transient notifier where each card fades out on its own. Unanswered cards are kept either way - they return when the panel comes back on, even after a restart.
+The panel has two modes, toggled with Ctrl+Period (rebindable in Controls as "AIFM: toggle panel"). ON, the default, keeps the panel on screen: header, cards and reply bar stay up and cards wait until you answer or dismiss them. OFF turns it back into a transient notifier where each card fades out on its own. Unanswered cards are kept either way - they return when the panel comes back on, even after a restart.
 
-Cards that offer actions show clickable buttons (acknowledge, yes/no, dismiss). Bring up the mouse cursor the way you already do for other mods (for example AutoDrive's middle mouse button or Courseplay's right mouse button) and click. The reply bar at the panel's bottom opens a text box for a free-text message. Your answers are written to modSettings/FS25_AIFarmManager25/replies.xml for the Farm Manager process to read. Without a cursor on screen the mod is a passive notifier.
+Cards that offer actions show clickable buttons (acknowledge, yes/no, dismiss). Bring up the mouse cursor with Ctrl+Comma (rebindable in Controls as "AIFM: toggle cursor") - this works on foot or in a vehicle - then click, drag or scroll the panel. On foot, raising the cursor this way also holds the camera steady, so the mouse moves over the panel instead of turning your view; press again to lower the cursor and walk. (If the cursor is already up another way, for example AutoDrive's middle mouse button or Courseplay's right mouse button, that works too.) The reply bar at the panel's bottom opens a text box for a free-text message. Your answers are written to modSettings/FS25_AIFarmManager25/replies.xml for the Farm Manager process to read. Without a cursor on screen the mod is a passive notifier.
+
+A settings page opens with Ctrl+Alt+Period (rebindable in Controls as "AIFM: settings"), on foot or in a vehicle: it toggles the panel on or off, changes its size, resets its position, and sets how long messages linger in OFF mode.
 
 The bridge is modSettings/FS25_AIFarmManager25/notify.xml. Optional: modSettings/FS25_AIFarmManager25/settings.xml overrides the panel's position, width, text size and background opacity.]]></en>
     </description>
@@ -33,26 +35,70 @@ The bridge is modSettings/FS25_AIFarmManager25/notify.xml. Optional: modSettings
              the renderer extends it). -->
         <sourceFile filename="FarmManagerTheme.lua" />
         <sourceFile filename="FarmManager25.lua" />
+        <!-- The g_gui settings dialog (S158). Loads after the renderer; it is
+             engine-only and self-guards (headless / no DialogElement -> no-op),
+             and its GUI XML profiles under gui/ are loaded at runtime via
+             g_gui:loadProfiles/loadGui, not declared here. -->
+        <sourceFile filename="FarmManagerSettingsGui.lua" />
     </extraSourceFiles>
 
-    <!-- The overlay mode toggle (S155 rework): flips the panel between
-         persistent (default) and transient. Clicks route off the ENGINE's
-         shared cursor state, which this mod only ever reads: raise the
-         cursor with whatever you already use (AutoDrive MMB, Courseplay
-         RMB). Default key from the O4 collision scan (2026-07-19): the live
+    <!-- Two GLOBAL keybinds, both rebindable in Controls.
+
+         FM25_TOGGLE_OVERLAY (Ctrl+Period, unchanged since the S155 rework):
+         flips the panel between persistent (default) and transient. Its
+         default was cleared by the O4 collision scan (2026-07-19): the live
          merged inputBinding.xml + every installed mod's modDesc verified
-         free of KEY_lctrl KEY_period (bare KEY_period is PUSH_TO_TALK). -->
+         free of KEY_lctrl KEY_period (bare KEY_period is PUSH_TO_TALK).
+
+         FM25_TOGGLE_CURSOR (Ctrl+Comma, added S157): raises/lowers the
+         ENGINE's shared mouse cursor so the overlay is clickable ON FOOT.
+         The S155 note here used to say "raise the cursor with whatever you
+         already use (AutoDrive MMB, Courseplay RMB)"; the owner's on-foot
+         playtest proved that wrong: AD's MMB and CP's RMB are vehicle-context
+         bindings, so with no vehicle there was NO way to raise the cursor and
+         the overlay was unusable. This mod now owns a cursor key of its own,
+         usable on foot or in a vehicle; click-gating still only READS the
+         shared state. Default cleared by the SAME scan method as O4, against
+         the same live merged inputBinding.xml (2026-07-21): KEY_lctrl
+         KEY_comma has zero bindings anywhere in the KEY_lctrl family (bare
+         KEY_comma is a base-game action, a DISTINCT binding from the
+         Ctrl-modified combo; the same bare-vs-modified split O4 relied on
+         for KEY_period). Ctrl+Comma is the physical neighbour of Ctrl+Period:
+         sibling keys for sibling actions. -->
+    <!-- FM25_TOGGLE_SETTINGS (Ctrl+Alt+Period, added S158): opens the g_gui
+         settings dialog (panel on/off, size, reset position, OFF-mode linger).
+         Works on foot or in a vehicle (a modal GUI, no camera concern). This
+         was the plan's paper-reserved SETTINGS default (Ctrl+lalt+.); the
+         triple-modifier combo has no base-game binding (bare KEY_period is
+         PUSH_TO_TALK, a DISTINCT binding from the Ctrl+Alt combo, the same
+         bare-vs-modified split O4/S157 relied on). Definitive collision check
+         is the owner's live merged inputBinding.xml, confirmed in the S158
+         live test as with every prior default. -->
     <actions>
         <action name="FM25_TOGGLE_OVERLAY" category="GLOBAL" axisType="HALF" />
+        <action name="FM25_TOGGLE_CURSOR" category="GLOBAL" axisType="HALF" />
+        <action name="FM25_TOGGLE_SETTINGS" category="GLOBAL" axisType="HALF" />
     </actions>
     <inputBinding>
         <actionBinding action="FM25_TOGGLE_OVERLAY">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_period" />
         </actionBinding>
+        <actionBinding action="FM25_TOGGLE_CURSOR">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_comma" />
+        </actionBinding>
+        <actionBinding action="FM25_TOGGLE_SETTINGS">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_period" />
+        </actionBinding>
     </inputBinding>
     <l10n>
         <text name="input_FM25_TOGGLE_OVERLAY">
-            <en>AI Farm Manager: show/hide overlay panel</en>
+            <en>AIFM: toggle panel</en>
+        </text>
+        <text name="input_FM25_TOGGLE_CURSOR">
+            <en>AIFM: toggle cursor</en>
+        </text>
+        <text name="input_FM25_TOGGLE_SETTINGS">
+            <en>AIFM: settings</en>
         </text>
     </l10n>
 </modDesc>

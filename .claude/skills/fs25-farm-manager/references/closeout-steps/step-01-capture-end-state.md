@@ -6,7 +6,7 @@ nextStepFile: './step-02-write-closeout.md'
 
 # Step 1: Capture the end state
 
-**Progress: Step 1 of 7** — Next: Write the closeout
+**Progress: Step 1 of 8** — Next: Write the closeout
 
 **Capture the end state:**
 ```bash
