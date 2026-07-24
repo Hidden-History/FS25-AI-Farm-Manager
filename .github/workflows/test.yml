@@ -1,0 +1,29 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Public smoke — byte-compile every shipped .py
+        # Syntax-only gate: py_compile parses/compiles each module without
+        # executing it, so no private data, save files, or optional runtime
+        # deps are needed. Fails the job on any SyntaxError.
+        run: |
+          find . -name '*.py' -print0 | xargs -0 -r python -m py_compile
+          echo "All shipped Python compiled cleanly."

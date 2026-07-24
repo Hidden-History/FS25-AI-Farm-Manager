@@ -1,0 +1,70 @@
+name: 🐛 Bug report
+description: Report something that isn't working in the skill or the in-game mod.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please search
+        [existing issues](../issues) first to avoid duplicates.
+
+        **Do not report security vulnerabilities here** — see our
+        [security policy](../security/policy) instead.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Which part of the project is involved?
+      options:
+        - "mod (in-game Lua notification cards)"
+        - "skill (Claude Code save reader / advisor)"
+        - "docs"
+        - "not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: When I ..., the mod/skill ... but I expected ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Load save '...'
+        2. Run '...'
+        3. See error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Which release or commit are you on?
+      placeholder: "e.g. v1.2.0 or commit abc1234"
+    validations:
+      required: true
+  - type: input
+    id: fs25-version
+    attributes:
+      label: Farming Simulator 25 version
+      description: The FS25 game version, if relevant.
+      placeholder: "e.g. 1.5.x"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: |
+        Paste any relevant log output or screenshots. **Do not include private
+        save data, credentials, personal information, or local machine paths.**
+      render: shell
+    validations:
+      required: false

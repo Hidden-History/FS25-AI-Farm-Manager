@@ -1,0 +1,40 @@
+name: ❓ Question
+description: Ask about using or setting up the skill or the in-game mod.
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a usage or setup question? Please check the
+        [README](../blob/main/README.md) and
+        [existing issues](../issues) first.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Related area
+      description: Which part is your question about?
+      options:
+        - "mod (in-game Lua notification cards)"
+        - "skill (Claude Code save reader / advisor)"
+        - "docs"
+        - "not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What would you like to know?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What have you tried?
+      description: |
+        Steps you've already taken, and any relevant details. **Do not include
+        private save data, credentials, personal information, or local machine
+        paths.**
+    validations:
+      required: false
