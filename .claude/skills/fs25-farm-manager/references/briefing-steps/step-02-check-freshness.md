@@ -36,8 +36,8 @@ nothing is lost, then advances the marker. Read the JSON:
   **lost**. Most errors (`SchemaVersionError`, `MigrationError`, corrupt config) fail loud
   *before* any write, so the sanctum is untouched; a `ConservationError` can fire mid-apply after
   a partial write, but the pre-migration backup holds the original and the migration is
-  **resumable** (it completes or rolls back on the next briefing). **Degrade gracefully: do NOT
-  abort the briefing.** Surface the error to the player in one line — e.g. _"Heads-up: couldn't
+  **resumable** (it completes or rolls back on the next briefing). **Degrade gracefully:
+  do NOT abort the briefing.** Surface the error to the player in one line — e.g. _"Heads-up: couldn't
   finish auto-migrating the sanctum (`<the error text>`); nothing was lost — anything partly
   changed is backed up and will sort itself on the next run. Continuing the briefing; we can look
   at the migration separately."_ Then continue with the rest of session start. A corrupt config

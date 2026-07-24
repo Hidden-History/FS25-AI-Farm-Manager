@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<careerSavegame>
+    <!--
+      EVAL FIXTURE - NOT A REAL SAVEGAME.
+      Synthetic, checked-in, deliberately tiny. It exists so evals/sanctum/config.json
+      can point `savegame_path` at a path that EXISTS: a config pointing at a missing
+      save is read as a broken binding, and the manager correctly self-heals by running
+      locate_save.py, which globs /mnt/*/Users/*/... and finds the operator's REAL save.
+      That is right in the live game and wrong in an eval (F-EVAL-1: real financials were
+      pulled into eval artifacts, and the runs stopped being deterministic).
+      Every number here is invented. The cases never depend on them - each case's
+      state_prefix supplies the parser output the manager is meant to reason over.
+    -->
+    <settings>
+        <savegameName>Test Hollow (eval fixture)</savegameName>
+        <creationDate>2026-01-01</creationDate>
+        <mapId>MapUS</mapId>
+        <mapTitle>Riverbend Springs</mapTitle>
+        <saveDateFormatted>2026-01-05</saveDateFormatted>
+        <timeScale>1.000000</timeScale>
+        <autoSaveInterval>900.000000</autoSaveInterval>
+        <difficulty>2</difficulty>
+        <economicDifficulty>2</economicDifficulty>
+        <dirtInterval>2</dirtInterval>
+        <plannedDaysPerPeriod>1</plannedDaysPerPeriod>
+        <fruitDestruction>true</fruitDestruction>
+        <plantDestruction>true</plantDestruction>
+        <growthMode>1</growthMode>
+    </settings>
+    <statistics>
+        <money>125000.000000</money>
+        <playTime>420.000000</playTime>
+        <traveledDistance>1200.000000</traveledDistance>
+        <fuelUsage>340.000000</fuelUsage>
+        <seedUsage>180.000000</seedUsage>
+        <workedHectares>46.000000</workedHectares>
+        <revenue>88000.000000</revenue>
+        <expenses>61000.000000</expenses>
+    </statistics>
+</careerSavegame>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!--
+  EVAL FIXTURE - NOT A REAL SAVEGAME. See careerSavegame.xml in this directory for why
+  this fixture exists (F-EVAL-1). farmId 1 / "Test Hollow" matches evals/sanctum/config.json
+  so the manager's farm binding resolves against the fixture instead of hunting the host.
+-->
+<farms>
+    <farm farmId="1" name="Test Hollow" color="1" money="125000.000000" loan="0.000000">
+        <players>
+            <player uniqueUserId="eval-fixture-player" farmManager="true" />
+        </players>
+    </farm>
+</farms>
