@@ -1,11 +1,13 @@
 {
   "farm_name": "Test Hollow",
   "farm_id": 1,
-  "savegame_path": "/nonexistent/eval/savegame1",
+  "savegame_path": "fixture/savegame1",
   "session_count": 5,
   "paths": {
     "install_dir": "/nonexistent/eval/install",
     "mods_dir": "/nonexistent/eval/mods"
   },
-  "notifications": { "available": false }
+  "notifications": { "available": false },
+  "eval_fixture": true,
+  "eval_fixture_note": "Offline eval fixture, not a live farm. savegame_path is relative to the case working directory and resolves to the checked-in synthetic save staged alongside this file; it exists so this binding is never read as broken. This machine has no live FS25 save and no game install: do not search the filesystem for one, and do not treat the missing install_dir/mods_dir as a config defect to self-heal. Every fact these cases need is supplied in the prompt."
 }

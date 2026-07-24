@@ -4,6 +4,24 @@ All notable changes to AI Farm Manager are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4.0] - 2026-07-24
+
+_Maintenance release — internal quality and documentation. No gameplay changes._
+
+### Security
+
+- Hardened the pre-publish privacy gate that scans every shipped file for absolute paths
+  and personal data before a release. Closed several path-matching gaps so developer-machine
+  paths (including drive-rooted `mods` folders and WSL/UNC paths) can no longer slip into a
+  public build, while keeping legitimate documentation placeholders exempt.
+
+### Changed
+
+- Eval-harness hardening: the release-quality checks now exercise the real privacy scanner
+  end-to-end, with expanded corpus coverage, so a passing check reflects the mechanism it
+  guards rather than a stand-in.
+- Documentation touch-ups (README, briefing-freshness step).
+
 ## [2.2.3.0] - 2026-07-23
 
 ### Added
