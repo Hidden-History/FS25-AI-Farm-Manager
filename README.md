@@ -2,6 +2,10 @@
 
 # FS25 Farm Manager
 
+[![test](https://github.com/Hidden-History/FS25-AI-Farm-Manager/actions/workflows/test.yml/badge.svg)](https://github.com/Hidden-History/FS25-AI-Farm-Manager/actions/workflows/test.yml)
+[![lint](https://github.com/Hidden-History/FS25-AI-Farm-Manager/actions/workflows/lint.yml/badge.svg)](https://github.com/Hidden-History/FS25-AI-Farm-Manager/actions/workflows/lint.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An AI farm manager for **one** Farming Simulator 25 savegame. It reads your save, remembers
 your farm across sessions, and — with the mod installed — becomes an always-on companion
 (it introduces itself as **Cyrus**) that puts messages on your screen while you play **and
