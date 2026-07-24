@@ -81,9 +81,8 @@ restart. It touches nothing else — never your savegame.
 
 ### 3. Set up your farm
 
-Start Claude Code in your farm folder and say:
-
-> set up my farm manager
+Start Claude Code in your farm folder and say **"set up my farm manager"** — or type
+`/fs25-farm-manager`:
 
 It will find your savegame, ask you a handful of questions about how you want to play, and
 write your farm's memory into a `sanctum/` folder. That takes a few minutes and happens once.
@@ -94,9 +93,10 @@ Just talk to it — or use a slash command.
 
 | Say | Or type | You get |
 |---|---|---|
+| "set up / start my farm manager" | `/fs25-farm-manager` | Onboards a new farm, or resumes managing an existing one |
 | "briefing" | `/farm-briefing` | What changed since last time, and what's worth doing today |
 | "status" | `/farm-status` | A quick look at the save. Writes nothing |
-| "close out" | `/farm-closeout` | Writes the session up so the next one starts informed |
+| "close out" | `/farm-closeout` | Writes up and saves the session so the next one starts informed |
 | "what should I buy?" | | Seed/fertilizer timing, gear you don't own, the used market — with prices |
 | "what's oat worth?" | | Prices, and when they peak |
 
