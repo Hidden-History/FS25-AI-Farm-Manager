@@ -4,12 +4,15 @@ You can put a message on the player's screen **while they're playing**, via the 
 Manager 25 mod. This file is about *when that's justified*.
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/notify_farm_manager.py" \
+python3 ".claude/skills/fs25-farm-manager/scripts/notify_farm_manager.py" \
     -s warn -t Market -i finances "Oat is at its annual low: \$431/1000L, peaks \$644 on day 11."
 ```
 
 `-s` `ok`|`info`|`warn`|`critical` sets the accent colour · `-t` the card title · `-i` the
-glyph (`--help` lists all 31) · exit `0` delivered, `2` not consumed, `1` error.
+glyph (`--help` lists all 31) · exit `0` delivered, `2` not consumed, `1` error. **A `2` with
+EMPTY stdout is an argument error, not a delivery failure** — argparse itself exits `2` on a
+bad flag, straight to stderr, before any message is ever written to the bridge. Read stdout
+before mapping the code.
 
 **Requires the mod.** If it is not installed and enabled you get exit `2` every time. The
 script prints what it observed; pass that on rather than guessing.

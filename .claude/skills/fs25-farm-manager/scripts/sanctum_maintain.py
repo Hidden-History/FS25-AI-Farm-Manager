@@ -8,7 +8,9 @@ Three subcommands, built to the CP0-locked contract
              UNVERIFIABLE. Caps are measured CONTENT-only (the leading YAML
              frontmatter block is stripped first, per schema Section 1). config.json is
              special-cased against its required-keys list (schema Section 2) instead of
-             frontmatter.
+             frontmatter. A cap is a RECOMMENDATION, not a limit (DEC-105): an over-cap
+             file stays FRESH/UNVERIFIABLE and carries a `warning` instead of STALE. The
+             farm's own config.json `"cap_overrides"` replaces the shipped number.
 
   reconcile  Migrate an old-version farm to the current templates: relocate the
              pre-D4 FLAT layout (content .md at the sanctum root) into the tiered
@@ -295,6 +297,10 @@ def _safe_move(src, dst, new_text, src_digest):
 # exists) -- its absence is UNVERIFIABLE/N-A, never STALE.
 CONFIG_REQUIRED_KEYS = ["savegame_path", "farm_id", "paths"]
 CONFIG_CONDITIONAL_KEY = "interest_rate_annual"
+# config.json carries no frontmatter (it's JSON, not a templated .md), so its size
+# recommendation is this constant rather than a `cap_kb:` frontmatter field -- overridable
+# the same way every other file's cap is, via config.json's own "cap_overrides" (DEC-105).
+CONFIG_CAP_KB = 8
 
 # Files that legitimately carry NO frontmatter (schema Section 3) -- excluded from the gate.
 NO_FRONTMATTER_FILES = {
@@ -318,6 +324,128 @@ def _is_dir_marker_readme(path):
         os.path.basename(os.path.dirname(path)) in DIR_MARKER_PARENTS
 
 
+# ---- DEC-105: caps are a RECOMMENDATION, not a limit --------------------------------- #
+# ① no cap ever blocks (a STALE verdict) or forces manual rotation (an "agent-rotation"
+#   action) by itself -- being over cap changes NEITHER. ② an over-cap file ALWAYS carries a
+#   `warning` naming the real cost (token/context budget) and what to do about it -- every
+#   run it stays over, not once on crossing. ③ the farm's own number, recorded in
+#   config.json's "cap_overrides", replaces the shipped recommendation everywhere a cap is
+#   read from (both the warning threshold and any auto-rotation trigger keyed on it).
+
+def _validate_override_int(basename, field, raw, shipped):
+    """Validate ONE cap_overrides.<basename>.<field> value the player wrote. Returns
+    (usable_value_or_None, issue_or_None). A value that is not a whole number (bool is
+    REJECTED too -- `isinstance(True, int)` is True in Python, so `cap_lines: true` would
+    otherwise silently become 1) or that is zero/negative (a cap of zero or less is not a
+    cap) is UNUSABLE: fall back to `shipped`, but the issue string names the file, the
+    field, what was written, why it couldn't be used, and the value used instead -- an
+    override that silently vanishes reproduces AI-060 / RSK-001 (absence rendered as data)
+    inside the very mechanism DEC-105 part 3 built to replace hard caps."""
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None, (f'cap_overrides."{basename}".{field} was {raw!r}; expected a whole '
+                      f'number. Using the shipped {shipped}.')
+    if raw <= 0:
+        return None, (f'cap_overrides."{basename}".{field} was {raw}; a cap of zero or '
+                      f'less is not a cap. Using the shipped {shipped}.')
+    return raw, None
+
+
+def _parse_cap_overrides(data):
+    """(overrides_dict, whole_key_issue) from an already-parsed config.json `data`.
+    `overrides_dict` is config.json's "cap_overrides" map when it IS one; `whole_key_issue`
+    is a player-facing reason string when "cap_overrides" is PRESENT but not an object at
+    all (every file's override is unusable in that case, not just one -- still never
+    silent). Absent key or a `data` that isn't even a dict -> ({}, None): no override was
+    attempted, which is not malformed."""
+    overrides = data.get("cap_overrides") if isinstance(data, dict) else None
+    if overrides is None:
+        return {}, None
+    if not isinstance(overrides, dict):
+        return {}, (f'"cap_overrides" was {overrides!r}; expected an object mapping '
+                    f'filenames to their own cap_lines/cap_kb. No overrides applied -- '
+                    f'using shipped defaults.')
+    return overrides, None
+
+
+def _cap_overrides(sanctum_dir):
+    """(overrides_dict, whole_key_issue) read fresh from the sanctum's config.json. See
+    _parse_cap_overrides. Unreadable/unparseable config.json -> ({}, None) -- never an
+    error here; config.json's OWN validity is _check_config_json's job, not this helper's."""
+    try:
+        data = json.loads(_read(_sanctum_config_path(sanctum_dir)).decode("utf-8"))
+    except (OSError, ValueError):
+        return {}, None
+    return _parse_cap_overrides(data)
+
+
+def _cap_override_for(basename, overrides, shipped_values):
+    """Apply one file's entry (if any) from an already-resolved `overrides` dict.
+    `shipped_values` is {field: shipped_value} for exactly the fields relevant to this file
+    (e.g. {"cap_lines": .., "cap_kb": ..} for a template; {"cap_kb": ..} only for
+    config.json, which has no cap_lines concept). Returns (applied: dict of field->value
+    actually adopted, issues: list[str]) -- `applied` omits any field that was absent or
+    unusable, so the caller's shipped default stays in force for it."""
+    entry = overrides.get(basename)
+    if entry is None:
+        return {}, []
+    if not isinstance(entry, dict):
+        fields = "/".join(f'"{f}"' for f in shipped_values)
+        return {}, [f'cap_overrides."{basename}" was {entry!r}; expected an object with '
+                    f'{fields}. Using the shipped default(s).']
+    applied, issues = {}, []
+    for field, shipped in shipped_values.items():
+        if field not in entry:
+            continue
+        value, issue = _validate_override_int(basename, field, entry[field], shipped)
+        if issue:
+            issues.append(issue)
+        else:
+            applied[field] = value
+    return applied, issues
+
+
+def _effective_caps(meta, sanctum_dir, basename):
+    """(cap_lines, cap_kb, override_issues) after applying the farm's own config.json
+    override, if any and if usable, over the shipped template recommendation (DEC-105 part
+    3). `override_issues` is non-empty whenever the farm's config.json declared SOMETHING
+    for this file that could not be used -- the caller must surface it, not drop it."""
+    cap_lines, cap_kb = meta.get("cap_lines"), meta.get("cap_kb")
+    overrides, whole_issue = _cap_overrides(sanctum_dir)
+    applied, entry_issues = _cap_override_for(
+        basename, overrides, {"cap_lines": cap_lines, "cap_kb": cap_kb})
+    issues = ([whole_issue] if whole_issue else []) + entry_issues
+    cap_lines = applied.get("cap_lines", cap_lines)
+    cap_kb = applied.get("cap_kb", cap_kb)
+    return cap_lines, cap_kb, issues
+
+
+def _over_cap_detail(cap_lines, cap_kb, body):
+    """(over_cap: bool, notes: list[str]) against explicit (already-overridden) cap
+    values -- content-only (frontmatter stripped), per schema Section 1."""
+    lines = _content_line_count(body)
+    nbytes = len(body.encode("utf-8"))
+    notes = []
+    if isinstance(cap_lines, int) and lines > cap_lines:
+        notes.append(f"content {lines} lines > cap_lines {cap_lines}")
+    if isinstance(cap_kb, int) and nbytes > cap_kb * KB:
+        notes.append(f"content {nbytes} B > cap_kb {cap_kb} ({cap_kb * KB} B)")
+    return bool(notes), notes
+
+
+def _cap_warning(basename, notes):
+    """DEC-105 part 2: ALWAYS warn while over -- never once-on-crossing. Names the real
+    cost and what the player can do about it."""
+    return (
+        f"{basename} is over its recommended size ({'; '.join(notes)}). This is a "
+        "recommendation, not a limit -- nothing is blocked. Cost: this file is read in "
+        "full every session, so being oversized spends more of that session's "
+        "token/context budget before real work starts. To stop this warning: rotate the "
+        "file (its own '## Rotation' section, where it has one), or if this size genuinely "
+        f"suits this farm, set config.json's \"cap_overrides\".\"{basename}\" to the size "
+        "you want."
+    )
+
+
 def _check_config_json(path):
     try:
         data = json.loads(_read(path).decode("utf-8"))
@@ -327,19 +455,32 @@ def _check_config_json(path):
     if missing:
         return {"file": path, "verdict": STALE,
                 "reason": f"missing always-required key(s): {', '.join(missing)}"}
-    # config.json cap_kb 8 (schema Section 2) -- JSON, measured whole (L-A).
+    # config.json cap_kb (schema Section 2) -- JSON, measured whole (L-A). DEC-105: a
+    # recommendation that warns, never blocks; the farm's own "cap_overrides" (if any and
+    # if usable) replaces the shipped default -- a malformed one falls back but is never
+    # silent (see _validate_override_int).
+    overrides, whole_issue = _parse_cap_overrides(data)
+    applied, entry_issues = _cap_override_for("config.json", overrides, {"cap_kb": CONFIG_CAP_KB})
+    override_issues = ([whole_issue] if whole_issue else []) + entry_issues
+    cap_kb = applied.get("cap_kb", CONFIG_CAP_KB)
     nbytes = len(_read(path))
-    if nbytes > 8 * KB:
-        return {"file": path, "verdict": STALE,
-                "reason": f"over cap: {nbytes} B > cap_kb 8 ({8 * KB} B)"}
+    over_cap = nbytes > cap_kb * KB
     if CONFIG_CONDITIONAL_KEY not in data:
         # No-loan farm (or rate unknown): cannot verify the conditional key -> not FRESH,
         # but explicitly NOT a defect. UNVERIFIABLE / N-A per schema Section 2.
-        return {"file": path, "verdict": UNVERIFIABLE,
-                "reason": f"{CONFIG_CONDITIONAL_KEY} absent -- N/A for a no-loan farm "
-                          "(conditionally required only once a loan's rate is known)",
-                "not_a_defect": True}
-    return {"file": path, "verdict": FRESH, "reason": "all required keys present"}
+        result = {"file": path, "verdict": UNVERIFIABLE,
+                  "reason": f"{CONFIG_CONDITIONAL_KEY} absent -- N/A for a no-loan farm "
+                            "(conditionally required only once a loan's rate is known)",
+                  "not_a_defect": True}
+    else:
+        result = {"file": path, "verdict": FRESH, "reason": "all required keys present"}
+    result["over_cap"] = over_cap
+    if over_cap:
+        result["warning"] = _cap_warning(
+            "config.json", [f"{nbytes} B > cap_kb {cap_kb} ({cap_kb * KB} B)"])
+    if override_issues:
+        result["cap_override_issue"] = "; ".join(override_issues)
+    return result
 
 
 def check_file(path):
@@ -361,19 +502,13 @@ def check_file(path):
 
     meta = _parse_frontmatter(fm_inner)
 
-    # Content-only cap measurement: frontmatter stripped, remainder measured.
+    # Content-only cap measurement: frontmatter stripped, remainder measured, against the
+    # EFFECTIVE cap (the farm's own config.json override, if any, else the shipped
+    # recommendation -- DEC-105 part 3).
     content_lines = _content_line_count(body)
     content_bytes = len(body.encode("utf-8"))
-    cap_lines = meta.get("cap_lines")
-    cap_kb = meta.get("cap_kb")
-    over_cap = False
-    cap_notes = []
-    if isinstance(cap_lines, int) and content_lines > cap_lines:
-        over_cap = True
-        cap_notes.append(f"content {content_lines} lines > cap_lines {cap_lines}")
-    if isinstance(cap_kb, int) and content_bytes > cap_kb * KB:
-        over_cap = True
-        cap_notes.append(f"content {content_bytes} B > cap_kb {cap_kb} ({cap_kb * KB} B)")
+    cap_lines, cap_kb, override_issues = _effective_caps(meta, _find_sanctum_root(path), name)
+    over_cap, cap_notes = _over_cap_detail(cap_lines, cap_kb, body)
 
     required = meta.get("required_sections", []) or []
     present = _body_h2_headings(body)
@@ -389,15 +524,20 @@ def check_file(path):
         "over_cap": over_cap,
         "missing_sections": missing,
     }
+    # DEC-105 part 1: over cap NEVER blocks (no STALE for this alone) -- only a missing
+    # required section does. DEC-105 part 2: over cap ALWAYS carries a warning, every run.
     if missing:
         result["verdict"] = STALE
         result["reason"] = f"missing required section(s): {', '.join(missing)}"
-    elif over_cap:
-        result["verdict"] = STALE
-        result["reason"] = "over cap -- needs rotation: " + "; ".join(cap_notes)
     else:
         result["verdict"] = FRESH
-        result["reason"] = "frontmatter present, all required sections present, within cap"
+        result["reason"] = ("frontmatter present, all required sections present, over its "
+                            "recommended size (see warning)" if over_cap else
+                            "frontmatter present, all required sections present, within cap")
+    if over_cap:
+        result["warning"] = _cap_warning(name, cap_notes)
+    if override_issues:
+        result["cap_override_issue"] = "; ".join(override_issues)
     return result
 
 
@@ -888,13 +1028,6 @@ def _session_num(cell):
     return int(m.group()) if m else cell
 
 
-def _over_cap(meta, body):
-    lines = _content_line_count(body)
-    nbytes = len(body.encode("utf-8"))
-    cl, ck = meta.get("cap_lines"), meta.get("cap_kb")
-    return (isinstance(cl, int) and lines > cl) or (isinstance(ck, int) and nbytes > ck * KB)
-
-
 def _ledger_index_header(moved):
     cash, loan, sess = [], [], []
     for m in moved:
@@ -925,17 +1058,36 @@ def _num(cell):
         return None
 
 
-# H-HONEST: a size/age trigger IMPLIES rotation should be possible; if the file is over cap
-# but nothing is auto-rotatable (prose/list entries, H3 blocks, or an excluded-only table),
-# `rotate` must NOT report a bare success -- it reports agent-rotation so unbounded
-# growth is surfaced, not hidden. NB: building parsers for those prose/list/H3 shapes is a
-# DEFERRED Lane-A/plan design decision (out of scope here) -- this signal is the correct
-# Lane-B behavior until then.
+# H-HONEST: a size/age trigger IMPLIES rotation should be possible; if a register has no
+# resolution signal at all (no status column -- a Lane-A CAPABILITY gap, not a size one),
+# `rotate` must NOT report a bare success -- it reports agent-rotation so the gap is
+# surfaced, not hidden. NB: building parsers for those prose/list/H3 shapes is a DEFERRED
+# Lane-A/plan design decision (out of scope here) -- this signal is the correct Lane-B
+# behavior until then.
+#
+# DEC-105: being OVER CAP, by itself, is never one of these signals -- a cap is a
+# recommendation (see `_cap_warning` / `_over_cap_detail` above), not a capability gap, so
+# it never forces "agent-rotation" on its own. An over-cap file that has nothing
+# auto-rotatable still reports whatever its normal (no-op) action would have been, plus a
+# `warning`.
 
 
 def _manual(path, meta, reason):
     return {"file": path, "class": meta.get("class"), "rotation_trigger": meta.get("rotation_trigger"),
             "action": "agent-rotation", "reason": reason}
+
+
+def _attach_cap_signals(result, over, notes, override_issues, basename):
+    """Attach the DEC-105 `warning` (over-cap, part 2) and `cap_override_issue` (a
+    malformed/unusable config.json override for THIS file, part 3 -- must never be
+    dropped silently) to a rotate_file result dict. Shared by every branch that consults
+    cap_lines/cap_kb, so an override issue reaches the player regardless of which action
+    the file's rotation_trigger takes."""
+    if over:
+        result["warning"] = _cap_warning(basename, notes)
+    if override_issues:
+        result["cap_override_issue"] = "; ".join(override_issues)
+    return result
 
 
 def rotate_file(path, sanctum_dir, apply):
@@ -946,12 +1098,14 @@ def rotate_file(path, sanctum_dir, apply):
     meta = _parse_frontmatter(inner)
     cls = meta.get("class")
     trig = meta.get("rotation_trigger")
+    basename = os.path.basename(path)
+    cap_lines, cap_kb, override_issues = _effective_caps(meta, sanctum_dir, basename)   # DEC-105 part 3
 
     if trig == "none":
         return {"file": path, "class": cls, "rotation_trigger": trig,
                 "action": "none", "reason": "write-once / mutated-in-place / overwritten -- no relocation"}
 
-    tokens = _base_tokens(os.path.basename(path))
+    tokens = _base_tokens(basename)
 
     # on-resolve: MOVE resolved rows, matched ONLY in a designated status column (H-D). A
     # register with no status column has no resolution signal -> report agent-rotation
@@ -983,30 +1137,32 @@ def rotate_file(path, sanctum_dir, apply):
     if trig == "on-resolve":
         _l, data_idx, row_header = _parse_tables(body)
         if data_idx and not _has_status_column(data_idx, row_header):
-            # populated register with no resolution signal -> honest manual signal (H-HONEST)
+            # populated register with no resolution signal -> honest manual signal (H-HONEST).
+            # A capability gap, not a size one -- DEC-105 does not touch this.
             return _manual(path, meta,
                            "on-resolve needs a status/resolution column; none present "
                            "(status-less register or list/prose entries) -- Lane-A signal gap")
-        if not data_idx and _over_cap(meta, body):
-            return _manual(path, meta,
-                           "on-resolve over cap but no auto-rotatable table rows (list/prose "
-                           "entries or status-less) -- Lane-A template shape / agent rotation "
-                           "(per template's `## Rotation` section)")
-        # has a status column (move resolved / honest none) OR empty & within cap (honest none)
-        return _move_rows(path, sanctum_dir, meta, _resolved, apply, tokens=tokens)
+        # has a status column (move resolved / honest none) OR no table rows at all
+        # (_move_rows degrades to "none" cleanly when there's nothing to move).
+        result = _move_rows(path, sanctum_dir, meta, _resolved, apply, tokens=tokens)
+        body_now = _split_frontmatter(_read(path).decode("utf-8"))[2]
+        over, notes = _over_cap_detail(cap_lines, cap_kb, body_now)
+        return _attach_cap_signals(result, over, notes, override_issues, basename)
 
     if trig == "segment-and-retain":
         _lines, data_idx, _rh = _parse_tables(body)
         if len(data_idx) > 25:
             oldest = set(sorted(data_idx)[:15])
-            return _move_rows(path, sanctum_dir, meta, lambda i, c, h: i in oldest, apply,
-                              tokens=tokens, archive_header=_ledger_index_header, ledger_index=True)
-        if _over_cap(meta, body):  # over cap but <=25 parseable ledger rows -> honest signal
-            return _manual(path, meta,
-                           "over cap but <=25 auto-segmentable ledger rows -- Lane-A template shape / "
-                           "agent rotation (per template's `## Rotation` section)")
-        return {"file": path, "class": cls, "rotation_trigger": trig, "action": "none",
-                "data_rows": len(data_idx), "reason": "at or under 25 rows -- no segmentation"}
+            result = _move_rows(path, sanctum_dir, meta, lambda i, c, h: i in oldest, apply,
+                                tokens=tokens, archive_header=_ledger_index_header, ledger_index=True)
+        else:
+            # <=25 parseable ledger rows -- no auto-segmentation (row-count threshold, not the
+            # size cap; unrelated to DEC-105).
+            result = {"file": path, "class": cls, "rotation_trigger": trig, "action": "none",
+                      "data_rows": len(data_idx), "reason": "at or under 25 rows -- no segmentation"}
+        body_now = _split_frontmatter(_read(path).decode("utf-8"))[2]
+        over, notes = _over_cap_detail(cap_lines, cap_kb, body_now)
+        return _attach_cap_signals(result, over, notes, override_issues, basename)
 
     if trig == "on-age":
         _lines, data_idx, _rh = _parse_tables(body)
@@ -1014,13 +1170,13 @@ def rotate_file(path, sanctum_dir, apply):
             # L-B: archive only the OLDEST rows exceeding the ~30 threshold (contract F1 §10).
             excess = len(data_idx) - 30
             oldest = set(sorted(data_idx)[:excess])
-            return _move_rows(path, sanctum_dir, meta, lambda i, c, h: i in oldest, apply, tokens=tokens)
-        if _over_cap(meta, body):
-            return _manual(path, meta,
-                           "over cap but <=30 auto-archivable rows -- Lane-A template shape / "
-                           "agent rotation (per template's `## Rotation` section)")
-        return {"file": path, "class": cls, "rotation_trigger": trig, "action": "none",
-                "data_rows": len(data_idx), "reason": "at or under ~30 rows -- no archival"}
+            result = _move_rows(path, sanctum_dir, meta, lambda i, c, h: i in oldest, apply, tokens=tokens)
+        else:
+            result = {"file": path, "class": cls, "rotation_trigger": trig, "action": "none",
+                      "data_rows": len(data_idx), "reason": "at or under ~30 rows -- no archival"}
+        body_now = _split_frontmatter(_read(path).decode("utf-8"))[2]
+        over, notes = _over_cap_detail(cap_lines, cap_kb, body_now)
+        return _attach_cap_signals(result, over, notes, override_issues, basename)
 
     if trig in ("on-close-over-cap", "on-resolve+on-close-over-cap", "age-or-cap"):
         # The CP0 templates using these compound triggers keep their over-cap-archivable units
@@ -1028,45 +1184,56 @@ def rotate_file(path, sanctum_dir, apply):
         # table rows -- and parsing those shapes is a DEFERRED Lane-A/plan design decision
         # (scope guard). So Lane B does NOT attempt generic table-row over-cap archival here
         # (that wrongly grabbed incidental legend/documentation tables); the live OPEN backlog
-        # never rotates (M-A) and an over-cap file honestly reports agent-rotation.
+        # never rotates (M-A). DEC-105: being over cap with nothing auto-rotatable is no
+        # longer a forced agent-rotation signal -- it is a `warning` alongside the compound
+        # action, naming what's over and what to do (rotate by hand, or raise the cap).
         reports = []
         if trig in ("on-resolve+on-close-over-cap", "age-or-cap"):
             reports.append(_move_rows(path, sanctum_dir, meta, _resolved, apply, tokens=tokens))
         body_now = _split_frontmatter(_read(path).decode("utf-8"))[2]
-        if _over_cap(meta, body_now):
-            # H-HONEST: over cap and no auto-rotatable table units -> honest manual signal,
-            # never a silent no-op / bare compound that implies the growth is handled. Carry
-            # `steps` so an on-resolve move that DID happen (real archive + source rewrite) is
-            # still visible alongside the over-cap overflow that needs manual/Lane-A rotation.
-            return {**_manual(path, meta,
-                              "over cap but over-cap-archivable units are prose/list entries or "
-                              "H3 blocks (only excluded OPEN / legend tables present) -- deferred "
-                              "Lane-A template shape / agent rotation (per template's "
-                              "`## Rotation` section)"),
-                    "steps": reports}
-        reports.append({"action": "none", "reason": "within cap -- no over-cap rotation"})
-        return {"file": path, "class": cls, "rotation_trigger": trig, "action": "compound",
-                "steps": reports}
+        over, notes = _over_cap_detail(cap_lines, cap_kb, body_now)
+        reports.append(
+            {"action": "none",
+             "reason": ("over-cap-archivable units are prose/list entries or H3 blocks "
+                        "(only excluded OPEN / legend tables present) -- rotate by hand "
+                        "per the file's own '## Rotation' section" if over else
+                        "within cap -- no over-cap rotation")})
+        result = {"file": path, "class": cls, "rotation_trigger": trig, "action": "compound",
+                  "steps": reports}
+        return _attach_cap_signals(result, over, notes, override_issues, basename)
 
     if trig == "on-cap-relocate":
-        if not _over_cap(meta, body):
-            return {"file": path, "class": cls, "rotation_trigger": trig, "action": "none",
-                    "reason": "within cap -- durable facts stay hot, no History relocation"}
-        # M-B: relocate only the OLDEST '## History' rows needed to get back under cap.
+        over, notes = _over_cap_detail(cap_lines, cap_kb, body)
+        if not over:
+            return _attach_cap_signals(
+                {"file": path, "class": cls, "rotation_trigger": trig, "action": "none",
+                 "reason": "within cap -- durable facts stay hot, no History relocation"},
+                False, notes, override_issues, basename)
+        # M-B: relocate only the OLDEST '## History' rows needed to get back under cap. This
+        # automatic housekeeping is unaffected by DEC-105 (it never blocks or interrupts
+        # anyone) -- it now runs against the farm's own EFFECTIVE cap (part 3), same as the
+        # warning below.
         lines, data_idx, _rh = _parse_tables(body)
         hist = _rows_under_heading(lines, data_idx, "history")
         chosen = set()
         for i in sorted(hist):  # oldest (topmost) History rows first
             remaining = "\n".join(ln for j, ln in enumerate(lines) if j not in chosen)
-            if not _over_cap(meta, remaining):
+            if not _over_cap_detail(cap_lines, cap_kb, remaining)[0]:
                 break
             chosen.add(i)
-        if not chosen:  # over cap but no History table rows to relocate (H-HONEST)
-            return _manual(path, meta,
-                           "over cap but no relocatable '## History' table rows found "
-                           "(prose/no History table) -- Lane-A template shape / agent rotation "
-                           "(per template's `## Rotation` section)")
-        return _move_rows(path, sanctum_dir, meta, lambda i, c, h: i in chosen, apply, tokens=tokens)
+        if not chosen:
+            # over cap but no History table rows to relocate (prose/no History table) --
+            # DEC-105: no longer a forced agent-rotation signal, just the warning.
+            return _attach_cap_signals(
+                {"file": path, "class": cls, "rotation_trigger": trig, "action": "none",
+                 "reason": "no relocatable '## History' table rows found (prose/no "
+                           "History table) -- rotate by hand per the file's own "
+                           "'## Rotation' section"},
+                True, notes, override_issues, basename)
+        result = _move_rows(path, sanctum_dir, meta, lambda i, c, h: i in chosen, apply, tokens=tokens)
+        body_now = _split_frontmatter(_read(path).decode("utf-8"))[2]
+        over_now, notes_now = _over_cap_detail(cap_lines, cap_kb, body_now)
+        return _attach_cap_signals(result, over_now, notes_now, override_issues, basename)
 
     if trig == "rolling-window":
         return _rotate_journal(path, sanctum_dir, apply)
@@ -1198,11 +1365,45 @@ def _write_schema_version(sanctum_dir, version):
     _safe_write(path, json.dumps(data, indent=2) + "\n", _digest(current))
 
 
-def _backup_subtree(sanctum_dir, subdirs, to_version):
-    """Copy the touched subtrees to a dated pre-migration backup dir BEFORE any write -- the
+def _tree_digest(root):
+    """Digest of every regular file under root, keyed by its path relative to root --
+    order-independent, so files/directories walked in either order still compare equal.
+    Exists to let _backup_subtree prove a copied directory is byte-identical to its source,
+    the same way _digest already lets it prove that for a single file."""
+    parts = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, root)
+            parts.append(rel + ":" + _digest(_read(full)))
+    return _digest("\n".join(sorted(parts)).encode("utf-8"))
+
+
+def _backup_subtree(sanctum_dir, paths, to_version):
+    """Copy the touched paths to a dated pre-migration backup dir BEFORE any write -- the
     single restore point for the design's 'roll back = restore from the backup' model (there
-    are no down-migrations). Returns the backup dir, which the player report names as the
-    restore location. Lives under history/archive/ so it is not itself a governed file."""
+    are no down-migrations). Each entry in `paths` may be a DIRECTORY (copied whole) or a
+    FILE (copied individually) -- BUG-020: an isdir-only guard silently skipped a root-level
+    file like config.json while still returning a plausible backup path, so the caller
+    recorded a successful-looking backup that captured nothing. A path that does not exist
+    yet is skipped -- there is nothing there to protect.
+
+    Every copy is READ BACK and compared to its source (_digest for a file, _tree_digest for
+    a directory) before this function returns. shutil.copytree/copy2 raise NOTHING if the
+    process is killed mid-copy -- OOM, a WSL VM stop, the game being closed -- so a truncated
+    file can be left on disk, named exactly like a good backup, with no exception anywhere to
+    catch. Measured: a copy loop killed with SIGKILL partway through leaves the destination
+    file present, readable, and short, on this project's own worktree filesystem (ext4) --
+    silent truncation is not a theoretical edge case, it is what an interrupted buffered copy
+    does by default. A mismatch here raises ConservationError -- deliberately NOT one of the
+    (OSError, ValueError) this function's callers already catch and downgrade to a clean
+    MigrationError, so an unverifiable backup aborts the migration loud (main()'s top-level
+    handler) rather than being reported as a successful step. Fails loud on purpose: item #17's
+    warn-never-block rule governs file SIZE, which a player can judge for themselves; this
+    governs whether their data is RECOVERABLE, which they cannot.
+
+    Returns the backup dir, which the player report names as the restore location. Lives under
+    history/archive/ so it is not itself a governed file."""
     stamp = datetime.date.today().isoformat()
     base = os.path.join(sanctum_dir, "history", "archive",
                         f"pre-migration-backup-{stamp}-v{to_version}")
@@ -1211,10 +1412,30 @@ def _backup_subtree(sanctum_dir, subdirs, to_version):
         backup_dir = f"{base}-{n}"
         n += 1
     os.makedirs(backup_dir)
-    for sub in subdirs:
-        src = os.path.join(sanctum_dir, sub)
+    for rel in paths:
+        src = os.path.join(sanctum_dir, rel)
+        dst = os.path.join(backup_dir, rel)
         if os.path.isdir(src):
-            shutil.copytree(src, os.path.join(backup_dir, sub))
+            src_digest = _tree_digest(src)
+            shutil.copytree(src, dst)
+            if _tree_digest(dst) != src_digest:
+                raise ConservationError(
+                    f"pre-migration backup of {rel!r} ({dst}) does not match its source "
+                    f"({src}) after copy -- the copy was interrupted or corrupted. Migration "
+                    "aborted; the live sanctum is untouched. Delete the incomplete backup "
+                    "directory and retry.")
+        elif os.path.isfile(src):
+            src_digest = _digest(_read(src))
+            dst_parent = os.path.dirname(dst)
+            if dst_parent:
+                os.makedirs(dst_parent, exist_ok=True)
+            shutil.copy2(src, dst)
+            if _digest(_read(dst)) != src_digest:
+                raise ConservationError(
+                    f"pre-migration backup of {rel!r} ({dst}) does not match its source "
+                    f"({src}) after copy -- the copy was interrupted or corrupted. Migration "
+                    "aborted; the live sanctum is untouched. Delete the incomplete backup "
+                    "directory and retry.")
     return backup_dir
 
 
@@ -1549,11 +1770,22 @@ def cmd_migrate(args):
         step = {"to_version": entry["to_version"], "description": entry["description"]}
         if entry["guard"](sanctum, templates_dir):
             # Already applied (e.g. a crash-and-rerun, or a fresh farm that never had the old
-            # file) -> advance the marker only; write nothing, back up nothing (idempotent).
+            # file) -> no source subtree changes, but the marker still gets recorded in
+            # config.json (BUG-020: that write was previously unbacked -- "backup": None
+            # while a restore point was destroyed). Back up config.json first, same as the
+            # fold path below, so this is never the unprotected write.
             step["action"] = "already-applied"
             step["backup"] = None
             if apply:
-                _write_schema_version(sanctum, entry["to_version"])
+                try:
+                    step["backup"] = _backup_subtree(sanctum, ("config.json",),
+                                                      entry["to_version"])
+                    _write_schema_version(sanctum, entry["to_version"])
+                except (OSError, ValueError) as e:
+                    raise MigrationError(
+                        f"migration to v{entry['to_version']} (already-applied) failed "
+                        f"cleanly ({type(e).__name__}: {e}); nothing further applied. "
+                        f"Pre-migration backup: {step.get('backup')}")
                 step["marker_advanced"] = True
             cur = entry["to_version"]
             steps.append(step)
@@ -1563,9 +1795,12 @@ def cmd_migrate(args):
             step["backup"] = None
             steps.append(step)
             continue
-        # Backup AFTER the guard, so an idempotent rerun writes nothing at all.
+        # Backup AFTER the guard, so an idempotent rerun writes nothing at all. config.json
+        # is included because _write_schema_version below writes it unconditionally on
+        # success -- BUG-020: it was the one write this restore point did not cover.
         try:
-            step["backup"] = _backup_subtree(sanctum, ("identity", "plans"), entry["to_version"])
+            step["backup"] = _backup_subtree(sanctum, ("identity", "plans", "config.json"),
+                                              entry["to_version"])
             step.update(entry["apply"](sanctum, templates_dir))   # raises ConservationError on loss
             _write_schema_version(sanctum, entry["to_version"])   # advance ONLY after conservation
         except (OSError, ValueError) as e:

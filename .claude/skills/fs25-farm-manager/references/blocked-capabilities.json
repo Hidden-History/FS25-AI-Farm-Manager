@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "_what_this_is": "The § 6.8 blocked-capability registry. THE SINGLE AUTHORITY for which schema elements are blocked, and for the text of every permitted use. A block records that a read is WRONG, which is not the same as the figures disagreeing -- the 'contradicted' framing this header used to carry was falsified in full for the one entry below, and re-stating it here pointed every reader at a premise the entry's own reason denies. A domain section carries a KEY into permitted_uses (blocked_by.permitted_use_ref), never a copy of the sentence -- a key cannot drift from the text it names, a paraphrase can and did. Unblocking is an edit to THIS FILE: no domain script hard-codes a block (§ 6.8.3).",
+  "_how_it_is_enforced": "tests/conftest.py loads this file and is the ONE place the block lists are assembled: BLOCKED_SOURCE_ELEMENTS for tooth 1, BLOCKED_FIELDS and BLOCKED_FIELD_TOKENS for tooth 2, plus the matchers (elements_intersect / any_element_intersects) and tooth 2's normalisation (normalise_token). Every test file in tests/ inherits those without opting in, so a name added to this registry is picked up with no test edit. A capability declaring an empty blocked_source_elements or an empty blocked_fields is REFUSED at load: an empty list is indistinguishable from 'nothing is blocked' and would disarm a tooth silently. Tooth 1 matches a section's source_elements against blocked_source_elements with a BIDIRECTIONAL, case-sensitive glob (fnmatchcase either way); a section that touches a blocked element and stays silent fails the build. Tooth 2 matches every emitted key name, at every depth, against blocked_fields on the normalised token. TOOTH 3 IS NOT INHERITED, and this file used to claim otherwise: blocked_derivations matching lives in the b39/b40 suite alone, which reads this registry directly. WHAT A NEW DOMAIN SUITE INHERITS IS THE LISTS AND THE MATCHERS, NOT THE TEETH -- conftest.py exports no pytest fixture and no tooth, so each domain suite hand-rolls teeth 1 and 2 from those primitives and only the LISTS are picked up with no test edit. This file used to claim a new domain suite 'gets teeth 1 and 2 automatically'; it does not. In particular § 6.8's build check that a section's permitted_use_ref must RESOLVE to a key in that bug's permitted_uses map is implemented once, inside _tooth1_violations in the b39/b40 suite, and is imported by no other module -- so a new domain that declares blocked_by with an unresolvable ref ships GREEN until that suite is given the check too. Writing that resolution into conftest.py is the real fix and is tracked separately; until it lands, treat tooth 1 as owed by each suite rather than inherited.",
+  "blocked_capabilities": {
+    "land_value": {
+      "bug": "BUG-014",
+      "reason": "read_farmland_areas.py:568 uses ElementTree.find where findall-and-sum is needed, so farms_xml_fieldPurchase_abs reports ONE stored period (slot 0 = 10,223,376) under a name promising a lifetime absolute. It answers a question nothing asked. The premise this block was first raised on is FALSIFIED: the figures never disagreed (sum of five slots = 39,432,192.00 = computed_owned_total_cost, to the cent) and only one of them is a land value at all. Blocked until the read is fixed AND emits window coverage — a naive findall-and-sum silently under-reports on a save whose stored window has rolled (BUG-014 § 6 condition 4).",
+      "blocked_source_elements": [
+        "farms.xml:farm/finances/stats/fieldPurchase"
+      ],
+      "blocked_fields": [
+        "farms_xml_fieldPurchase_abs"
+      ],
+      "blocked_derivations": [
+        "sum",
+        "total",
+        "cumulative",
+        "mean",
+        "rate"
+      ],
+      "permitted_uses": {
+        "b39": "the per-slot value may ship as one of 33 per-period cash-flow categories, unaggregated -- see § 7.1"
+      }
+    }
+  }
+}

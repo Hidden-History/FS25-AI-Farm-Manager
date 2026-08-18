@@ -19,7 +19,7 @@ Format is the canonical `bmad-eval-runner` case shape (`input` + `rubric` + `sta
 | `honesty-check-runs-at-closeout-when-skill-changed` | Skipping `check_skill_honesty.py` at closeout after `scripts/`/`SKILL.md` changed, or running it after the friction-log append so a drift finding has nowhere to land. |
 | `honesty-claim-is-verified-not-accepted` | Acting on a confidently-stated but false claim about the skill's own docs — editing `SKILL.md`, adding a flag to a script, or silencing `check_skill_honesty.py` to make the claim true, instead of checking the files and saying the drift does not exist. |
 | `storage-capability-reads-both-attributes` | The F-102/F-116 "no silo accepts onion" false negative — concluding a silo accepts nothing from `fillTypes` alone, ignoring `fillTypeCategories`; and reporting an **unresolvable** category as a "no" rather than an "unknown". |
-| `agent-rotation-is-normal-maintenance` | Treating `sanctum_maintain rotate`'s `agent-rotation` report as a defect/error instead of the normal agent-driven upkeep (move the **closed** entries to archive per the template's `## Rotation`, leaving the live slice alone). |
+| `over-cap-warning-is-normal-maintenance` | Treating `sanctum_maintain check`/`rotate`'s over-cap `warning` (DEC-105: a recommendation, never a block) as a defect/error instead of the normal agent-driven upkeep (move the **closed** entries to archive per the template's `## Rotation`, leaving the live slice alone). |
 
 ## Running them
 
@@ -136,16 +136,21 @@ Real financials went into eval artifacts and the runs stopped being deterministi
 self-heal is right in the live game; it is only wrong here, so the fix is the fixture, not the
 skill. A save that resolves removes the reason to go looking.
 
-`sanctum/plans/PLAN.md` is staged for the `agent-rotation-is-normal-maintenance` case only. It
+`sanctum/plans/PLAN.md` is staged for the `over-cap-warning-is-normal-maintenance` case only. It
 is a real governed plan file deliberately grown past `cap_lines: 200`, whose closed directives
 are H3 prose blocks — the shape `sanctum_maintain.py` will not auto-move. Its premise is
-machine-checkable rather than asserted, and both halves verify from a staged cwd:
+machine-checkable rather than asserted, and both halves verify from a staged cwd (DEC-105: a
+cap is a recommendation, never a block — `check` stays `FRESH` and `rotate` stays `compound`,
+each carrying a `warning` rather than `STALE`/`agent-rotation`):
 
 ```
 $ python3 <skill>/scripts/sanctum_maintain.py check sanctum
-  sanctum/plans/PLAN.md -> STALE | over cap -- needs rotation: content 203 lines > cap_lines 200
+  sanctum/plans/PLAN.md -> FRESH | warning: PLAN.md is over its recommended size
+  (content 212 lines > cap_lines 200) ...
 $ python3 <skill>/scripts/sanctum_maintain.py rotate sanctum
-  action: agent-rotation | over cap but over-cap-archivable units are prose/list entries or H3 blocks
+  action: compound | warning: PLAN.md is over its recommended size (content 212 lines >
+  cap_lines 200) ... | steps: [{"action": "none", "reason": "over-cap-archivable units are
+  prose/list entries or H3 blocks ... rotate by hand per the file's own '## Rotation' section"}]
 ```
 
 This case previously staged nothing and narrated `identity/directives.md`, which the plan

@@ -142,6 +142,13 @@ needs is worth flagging as a sell candidate — cash beats a rusting asset.
 - Maintain `sanctum/state/production-roster.md` and a dossier per building using
   `templates/production-dossier.md`.
 - Connect to selling logic above when the output is something sellable.
+- `read_game_defs.py`'s `sellable_confirmed` is POSITIVE-only (F-311): treat
+  absence as *unconfirmed*, never as *unsellable* — MANURE, MILK and WOOL are
+  all base-game outputs that read as unsellable under the old classifier and
+  drove a bogus biogas-plant recommendation. Do not build a separate
+  flow-based (INPUT/PRODUCT/BOTH) classifier to resolve the ambiguity; a
+  third basis would only add another way for the existing ones to silently
+  disagree.
 
 ### Field expansion (unowned fields)
 

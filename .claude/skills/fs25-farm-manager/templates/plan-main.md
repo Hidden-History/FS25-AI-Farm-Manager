@@ -2,8 +2,14 @@
 class: register
 load: B
 owns: "this farm's single living plan — the current-focus narrative plus the standing directives (open, paused, recently-closed) it is built from"
-cap_lines: 200
-cap_kb: 14
+# cap_lines/cap_kb: sized from ONE measured live session (294 ln / 21,213 B = 72.2 B/line,
+# Montana4X_Farm_Manager, session_count 1, 2026-08-15) -- growth rate across sessions is
+# UNMEASURED, this is a judgement, not a derivation. cap_kb is set >= cap_lines x measured
+# B/line so the byte cap never silently binds ahead of the line cap. cap_lines kept lower
+# than friction-log.md's: this is a rewritten-in-place register, not an OPEN-only
+# accumulating log, so it does not carry the same monotonic-growth pressure.
+cap_lines: 600
+cap_kb: 48
 rotation_trigger: age-or-cap
 archive_target: "history/archive/plan-{YYYY}.md"
 reconciliation: "the Current focus narrative is rewritten in place each session (never appended-to); active/paused directives are the live slice, closed ones relocate whole (never deleted) with a dated pointer"
@@ -114,6 +120,9 @@ narrative is not rotated; it is kept bounded by being rewritten in place, not by
   `- _[archived {{DATE}}] "{{TITLE}}" ({{N}} lines) → history/archive/plan-{{YYYY}}.md_`.
 - **Conservation:** the archive file is append-only and kept in full; only the always-loaded
   live file sheds bulk. Prove nothing is lost before writing (the archive-not-delete
-  discipline). This is agent-rotation: `sanctum_maintain.py rotate` reports `agent-rotation`
-  for this file — its directives are prose/list entries, not table rows — which is the signal
-  to do the move by hand per this section, not a failure.
+  discipline). `cap_lines`/`cap_kb` is a **recommendation**, not a limit — `sanctum_maintain.py
+  rotate` never blocks or forces anything for being over cap alone. When this file's own
+  directives are prose/list entries (not table rows) it reports `compound` with a `warning`
+  naming the size and the cost — that warning is the signal to do the move by hand per this
+  section, repeated every run until you do (or raise this file's own number in config.json's
+  `"cap_overrides"`).

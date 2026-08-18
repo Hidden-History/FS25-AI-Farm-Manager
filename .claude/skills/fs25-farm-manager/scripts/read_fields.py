@@ -4,7 +4,7 @@ can be resolved.
 
 Usage: python3 read_fields.py <savegame_dir> [--farm-id N]
                              [--owned-fields LIST_OR_PATH] [--mods-dir PATH]
-                             [--no-resolve]
+                             [--config PATH] [--no-resolve]
     --farm-id N          Whose fields to mark as owned (default: 1).
     --owned-fields SPEC  Explicit override: a comma-separated list of field ids
                          ("3,7,12"), or a path to a JSON list / {"owned_field_ids":
@@ -12,6 +12,10 @@ Usage: python3 read_fields.py <savegame_dir> [--farm-id N]
                          precedence -- the player's word beats any derivation.
     --mods-dir PATH      Where the map mod lives, for ownership resolution. If
                          omitted, taken from sanctum/config.json -> paths.mods_dir.
+    --config PATH        Where that config.json is. If omitted, this script walks
+                         up from its own directory looking for sanctum/config.json
+                         (item #12: that walk-up assumes a per-project install and
+                         cannot resolve on a personal one -- pass --config there).
     --no-resolve         Skip resolution entirely; every "owned" stays null.
 
 OWNERSHIP: HOW IT IS RESOLVED, AND WHY IT USED TO BE "UNKNOWABLE"
@@ -62,7 +66,8 @@ from xml_utils import load_xml, emit, arg_or_exit
 
 def parse_args(argv):
     """Returns (opts_dict, error_or_None)."""
-    o = {"farm_id": 1, "owned_fields_spec": None, "mods_dir": None, "resolve": True}
+    o = {"farm_id": 1, "owned_fields_spec": None, "mods_dir": None,
+         "config": None, "resolve": True}
     args = argv[2:]
     i = 0
     while i < len(args):
@@ -84,6 +89,11 @@ def parse_args(argv):
                 return None, "usage: --mods-dir given with no value"
             o["mods_dir"] = args[i + 1]
             i += 2
+        elif args[i] == "--config":
+            if i + 1 >= len(args):
+                return None, "usage: --config given with no value"
+            o["config"] = args[i + 1]
+            i += 2
         elif args[i] == "--no-resolve":
             o["resolve"] = False
             i += 1
@@ -92,13 +102,33 @@ def parse_args(argv):
     return o, None
 
 
-def find_mods_dir(explicit):
-    """Locate the mods dir: the flag, else sanctum/config.json -> paths.mods_dir.
+def find_mods_dir(explicit, config_path=None):
+    """Locate the mods dir: the flag, else --config's config.json, else a
+    walk-up looking for sanctum/config.json -> paths.mods_dir.
+
+    ⚠ THE --config BRANCH'S WORDING MUST MATCH read_farmland_areas.py's COPY
+    OF THIS FUNCTION BYTE FOR BYTE (item #12) -- the two scripts must never
+    disagree about where mods live. If you change one, change both.
+
     Returns (path_or_None, how_or_reason)."""
     if explicit:
         if not os.path.isdir(explicit):
             return None, f"--mods-dir {explicit!r} is not a directory"
         return explicit, "--mods-dir flag"
+    if config_path:
+        if not os.path.isfile(config_path):
+            return None, f"--config {config_path!r} does not exist"
+        try:
+            with open(config_path) as f:
+                paths = (json.load(f).get("paths") or {})
+            md = paths.get("mods_dir")
+        except (OSError, json.JSONDecodeError) as e:
+            return None, f"found {config_path} but could not read paths.mods_dir: {e}"
+        if not md:
+            return None, f"{config_path} has no paths.mods_dir"
+        if not os.path.isdir(md):
+            return None, f"paths.mods_dir {md!r} from --config {config_path!r} is not a directory"
+        return md, f"--config {config_path!r} -> paths.mods_dir"
     # Walk up from this script looking for a project sanctum. The skill may be
     # installed at project or personal level, so don't assume a fixed depth.
     here = os.path.abspath(os.path.dirname(__file__))
@@ -200,6 +230,35 @@ def classify_field(fruit_type, growth_state, table):
     return "growing", f"growthState {gs} is a growth stage for {fruit}"
 
 
+def _ownership_source_note(xc):
+    """BUG-012 (second instance, found 2026-08-03): this note used to state
+    unconditionally that the decode's "land cost matches farms.xml's own
+    <fieldPurchase>" -- and it did so INSIDE the clause naming why the decode is
+    trusted. That is worse than the farm_snapshot.py instance it was filed for:
+    that one asserted a false fact, this one asserted a false JUSTIFICATION FOR
+    TRUST, naming three gates when only two are enforced above.
+
+    The enforced gates are gate1 (parcel-id set) and gate2 (declared area) --
+    see the check at the top of derive_owned_field_ids(). The land-cost
+    comparison is reported, never gated on. Ownership is trusted without it, so
+    the note must not claim otherwise."""
+    two_gates = ("Derived by decoding the map's infoLayer_farmlands.grle and matching each "
+                 "field's world position to a parcel. Trusted because it passes two gates a "
+                 "wrong decode cannot fake: its parcel-id set equals farmland.xml's, and its "
+                 "total area equals the map's declared size.")
+    match = xc.get("match") if isinstance(xc, dict) else None
+    if match is True:
+        return two_gates + (" A third, non-gating comparison also agrees: its land cost "
+                            "against farms.xml's own <fieldPurchase>.")
+    if match is False:
+        return two_gates + (" A third, non-gating comparison DISAGREES: its land cost against "
+                            "farms.xml's own <fieldPurchase> (see field_purchase_cross_check "
+                            "for both figures, and BUG-014 for what that disagreement means). "
+                            "Ownership does not depend on it -- the two gates above do.")
+    return two_gates + (" The third, non-gating land-cost comparison against farms.xml's "
+                        "<fieldPurchase> did NOT run -- neither confirmed nor refuted.")
+
+
 def derive_owned_field_ids(savegame_dir, farm_id, mods_dir):
     """Compose read_farmland_areas.py -- do NOT reimplement the GRLE decode.
     Returns (set_of_ids_or_None, info_dict)."""
@@ -234,11 +293,7 @@ def derive_owned_field_ids(savegame_dir, farm_id, mods_dir):
         "gates_passed": gates,
         "field_purchase_cross_check": xc,
         "owned_area_ha": (d.get("owned") or {}).get("total_area_ha"),
-        "note": ("Derived by decoding the map's infoLayer_farmlands.grle and matching each "
-                 "field's world position to a parcel. Trusted only because it passes gates a "
-                 "wrong decode cannot fake: its parcel-id set equals farmland.xml's, its total "
-                 "area equals the map's declared size, and its land cost matches farms.xml's "
-                 "own <fieldPurchase>."),
+        "note": _ownership_source_note(xc),
     }
 
 
@@ -323,7 +378,7 @@ def main():
             "note": "Resolution skipped by request; every field's owned is null.",
         })
     else:
-        mods_dir, how = find_mods_dir(opts["mods_dir"])
+        mods_dir, how = find_mods_dir(opts["mods_dir"], opts["config"])
         if mods_dir is None:
             ownership.update({
                 "resolved": False,

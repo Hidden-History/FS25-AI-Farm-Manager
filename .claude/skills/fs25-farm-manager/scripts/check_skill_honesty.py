@@ -98,9 +98,30 @@ def probe_farmland_area(sg):
         return False, f"read_farmland_areas.py: {(d or {}).get('error', 'failed')}"
     owned = d.get("owned") or {}
     ha = owned.get("total_area_ha")
-    if ha:
+    # ⛔ `if ha:` IS FALSY FOR 0.0. A farm owning zero parcels answers 0.0 ha --
+    # a correct, complete answer -- and this recorded the question as
+    # UNANSWERED ("no area returned"). The same round introduced
+    # unknown_by_design + empty_means: farm_has_none for exactly that state, so
+    # the probe contradicted the status added for it. DEC-001 cuts both ways:
+    # absence must not read as data, and data must not read as absence. The
+    # identical falsy-zero trap was fixed for `value` below and not for `ha`.
+    if ha is not None:
         xc = (d.get("field_purchase_cross_check") or {}).get("match")
-        return True, f"{ha} ha across {owned.get('count')} parcels, cost ${owned.get('total_cost'):,.2f}, fieldPurchase cross-check match={xc}"
+        # DEC-057 (10): total_cost -> land_value. THIS SITE WAS MISSED by that
+        # rename. read_farmland_areas.py's own comment claimed it renamed "this
+        # ONE site ... read_fields.py never read total_cost" -- the second half
+        # is true, the first is not: three files read that block. Here
+        # owned.get('total_cost') became None and f"${None:,.2f}" raises
+        # TypeError, taking check_honesty() down with it, because the probe is
+        # called with no try/except.
+        # It is a VALUATION, not a record of what was spent (BUG-014 proved
+        # those are two different questions), so the label moves with the key.
+        value = owned.get("land_value")
+        # Absence must not render as $0.00 -- a farm whose value could not be
+        # read is not a farm worth nothing (DEC-001).
+        value_text = (f"${value:,.2f}" if isinstance(value, (int, float))
+                      else "land value unavailable")
+        return True, f"{ha} ha across {owned.get('count')} parcels, land value {value_text}, fieldPurchase cross-check match={xc}"
     return False, "no area returned"
 
 
@@ -511,6 +532,24 @@ def check_honesty(sg, skill_text):
     return failures, notes
 
 
+def _mentioned(name, skill_text):
+    """Token match, never substring -- "unread_fields.py" must not satisfy a
+    mention of "read_fields.py". Filenames use only [\\w.-], so a match not
+    immediately PRECEDED by one of those characters is a genuine, standalone
+    mention -- that half stays a lookbehind over [\\w.-].
+
+    The trailing side is narrower: only a following WORD character (\\w) can
+    extend "read_fields.py" into a different filename ("read_fields.pyc",
+    "read_fields.py2"). A trailing "." or "-" cannot -- ordinary prose ends a
+    sentence with "read_fields.py." and forms adjectives like
+    "read_fields.py-driven", and neither is a different file. The lookahead
+    used to exclude those too, so a mention immediately followed by sentence
+    punctuation or a hyphenated modifier read as absent -- a false RED for a
+    doc that plainly named the script, worse than no gate at all."""
+    pattern = r"(?<![\w.\-])" + re.escape(name) + r"(?!\w)"
+    return re.search(pattern, skill_text) is not None
+
+
 def check_reachability(skill_text):
     """Every script and reference must be reachable from SKILL.md, and every path
     SKILL.md names must exist. Half this skill was orphaned -- reading-the-save.md
@@ -521,7 +560,7 @@ def check_reachability(skill_text):
     for f in sorted(os.listdir(SCRIPTS_DIR)):
         if not f.endswith(".py") or f in ignore_scripts:
             continue
-        if f not in skill_text:
+        if not _mentioned(f, skill_text):
             failures.append(f"scripts/{f} is never mentioned in SKILL.md -- a session will never run it")
         else:
             notes.append(f"  [ok]   scripts/{f} reachable")
@@ -530,13 +569,18 @@ def check_reachability(skill_text):
         for f in sorted(os.listdir(REFERENCES_DIR)):
             if not f.endswith(".md"):
                 continue
-            if f not in skill_text:
+            if not _mentioned(f, skill_text):
                 failures.append(f"references/{f} is never mentioned in SKILL.md -- a session will never load it")
             else:
                 notes.append(f"  [ok]   references/{f} reachable")
 
-    for m in re.finditer(r"(?:scripts|references|templates)/[A-Za-z0-9_.\-]+", skill_text):
-        rel = m.group(0)
+    # The class includes '/' so a multi-segment path (references/dev-steps/
+    # step-99-x.md) is captured whole, not truncated at the first '/' (H3).
+    # It also includes '.', so a sentence-ending period gets swept in --
+    # rstrip it before checking existence, or "scripts/x.py." false-reds on
+    # a file that plainly exists (H11).
+    for m in re.finditer(r"(?:scripts|references|templates)/[A-Za-z0-9_.\-/]+", skill_text):
+        rel = m.group(0).rstrip(".")
         if not os.path.exists(os.path.join(SKILL_DIR, rel)):
             line = skill_text[:m.start()].count("\n") + 1
             failures.append(f"SKILL.md:{line} names {rel}, which does not exist")

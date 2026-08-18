@@ -220,7 +220,7 @@ def find_config(explicit):
     )
 
 
-def call(script, savegame_dir, farm_id=None, extra_args=None):
+def call(script, savegame_dir, farm_id=None, extra_args=None, timeout=30):
     """Run a parser CLI and return (parsed_json_or_None, error_or_None).
     error is set for both "couldn't even get JSON back" and "parser itself
     reported {"error": ...}" -- callers should always check it before
@@ -231,9 +231,9 @@ def call(script, savegame_dir, farm_id=None, extra_args=None):
     if extra_args:
         cmd += extra_args
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return None, f"{script} timed out after 30s"
+        return None, f"{script} timed out after {timeout}s"
 
     try:
         data = json.loads(result.stdout)
@@ -389,6 +389,68 @@ def build_land(economy):
     }
 
 
+def _fmt_money(v):
+    """Money for prose. Returns None (not a placeholder) when the value is
+    absent, so the caller must decide what absence means rather than printing
+    a zero that reads as data."""
+    if not isinstance(v, (int, float)):
+        return None
+    return f"${v:,.2f}"
+
+
+def ownership_note(xc):
+    """BUG-012: the note MUST be DERIVED from the cross-check flag, never
+    asserted beside it. The old text was a static string claiming the land cost
+    "matches" while the field next to it reported match=false -- RSK-007, an
+    aggregator overwriting the evidence its own components produced, and the
+    consumer is a language model for which prose outranks a boolean.
+
+    Three states, because `match` has three and collapsing them re-creates the
+    defect in a smaller form (DEC-001 -- absence must be impossible to mistake
+    for data):
+
+      True  -> the cross-check ran and agreed
+      False -> the cross-check ran and DISAGREED; say so, and quote both figures
+      None  -> the cross-check DID NOT RUN; neither confirmed nor refuted
+
+    Only gate1 and gate2 are enforced gates in read_fields.py. The land-cost
+    comparison is NOT a gate -- ownership is trusted without it. The old note
+    listed all three as if they were one gauntlet, which overstated what had
+    actually been checked even when the cross-check passed."""
+    gates = ("Ownership resolved and gate-checked: the decode's parcel-id set equals "
+             "farmland.xml's, and its total area equals the map's declared size. ")
+    tail = "total_fields_on_map is still map-wide -- quote owned_field_count."
+    match = xc.get("match") if isinstance(xc, dict) else None
+
+    if match is True:
+        return (gates + "Its computed land cost also agrees with farms.xml's own "
+                        "<fieldPurchase>. " + tail)
+
+    if match is False:
+        # ⛔ BOTH KEYS WERE WRONG AND THE PARSER EMITS NEITHER. The DEC-057 ⑩
+        # rename moved `computed_owned_total_cost` to `computed_owned_land_value`
+        # and this site was missed; `farms_xml_fieldPurchase_abs` never existed
+        # at all -- read_field_purchase_window emits `field_purchase_abs_sum`.
+        # Both .get()s returned None, so the WARNING below would print with both
+        # figures blank -- a disagreement reported with nothing to compare.
+        # Dormant only because CROSS_CHECK_ENABLED is False.
+        computed = _fmt_money(xc.get("computed_owned_land_value"))
+        recorded = _fmt_money(xc.get("field_purchase_abs_sum"))
+        figures = ""
+        if computed and recorded:
+            figures = (f" -- computed land cost {computed} vs farms.xml "
+                       f"<fieldPurchase> {recorded}")
+        return (gates + "WARNING: its computed land cost does NOT agree with "
+                        "farms.xml's own <fieldPurchase>" + figures + ". The two "
+                        "gates above still hold, but this comparison does not -- do "
+                        "NOT quote the land cost as cross-checked. See BUG-014 for "
+                        "what the disagreement means. " + tail)
+
+    return (gates + "The land-cost cross-check against farms.xml's <fieldPurchase> "
+                    "did NOT run, so the land cost is neither confirmed nor refuted "
+                    "-- absence of the check, not a passing check. " + tail)
+
+
 def build_field_state(fields):
     """Ownership WAS unknowable from XML (F-004) and read_fields.py now resolves it
     by composing the GRLE decoder. Two honest states remain, and they are NOT the
@@ -440,25 +502,67 @@ def build_field_state(fields):
         "ownership_source": own.get("source"),
         "ownership_gates_passed": own.get("gates_passed"),
         "ownership_cross_check_matches_fieldPurchase": xc.get("match"),
-        "note": (
-            "Ownership resolved and gate-checked: the decode's parcel-id set equals "
-            "farmland.xml's, its total area equals the map's declared size, and its "
-            "computed land cost matches farms.xml's own <fieldPurchase>. "
-            "total_fields_on_map is still map-wide -- quote owned_field_count."
-        ),
+        "note": ownership_note(xc),
     }
 
 
-def build_fleet(vehicles):
+# Fleet alert tiers -- house rule set 2026-07-24 (player asked for deterministic
+# fuel/repair thresholds instead of a judgment call every check; see
+# sanctum/config.json house_rules.fuel_and_repair_alerts and
+# sanctum/identity/decision-making.md). Fed to scripts/check_fleet_alerts.py,
+# which turns a NEW crossing into an in-game card -- see that script for the
+# dedup/notification side; this module only computes the tiers.
+FUEL_MINOR_THRESHOLD = 0.50    # fuel remaining fraction AT OR BELOW this -> minor
+FUEL_SEVERE_THRESHOLD = 0.25   # fuel remaining fraction AT OR BELOW this -> severe
+DAMAGE_MINOR_THRESHOLD = 0.50  # wear fraction AT OR ABOVE this -> minor
+DAMAGE_SEVERE_THRESHOLD = 0.75  # wear fraction AT OR ABOVE this -> severe
+
+
+def _tier(value, minor_bound, severe_bound, direction):
+    """direction='at_or_below' (fuel: low is bad) or 'at_or_above' (damage:
+    high is bad). Returns None/"minor"/"severe", severe checked first so a
+    vehicle never double-counts into both tiers."""
+    if value is None:
+        return None
+    if direction == "at_or_below":
+        if value <= severe_bound:
+            return "severe"
+        if value <= minor_bound:
+            return "minor"
+        return None
+    if value >= severe_bound:
+        return "severe"
+    if value >= minor_bound:
+        return "minor"
+    return None
+
+
+def build_fleet(vehicles, fuel_capacity=None):
     data, err = vehicles
     if err:
         return unavailable(f"read_vehicles.py: {err}")
 
     owned = data.get("vehicles") or []
-    WEAR_ATTENTION_THRESHOLD = 0.5  # fraction, i.e. 50% worn
-    needs_attention = []
+
+    # Join each owned vehicle's raw fuel_level (read_vehicles.py) against its
+    # resolved DIESEL tank capacity (read_store_prices.py --fuel-capacity),
+    # keyed on unique_id. Added 2026-07-24. A vehicle this join can't resolve
+    # gets fuel_fraction=None -- reported in raw litres only via
+    # fuel_unresolved_vehicles, NEVER guessed into a tier.
+    capacity_by_id = {}
+    capacity_data, capacity_err = fuel_capacity if fuel_capacity else (None, "not requested")
+    if capacity_data and not capacity_err:
+        for row in (capacity_data.get("vehicles") or []):
+            capacity_by_id[row.get("unique_id")] = row
+
     max_wear = None
+    min_fuel_fraction = None
+    rows = []
+    fuel_unresolved = []
+
     for v in owned:
+        uid = v.get("unique_id")
+
         dmg = v.get("damage")
         try:
             dmg_f = float(dmg) if dmg is not None else None
@@ -466,12 +570,64 @@ def build_fleet(vehicles):
             dmg_f = None
         if dmg_f is not None and (max_wear is None or dmg_f > max_wear):
             max_wear = dmg_f
-        if dmg_f is not None and dmg_f >= WEAR_ATTENTION_THRESHOLD:
+        damage_tier = _tier(dmg_f, DAMAGE_MINOR_THRESHOLD, DAMAGE_SEVERE_THRESHOLD, "at_or_above")
+
+        fuel_raw = v.get("fuel_level")
+        try:
+            fuel_litres = float(fuel_raw) if fuel_raw is not None else None
+        except (TypeError, ValueError):
+            fuel_litres = None
+        cap_row = capacity_by_id.get(uid)
+        cap_litres = cap_row.get("diesel_capacity_litres") if (cap_row and cap_row.get("resolved")) else None
+        fuel_known = fuel_litres is not None and cap_litres is not None and cap_litres > 0
+        fuel_fraction = (fuel_litres / cap_litres) if fuel_known else None
+        if fuel_fraction is not None and (min_fuel_fraction is None or fuel_fraction < min_fuel_fraction):
+            min_fuel_fraction = fuel_fraction
+        fuel_tier = _tier(fuel_fraction, FUEL_MINOR_THRESHOLD, FUEL_SEVERE_THRESHOLD, "at_or_below")
+
+        if fuel_litres is not None and not fuel_known:
+            # Carries fuel, but the tank size couldn't be resolved this run --
+            # a real unknown, distinct from "no fuel tank at all" (fuel_litres
+            # is None for implements, which is correctly excluded here).
+            fuel_unresolved.append({
+                "unique_id": uid, "filename": v.get("filename"), "fuel_litres": fuel_litres,
+            })
+
+        # A friendly display name (from read_store_prices.py --fuel-capacity's
+        # own store-item resolution), falling back to the raw filename when
+        # unresolved -- a mod path like "$moddir$FS25_JohnDeereX91100.../
+        # seriesX9.xml" is correct but unreadable on an in-game card.
+        display_name = (cap_row.get("name") if cap_row else None) or v.get("filename")
+
+        rows.append({
+            "unique_id": uid,
+            "filename": v.get("filename"),
+            "name": display_name,
+            "damage_fraction": dmg_f,
+            "damage_known": dmg_f is not None,
+            "damage_tier": damage_tier,
+            "fuel_litres": fuel_litres,
+            "fuel_capacity_litres": cap_litres,
+            "fuel_fraction": fuel_fraction,
+            "fuel_known": fuel_known,
+            "fuel_tier": fuel_tier,
+        })
+
+    needs_attention = []
+    for r in rows:
+        if r["damage_tier"]:
             needs_attention.append({
-                "filename": v.get("filename"),
-                "unique_id": v.get("unique_id"),
-                "damage": dmg_f,
-                "reason": f"wear >= {WEAR_ATTENTION_THRESHOLD:.0%}",
+                "metric": "damage", "tier": r["damage_tier"],
+                "name": r["name"], "filename": r["filename"], "unique_id": r["unique_id"],
+                "value_fraction": r["damage_fraction"],
+                "reason": f"wear {r['damage_fraction']:.0%} ({r['damage_tier']})",
+            })
+        if r["fuel_tier"]:
+            needs_attention.append({
+                "metric": "fuel", "tier": r["fuel_tier"],
+                "name": r["name"], "filename": r["filename"], "unique_id": r["unique_id"],
+                "value_fraction": r["fuel_fraction"],
+                "reason": f"fuel {r['fuel_fraction']:.0%} remaining ({r['fuel_tier']})",
             })
 
     return {
@@ -479,18 +635,28 @@ def build_fleet(vehicles):
         "owned_count": data.get("owned_count"),
         "total_purchase_value": data.get("owned_total_price"),
         "max_wear_fraction": max_wear,
+        "min_fuel_fraction": min_fuel_fraction,
+        "fuel_capacity_status": "unavailable" if capacity_err else "ok",
+        "fuel_capacity_unavailable_reason": capacity_err,
+        "vehicles": rows,
         "needs_attention": needs_attention,
+        "fuel_unresolved_vehicles": fuel_unresolved,
+        "fuel_unresolved_note": (
+            f"{len(fuel_unresolved)} vehicle(s) carry fuel but their tank capacity "
+            "couldn't be resolved this run -- raw litres only, no tier assigned. Never "
+            "guessed into a percent."
+        ) if fuel_unresolved else None,
         "note": (
-            f"nothing needs attention -- max wear across the fleet is "
-            f"{max_wear:.2%}" if (max_wear is not None and not needs_attention) else
-            f"{len(needs_attention)} vehicle(s) at or above {WEAR_ATTENTION_THRESHOLD:.0%} wear"
-            if needs_attention else "no wear data available"
-        ) + (
-            ". Fuel is reported by parsers as raw fillLevel (likely liters); tank "
-            "capacity isn't present in vehicles.xml, so percent-full can't be computed "
-            "-- not evaluated here for that reason, not because it was skipped."
+            f"{len(needs_attention)} item(s) need attention (fuel/wear) -- see "
+            "fleet.needs_attention." if needs_attention else
+            (f"nothing needs attention -- max wear is {max_wear:.2%}"
+             + (f", min fuel is {min_fuel_fraction:.0%}" if min_fuel_fraction is not None else "")
+             if max_wear is not None else "no wear/fuel data available")
         ),
-        "source": "vehicles.xml via read_vehicles.py",
+        "source": (
+            "vehicles.xml via read_vehicles.py; fuel tank capacity via "
+            "read_store_prices.py --fuel-capacity"
+        ),
     }
 
 
@@ -756,7 +922,7 @@ def build_input_costs(prices, game_defs, placeables, fields):
             "buy-low into buy-high. Refusing to emit a calendar rather than emit a wrong one."
         )
 
-    sellable = set(gd_data.get("sellable_fill_types") or [])
+    sellable_confirmed = set(gd_data.get("sellable_confirmed") or [])
     spray_inputs = set(gd_data.get("spray_input_fill_types") or [])
     # The INPUT set, resolved by read_game_defs.py. Note it is NOT
     # `everything not sellable` -- that complement is also true of AIR,
@@ -1377,6 +1543,10 @@ def main():
     if "--verbose" in args:
         VERBOSE = True
         args.remove("--verbose")
+    fleet_only = False
+    if "--fleet-only" in args:
+        fleet_only = True
+        args.remove("--fleet-only")
     farm_id = 1
     if "--farm-id" in args:
         i = args.index("--farm-id")
@@ -1407,6 +1577,32 @@ def main():
     config_path, config_err = find_config(explicit_config)
     path_args = ["--config", config_path] if config_path else None
 
+    if fleet_only:
+        # Added 2026-07-24 for scripts/check_fleet_alerts.py, which only ever
+        # needs `fleet` + the in-game day. The full digest below composes ~11
+        # subprocess calls, several of which scan hundreds of base-game/mod
+        # XML files (--gaps alone measured ~33s on this install's WSL-mounted
+        # drive) -- fine for an occasional briefing, wasteful for a check
+        # meant to run on every savegame write. This path calls only the
+        # three parsers `fleet` actually needs (measured ~10-15s total vs
+        # ~55-90s for the full snapshot) and reuses build_fleet() unchanged,
+        # so the tier logic has exactly one implementation either way.
+        env = call("read_environment.py", savegame_dir)
+        vehicles = call("read_vehicles.py", savegame_dir, farm_id)
+        no_cfg = (None, config_err)
+        fuel_capacity = call("read_store_prices.py", savegame_dir, farm_id,
+                    (path_args or []) + ["--fuel-capacity"]) if path_args else no_cfg
+        when = build_when(env)
+        snapshot = {
+            "savegame_dir": savegame_dir,
+            "farm_id": farm_id,
+            "mode": "fleet_only",
+            "when": when,
+            "fleet": build_fleet(vehicles, fuel_capacity),
+        }
+        print(json.dumps(snapshot, indent=2))
+        return
+
     env = call("read_environment.py", savegame_dir)
     career = call("read_career.py", savegame_dir)
     economy = call("read_economy.py", savegame_dir, farm_id)
@@ -1424,7 +1620,9 @@ def main():
     game_defs = call("read_game_defs.py", savegame_dir, None, path_args) if path_args else no_cfg
     market = call("read_equipment_market.py", savegame_dir, None, path_args) if path_args else no_cfg
     gaps = call("read_store_prices.py", savegame_dir, farm_id,
-                (path_args or []) + ["--gaps"]) if path_args else no_cfg
+                (path_args or []) + ["--gaps"], timeout=120) if path_args else no_cfg
+    fuel_capacity = call("read_store_prices.py", savegame_dir, farm_id,
+                (path_args or []) + ["--fuel-capacity"]) if path_args else no_cfg
 
     when = build_when(env)
     current_day = when.get("in_game_day") if when.get("status") == "ok" else None
@@ -1442,7 +1640,7 @@ def main():
         "money": build_money(economy),
         "land": build_land(economy),
         "field_state": build_field_state(fields),
-        "fleet": build_fleet(vehicles),
+        "fleet": build_fleet(vehicles, fuel_capacity),
         "inventory": build_inventory(vehicles, placeables, prices),
         "input_costs": build_input_costs(prices, game_defs, placeables, fields),
         "weeds": weeds,
@@ -1611,7 +1809,8 @@ def main():
     fleet = snapshot["fleet"]
     if fleet.get("status") == "ok" and fleet.get("needs_attention"):
         decisions.append(
-            f"{len(fleet['needs_attention'])} vehicle(s) at or above 50% wear -- see fleet.needs_attention."
+            f"{len(fleet['needs_attention'])} fleet item(s) need attention (fuel and/or wear) "
+            "-- see fleet.needs_attention."
         )
     when_section = snapshot["when"]
     if when_section.get("status") == "ok" and when_section.get("next_notable_event", {}).get("type"):

@@ -13,6 +13,15 @@ a new `##` heading if it doesn't fit an existing one. Newest entries can go anyw
 within their heading; there's no required ordering within a section. Keep every entry a
 single short sentence.
 
+## Why `PL` is its own menu code, not folded into `BR`
+
+- `BR` reports what *changed* and what's due *today*; `ST` is a snapshot; `PR` prices a thing
+  the player already has in mind.
+- `PL` is the only forward-looking one — what should we be buying, and when — and its value is
+  timing a snapshot can't show: an input at its annual low for a one-period window, or a
+  capability the farm is silently paying for not having.
+- It is read-only, same as `ST` — it does not run a briefing's bookkeeping.
+
 ## Crop Planning
 
 - Check a crop's actual windrow/harvest-output fillType before assuming it matches a

@@ -12,22 +12,26 @@ price is good -- and getting it backwards would invert the advice silently,
 which is the most dangerous kind of wrong. Rather than hardcode a list of
 "things that are seed", this reads the game's own classification.
 
-THE CLASSIFIER, and why it is trustworthy (verified by running, 2026-07-24):
-    A fillType is a SELLABLE OUTPUT iff it appears in any SELLINGSTATION_*
-    <fillTypeCategory>. That is literally the game's own record of "a selling
-    station will buy this from the player".
-    Checked against this install and map, and it separates perfectly:
-        WHEAT/OAT/CANOLA/COTTON     -> sellable=True   (SELL calendar)
-        SEEDS/FERTILIZER/LIME/      -> sellable=False  (BUY calendar)
-        HERBICIDE/MANURE/DIESEL/
-        LIQUIDFERTILIZER/DIGESTATE/
-        LIQUIDMANURE/ANHYDROUS
-    Cross-checked from the other direction: every fillType named by a
-    <sprayType> is in the not-sellable set, independently. Two unrelated
-    structures agreeing is a much stronger basis than either alone, and much
-    stronger than a list of names typed in by hand -- which would rot the
-    first time a map added an input (this map adds ANHYDROUS, and the
-    classifier picks it up with no code change).
+THE CLASSIFIER IS POSITIVE-ONLY, AND THAT IS DELIBERATE (corrected 2026-08-16g
+after F-311: reading it as a complete SELL/BUY split cost ~$1.1M/month of
+mis-advice on a real farm). A fillType is CONFIRMED SELLABLE if EITHER holds:
+    (a) it appears in any SELLINGSTATION_* <fillTypeCategory> -- the game's
+        own price-table grouping, checked against this install and map
+        (WHEAT/OAT/CANOLA/COTTON confirmed this way); or
+    (b) a placeables.xml selling station in THIS SAVE has traded it -- a
+        <stats fillType=.../> node under a placeable, the same station data
+        read_prices.py already parses.
+Both sources are POSITIVE evidence only. NEITHER is a complete inventory of
+what the farm can sell, and the union of both is STILL INCOMPLETE: on the
+farm that surfaced F-311, MANURE and WOOL are base-game outputs recovered by
+source (b), but MILK never appears in either source though the game sells it.
+ABSENCE FROM sellable_confirmed MEANS "NOT YET CONFIRMED SELLABLE" -- NEVER
+"the farm buys this" and never "this is unsellable". There is no reliable way
+to name what the farm buys from this data, so this module does not attempt
+it; SEEDS/FERTILIZER/HERBICIDE/DIESEL/LIQUIDFERTILIZER/DIGESTATE/
+LIQUIDMANURE/ANHYDROUS are confirmed inputs via the game's <sprayType> list
+below, an independent, positive source -- not by process of elimination
+against sellable_confirmed.
 
 MAP-FIRST RESOLUTION IS MANDATORY -- THIS IS F-019's RULE, NOT A NICETY.
 A mod map ships its OWN fillTypes/fruitTypes/sprayTypes, and they win over
@@ -250,6 +254,35 @@ def collect_fill_type_categories(resolver):
                         categories.setdefault(name, set()).update((cat.text or "").split())
                 sources.append(f"map:{inner}")
     return categories, sources, None
+
+
+def collect_placeables_sellable(savegame_dir):
+    """fillTypes a selling station in THIS SAVE has actually traded --
+    adapted from read_prices.py's station walk (that script already parses
+    every <stats fillType=.../> node in placeables.xml; this reuses the same
+    walk to collect just the set of fillType names, not the price stats).
+
+    A SECOND, INDEPENDENT positive source for 'confirmed sellable', additive
+    to the SELLINGSTATION_* category test. Verified against a real farm
+    (F-311): this source is a STRICT SUPERSET of the category test alone (144
+    vs 112 fillTypes, 32 gained, 0 lost) -- it recovers MANURE and WOOL,
+    which are base-game outputs the category test alone misses -- but it is
+    STILL INCOMPLETE (MILK never appears here either on that farm). That
+    incompleteness is exactly why the caller must never treat absence from
+    the union as 'unsellable'; see the module docstring.
+
+    Returns (set_of_fill_types, source_label, error_or_None). An error here
+    is NOT fatal to the caller -- it degrades to the category-only source
+    rather than blocking a classification that source (a) already supports.
+    """
+    path = os.path.join(savegame_dir, "placeables.xml")
+    root, generic = load_xml(path)
+    if root is None:
+        return set(), None, generic.get("error", "unknown error reading placeables.xml")
+    fill_types = {
+        elem.attrib["fillType"] for elem in root.iter("stats") if "fillType" in elem.attrib
+    }
+    return fill_types, f"save:{path}", None
 
 
 def collect_spray_types(resolver):
@@ -508,10 +541,10 @@ def main():
     if not sellable:
         emit({
             "error": (
-                "no fillType appears in any SELLINGSTATION_* category -- the classifier that "
-                "separates sellable output from buyable input found nothing, so every fillType "
-                "would be misfiled as an input and every price calendar inverted. Schema has "
-                "likely changed. Refusing to emit a classification built on that."
+                "no fillType appears in any SELLINGSTATION_* category -- the primary "
+                "confirmed-sellable source found nothing, which almost certainly means the "
+                "game's own price-table schema has changed rather than that the farm sells "
+                "nothing. Refusing to emit a classification built on that."
             ),
             "calibration_needed": True,
         })
@@ -520,11 +553,23 @@ def main():
     spray_types, spray_source = collect_spray_types(resolver)
     crops, crop_source, crop_err = collect_seed_rates(resolver)
 
-    # Cross-check: every sprayType should be non-sellable. If one isn't, the
-    # two independent structures disagree and the classifier is on shakier
-    # ground than its docstring claims -- say so rather than let the claim of
-    # "two structures agree" stand unearned.
-    contradictions = sorted(s for s in spray_types if s in sellable)
+    # Second, independent positive source (F-311 fix, step (2)): a
+    # placeables.xml selling station this save has actually traded with. A
+    # failure here is NOT fatal -- it degrades to the category-only source,
+    # which already passed the emptiness guard above -- but it is recorded
+    # in sellable_source either way, never silently dropped.
+    placeables_sellable, placeables_source, placeables_err = collect_placeables_sellable(savegame_dir)
+    sellable_confirmed = sellable | placeables_sellable
+    sellable_source = list(cat_sources) + [
+        placeables_source if placeables_source else f"save:placeables.xml unreadable: {placeables_err}"
+    ]
+
+    # Cross-check: every sprayType should be non-sellable. Checked against the
+    # FULL confirmed-sellable union (categories + placeables), not just the
+    # category source alone, so a fillType placeables.xml recovers (e.g.
+    # MANURE, both a sprayable input and a station-traded output on the F-311
+    # farm) is correctly flagged as ambiguous rather than missed.
+    contradictions = sorted(s for s in spray_types if s in sellable_confirmed)
 
     emit({
         "map_id": map_id,
@@ -537,14 +582,19 @@ def main():
             "shortcut is forbidden: agreement today is what makes a base-only lookup look "
             "correct right up until a map rebalances something."
         ),
-        "sellable_fill_types": sorted(sellable),
-        "sellable_source": cat_sources,
+        "sellable_confirmed": sorted(sellable_confirmed),
+        "sellable_source": sellable_source,
         "sellable_rule": (
-            "A fillType is a sellable OUTPUT iff it appears in a SELLINGSTATION_* "
-            "fillTypeCategory -- the game's own record of what a selling station will buy. "
-            "Everything else that carries a price is an INPUT the farm BUYS. Crops -> SELL "
-            "calendar (high price good); inputs -> BUY calendar (low price good). Inverting "
-            "this inverts the advice."
+            "A fillType is CONFIRMED SELLABLE if it appears in a SELLINGSTATION_* "
+            "fillTypeCategory (the game's own price-table grouping) OR in a placeables.xml "
+            "selling-station <stats> node for this save. Both sources are POSITIVE evidence "
+            "only -- neither is a complete inventory of what the farm can sell, and their "
+            "union is confirmed STILL INCOMPLETE (F-311: MILK sells in-game but appears in "
+            "neither source on the farm that surfaced this). Absence from sellable_confirmed "
+            "means 'not yet confirmed sellable' -- NEVER 'the farm buys this' and never 'this "
+            "is unsellable'. There is no reliable way to name what the farm buys from this "
+            "data; input_fill_types below is a SEPARATE, independently-sourced positive list, "
+            "not the complement of this one."
         ),
         "spray_input_fill_types": sorted(spray_types),
         "spray_input_source": spray_source,
@@ -557,20 +607,22 @@ def main():
             "What the farm BUYS. Sprayable inputs are resolved from the game's own sprayTypes "
             "(so a map adding one -- this map adds ANHYDROUS -- is picked up with no code "
             "change); SEEDS/DIESEL/DEF are named explicitly because the engine knows them by "
-            "name and no XML marks them. This is NOT the complement of sellable: 'not sold at "
-            "a selling station' is also true of AIR, PROPANE, STONE and ~200 intermediate "
-            "products, and using it as the input test would bury the real buy-signals in noise."
+            "name and no XML marks them. This is NOT the complement of sellable_confirmed: "
+            "'absent from sellable_confirmed' is also true of AIR, PROPANE, STONE and ~200 "
+            "intermediate products (and, on some farms, of real outputs sellable_confirmed "
+            "simply hasn't seen traded yet), so using absence as the input test would bury "
+            "the real buy-signals in noise and misclassify untraded outputs as inputs."
         ),
         "classifier_cross_check": {
             "every_spray_type_is_non_sellable": not contradictions,
             "contradictions": contradictions or None,
             "note": (
-                "Independent confirmation: the sprayTypes list and the SELLINGSTATION_* "
-                "categories are unrelated structures, and every sprayType lands on the "
-                "non-sellable side. Two structures agreeing is why this classifier is "
-                "trusted over a hand-written list of names."
+                "Independent confirmation: the sprayTypes list and sellable_confirmed are "
+                "unrelated structures, and every sprayType lands outside sellable_confirmed. "
+                "Two structures agreeing is why this classifier is trusted over a hand-written "
+                "list of names."
                 if not contradictions else
-                "WARNING: these fillTypes are BOTH sprayable inputs AND sellable at a station, "
+                "WARNING: these fillTypes are BOTH sprayable inputs AND confirmed sellable, "
                 "so 'buy low' and 'sell high' both apply and the calendar for them is "
                 "genuinely ambiguous. Reported rather than silently forced to one side."
             ),

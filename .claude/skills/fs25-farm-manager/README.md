@@ -72,11 +72,13 @@ fs25-farm-manager/                  <- put this whole folder in .claude/skills/
 │   └── journal/README.md            seeds the session archive folder
 └── references/                      <- loaded on demand, each with a stated trigger
     ├── workflow-onboarding.md        first run: bind a save, read it, then interview
-    ├── onboarding-steps/             the onboarding workflow's steps (step-01…step-07)
+    ├── onboarding-steps/             the onboarding workflow's 5 steps (o1…o5)
     ├── workflow-briefing.md          menu BR + how to conduct a session
-    ├── briefing-steps/              the briefing workflow's steps (step-01…step-08)
+    ├── session-steps/               the session-start workflow's 5 steps (s1…s5)
     ├── workflow-closeout.md          menu CO
-    ├── closeout-steps/              the closeout workflow's steps (step-01…step-07)
+    ├── closeout-steps/              the closeout workflow's 5 steps (c1…c5)
+    ├── dev-steps/                   dev-facing only, never a player session
+    ├── duty-register.md              the 16 duties S4 iterates as data
     ├── sanctum-upkeep.md             every sanctum file and when it changes. Read at closeout.
     ├── reading-the-save.md           the parsing discipline: absence must never
     │                                 look like data. Read before trusting output.

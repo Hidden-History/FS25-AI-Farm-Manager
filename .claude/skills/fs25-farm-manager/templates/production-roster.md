@@ -8,15 +8,27 @@ rotation_trigger: on-resolve
 archive_target: "history/archive/production-roster-archive.md"
 resolved_markers: ["STOPPED", "REMOVED"]
 reconciliation: "stopped/removed chains MOVE to archive (never blind row-shed); Running/idle is live, Last updated is its confirm-date"
-format_version: 2
+format_version: 3
 parity_spec:
-  required_sections: ["## Chains owned", "## Reading of it"]
+  required_sections: ["## Read live — Running / idle is never a cached figure", "## Chains owned", "## Reading of it"]
 ---
 
 # Production Chains Roster
 
+## Read live — Running / idle is never a cached figure
+
+**`Running / idle` is live** — `read_productions.py` answers it fresh every session, never
+trusted from this table. The durable content here is the *list of chains owned* (the index);
+the status itself lives in the save, and this file is only touched when a chain is
+started/stopped/removed — so a `Running / idle` cell can sit unrevised session after session
+while the real status drifts underneath it (the same stale-but-confident shape F-117 names for
+equipment). **A status without a current-session `Last updated` is not this session's answer** —
+re-run `read_productions.py` before trusting a status in the table below.
+
 _Snapshot: {{DATE}} ({{onboarding | updated at session N}}). Source:
-`placeables.xml` production buildings filtered to this farm's `farm_id`._
+`placeables.xml` production buildings filtered to this farm's `farm_id`. **This provenance line
+describes the DURABLE chain list — which chains exist — never the `Running / idle` column, which
+is live per the banner above.**_
 
 **If this farm owns no production chains, say so explicitly and stop there --
 don't leave the file looking unpopulated.** "0 production buildings owned as of
@@ -34,7 +46,7 @@ heading.)_
 |---|---|---|---|
 | {{BUILDING_NAME_OR_ID}} | {{TYPE — dairy, sawmill, bakery, etc.}} | {{STATUS}} | {{DATE}} |
 
-**`Running / idle` is live** — `read_placeables.py` answers it fresh every session. `Last updated`
+**`Running / idle` is live** — `read_productions.py` answers it fresh every session. `Last updated`
 is its confirm-date, not decoration: don't trust a status older than the current session without
 re-checking. The durable content here is the *list of chains owned* (the index); the status lives
 in the save. When a chain is stopped or removed, MOVE its row to

@@ -2,8 +2,12 @@
 class: append-only-log
 load: B
 owns: "this farm's standing defect list — every analysis error, script bug, and friction, cumulative"
-cap_lines: 150
-cap_kb: 20
+# cap_lines/cap_kb: sized from ONE measured live session (494 ln / 38,152 B = 77.2 B/line,
+# Montana4X_Farm_Manager, session_count 1, 2026-08-15) -- growth rate across sessions is
+# UNMEASURED, this is a judgement, not a derivation. cap_kb is set >= cap_lines x measured
+# B/line so the byte cap never silently binds ahead of the line cap.
+cap_lines: 1500
+cap_kb: 120
 rotation_trigger: on-resolve+on-close-over-cap
 archive_target: "history/archive/friction-archive-{YYYY}.md"
 reconciliation: "live = OPEN + actionable-NOTED only; FIXED/NOTED whole entries relocate to the yearly archive with id preserved, never renumbered; OPEN never rotates"
@@ -90,6 +94,12 @@ Log it if it cost time, produced a wrong answer, or nearly did:
 - **Player corrections** — if they had to tell you twice, that's friction. Log it, and fix it in
   `identity/decision-making.md` so it survives the conversation.
 
+**Not everything logged here is exportable.** An entry earns a `github:` export only if a fix in
+the shipped skill or mod would prevent it recurring on another player's farm — a wrong regex, a
+missing template, a documented rule the code doesn't enforce. Your own analysis errors and
+this-farm judgement calls stay local: log them, learn from them, but mark them `github:
+not-applicable` rather than offering them for export.
+
 ## Entry shape
 
 Keep entries diagnosable by someone who wasn't there. A defect list nobody can act on is a diary.
@@ -101,7 +111,13 @@ Keep entries diagnosable by someone who wasn't there. A defect list nobody can a
 **Impact:** What it cost, or nearly cost. Be honest — "nearly told the player X" counts.
 **Fix (applied):** / **Fix needed:** What changed and where, or what should.
 **Lesson:** The transferable rule. Skip it if there isn't one; don't manufacture one.
+**github:** `<url | not-exported | not-applicable>` — the issue URL once it's actually posted;
+`not-exported` while it's still a candidate; `not-applicable` once triage has ruled it out (see
+above). Without this field the next session re-offers the same entry for export.
 ```
+
+**Self-review before moving on:** re-read the entry you just wrote and confirm it names a real
+file, a real value, and what it actually cost. That's what keeps it diagnosable, not a diary.
 
 Group entries by session, newest at the bottom; within a session, analysis errors first (only you
 can file them), then script/skill bugs, then missing tooling.

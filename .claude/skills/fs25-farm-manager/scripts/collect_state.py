@@ -84,6 +84,38 @@ PARSERS = {
     "sales": ("read_sales.py", False, []),
     "prices": ("read_prices.py", False, []),
     "career": ("read_career.py", False, ["--verbose"]),
+    "livestock": ("read_livestock.py", True, []),
+    "farm_ledger": ("read_farm_ledger.py", True, []),
+    # The `production` set (sec. 6.1), split across two domain scripts -- a set
+    # may contain several, and these read different files.
+    "productions": ("read_productions.py", True, []),
+    "bales_pallets": ("read_bales_pallets.py", True, []),
+    # The set's third script reads DEFINITIONS -- the game install and the mod
+    # zips -- not the savegame, so it is farm-independent: definitions are
+    # identical for every farm and --farm-id would imply a filter that does not
+    # exist. It still accepts the leading savegame_dir positional and ignores it,
+    # so this table's uniform call shape holds.
+    "production_defs": ("read_production_defs.py", False, []),
+    # ⏳ RESERVED FOR WAVE 3 -- these two scripts DO NOT EXIST IN THIS TREE YET.
+    # Registered ahead of them deliberately: sec. 6.7 names TWO registration
+    # points, and the other one (a SKILL.md mention) is owned by this lane while
+    # the scripts are owned by wave 3. Pre-registering both here keeps that
+    # split from turning wave 3's suite red for a reason unrelated to its work.
+    #
+    # Until wave 3 lands them, `run()` below cannot import what is not there:
+    # the subprocess exits non-zero with empty stdout, json.loads raises, and
+    # run() returns {"error": "failed to parse output of read_weather.py", ...}.
+    # THAT IS THE CORRECT SHAPE, not a silent gap -- an absent parser reports as
+    # a structured error and never as [] or {} (DEC-001).
+    #
+    # ⚠ THE SECOND TUPLE FIELD IS A CONTRACT WAVE 3 MUST MEET, not a hint.
+    # `weather` is False because weather is not owned by anyone -- it matches
+    # read_environment.py. `fleet` is True because every domain it folds in
+    # (vehicles, storage, placeables) is farm-scoped, and read_vehicles.py and
+    # read_placeables.py are both True. If wave 3's read_fleet.py does not
+    # accept --farm-id, collect_state will pass it an argument it rejects.
+    "weather": ("read_weather.py", False, []),
+    "fleet": ("read_fleet.py", True, []),
 }
 
 

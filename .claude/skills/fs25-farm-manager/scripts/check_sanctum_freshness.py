@@ -1,7 +1,8 @@
 """
 Fail loudly when a farm's sanctum claims something its own savegame contradicts.
 
-Usage: python3 check_sanctum_freshness.py <savegame_dir> [--sanctum DIR] [--quiet]
+Usage: python3 check_sanctum_freshness.py <savegame_dir> [--sanctum DIR]
+                                          [--farm-id N] [--quiet] [--json]
 Exit 0 = the sanctum agrees with the save. Exit 1 = it has drifted.
 Run it at the start of every briefing -- it is fast (no --debug pass).
 
@@ -54,6 +55,11 @@ RULES THIS FILE FOLLOWS (each one paid for -- see FRICTION-LOG.md)
     evidence. Probe against the right thing, and say what you measured.
   * STALE, UNVERIFIABLE and FRESH are three different answers. "I couldn't check" must
     never read as "it's fine" -- that is F-001 exactly, one level up.
+  * --json (item #11/F-321): the default output is PROSE, which the skill's own
+    documented trust rule (s2-take-delivery.md's "read the JSON") cannot parse --
+    a caller following that rule verbatim gets a JSONDecodeError. --json emits the
+    identical fresh/stale/unverifiable verdicts as structured JSON instead; the
+    prose default is UNCHANGED for a human reading this at a terminal.
 """
 import json
 import os
@@ -226,10 +232,28 @@ def probe_owned_land(sg, sanctum, farm_id=1):
         return "unverifiable", "decoder returned no owned count/area"
 
     problems = []
+    # The CONFIG side keeps its `or []`: an absent declaration in config.json is
+    # genuinely "nothing to compare against", and `if ids` below skips the check.
     ids = set((conf.get("owned_fields") or {}).get("field_ids") or [])
-    if ids and ids != set(owned.get("field_ids") or []):
+
+    # ⛔ THE PARSER SIDE MUST NOT. `owned.field_ids` is None whenever ownership
+    # is UNKNOWABLE -- for any cause: fields.xml unreadable, the map outside
+    # ARCH-R3-04's scope, or any row whose ownership could not be resolved.
+    # `or []` turned that straight back into an empty set and then reported a
+    # CONCRETE FALSE DRIFT -- "config.json owned_fields has 122 ids; the save
+    # says 0" -- manufactured entirely from an answer the parser refused to
+    # give. That is the identical `or []` construct D1 removed from
+    # read_farmland_areas.py, reinstated one file over; the round's own stated
+    # lesson is that D1 "checked one consumer and generalised" to three.
+    # The unverifiable early return above covers count and ha, NOT this.
+    save_ids = owned.get("field_ids")
+    if ids and save_ids is None:
+        return "unverifiable", ("read_farmland_areas.py could not determine which "
+                                "fields this farm owns, so config.json's owned_fields "
+                                "cannot be checked against the save")
+    if ids and ids != set(save_ids):
         problems.append(f"config.json owned_fields has {len(ids)} ids; the save says "
-                        f"{len(owned.get('field_ids') or [])}")
+                        f"{len(save_ids)}")
 
     creed = read(os.path.join(sanctum, "identity", "creed.md")) or ""
     m = re.search(r"\*\*(\d+) parcels\s*[—-]\s*([\d.]+) ha", creed)
@@ -357,6 +381,7 @@ def probe_directive_premises(sg, sanctum, farm_id=1):
 def main():
     argv = sys.argv[1:]
     quiet = "--quiet" in argv
+    as_json = "--json" in argv
     sanctum = None
     if "--sanctum" in argv:
         i = argv.index("--sanctum")
@@ -377,10 +402,10 @@ def main():
             print(json.dumps({"error": f"--farm-id must be an integer, got {argv[i + 1]!r}"}))
             sys.exit(1)
         del argv[i:i + 2]
-    args = [a for a in argv if a != "--quiet"]
+    args = [a for a in argv if a not in ("--quiet", "--json")]
     if not args:
         print(json.dumps({"error": "usage: check_sanctum_freshness.py <savegame_dir> "
-                                   "[--sanctum DIR] [--farm-id N] [--quiet]"}))
+                                   "[--sanctum DIR] [--farm-id N] [--quiet] [--json]"}))
         sys.exit(1)
     sg = args[0]
     if not os.path.isdir(sg):
@@ -411,6 +436,26 @@ def main():
         except Exception as e:  # a probe that crashes must not read as a pass
             verdict, detail = "unverifiable", f"probe raised {type(e).__name__}: {e}"
         {"stale": stale, "unverifiable": unverifiable, "fresh": fresh}[verdict].append((name, detail))
+
+    if as_json:
+        # item #11/F-321: the same verdicts the prose below prints, structured
+        # so a caller following s2-take-delivery.md's "read the JSON" trust
+        # rule gets JSON rather than a JSONDecodeError. STALE, UNVERIFIABLE and
+        # FRESH stay three distinct lists here too -- collapsing "unverifiable"
+        # into "fresh" would be exactly the F-001 mistake this file exists to
+        # catch, now reintroduced at the machine-readable layer instead of the
+        # prose one.
+        print(json.dumps({
+            "sanctum": sanctum,
+            "farm_id": farm_id,
+            "fresh": [{"probe": n, "detail": d} for n, d in fresh],
+            "stale": [{"probe": n, "detail": d} for n, d in stale],
+            "unverifiable": [{"probe": n, "detail": d} for n, d in unverifiable],
+            "fresh_count": len(fresh),
+            "stale_count": len(stale),
+            "unverifiable_count": len(unverifiable),
+        }, indent=2))
+        sys.exit(1 if stale else 0)
 
     print("=" * 74)
     print("SANCTUM FRESHNESS -- does the farm's memory still match its save?")
