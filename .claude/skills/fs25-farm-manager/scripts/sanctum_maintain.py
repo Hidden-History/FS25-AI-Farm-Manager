@@ -295,8 +295,41 @@ def _safe_move(src, dst, new_text, src_digest):
 # config.json's out-of-band contract (schema Section 2). always-required top-level keys;
 # interest_rate_annual is conditionally required (only once a loan with a known rate
 # exists) -- its absence is UNVERIFIABLE/N-A, never STALE.
-CONFIG_REQUIRED_KEYS = ["savegame_path", "farm_id", "paths"]
+CONFIG_REQUIRED_KEYS = ["savegame_path", "farm_id", "paths",
+                        "player_name", "language"]
 CONFIG_CONDITIONAL_KEY = "interest_rate_annual"
+
+# BUG-025 / DEC-117. A presence test alone cannot separate "asked and answered" from
+# "never asked": onboarding writes config.json by hand from templates/config.json
+# (o5:12-19), so the failure that actually happens is a key left holding the template's
+# own placeholder. Measured before this was added: "{{PLAYER_NAME}}", "", "unknown" and a
+# real answer all returned the IDENTICAL verdict -- DEC-001's own shape inside the check
+# meant to prevent it.
+#
+# NOT a new key's problem. templates/config.json ships savegame_path as
+# "{{ABSOLUTE_PATH_TO_SAVEGAME_FOLDER}}" and savegame_path is ALREADY in
+# CONFIG_REQUIRED_KEYS -- so this hole is live today on a currently-required key, and the
+# guard closes that one too. Hence: GENERAL over CONFIG_REQUIRED_KEYS, never a special
+# case for the two keys that prompted it.
+#
+# The judgement itself is aggregate_render._is_placeholder -- the SHIPPED gate build_header
+# already applies to farm_name (:75-79, :110). Imported, never restated: a second copy of
+# a refusal rule is a copy that can drift, and this module is the one that would drift
+# silently. sys.path insert matches the convention every sibling script here uses.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from aggregate_render import _is_placeholder  # noqa: E402
+
+
+def _is_unanswered(value):
+    """True when a required config value reads as 'never filled in'.
+
+    Containers are exempt: a dict/list is not itself an answer, and judging one by its
+    repr would flag `paths` for any nested placeholder -- a different check with a
+    different owner. Mirrors aggregate_render._claimable: only scalars are claims.
+    """
+    if isinstance(value, (dict, list)):
+        return False
+    return _is_placeholder(value)
 # config.json carries no frontmatter (it's JSON, not a templated .md), so its size
 # recommendation is this constant rather than a `cap_kb:` frontmatter field -- overridable
 # the same way every other file's cap is, via config.json's own "cap_overrides" (DEC-105).
@@ -455,6 +488,15 @@ def _check_config_json(path):
     if missing:
         return {"file": path, "verdict": STALE,
                 "reason": f"missing always-required key(s): {', '.join(missing)}"}
+    # BUG-025: present-but-never-answered is the failure that actually reaches a player,
+    # because onboarding hand-writes this file from the template. Reported as its own
+    # reason, not folded into "missing" -- a key copied verbatim and a key deleted are
+    # different mistakes and the player is told which one they made.
+    unanswered = [k for k in CONFIG_REQUIRED_KEYS if _is_unanswered(data.get(k))]
+    # Deliberately NOT an early return, unlike `missing` above. An unanswered key and a
+    # malformed cap_overrides are independent defects, and returning here would hide the
+    # second behind the first -- a farm would fix its config and only THEN discover the
+    # cap problem. Everything below still runs; only the verdict is overridden, at the end.
     # config.json cap_kb (schema Section 2) -- JSON, measured whole (L-A). DEC-105: a
     # recommendation that warns, never blocks; the farm's own "cap_overrides" (if any and
     # if usable) replaces the shipped default -- a malformed one falls back but is never
@@ -474,6 +516,16 @@ def _check_config_json(path):
                   "not_a_defect": True}
     else:
         result = {"file": path, "verdict": FRESH, "reason": "all required keys present"}
+    if unanswered:
+        # BUG-025. Overrides FRESH *and* the no-loan UNVERIFIABLE: a config whose required
+        # keys were never answered is stale regardless of whether it carries a loan rate,
+        # and it is emphatically not "not_a_defect".
+        result = {"file": path, "verdict": STALE,
+                  "reason": f"always-required key(s) present but never answered: "
+                            f"{', '.join(unanswered)}. A template placeholder, \"\", or "
+                            "\"unknown\" means onboarding did not ask -- which must not "
+                            "read the same as an answer (DEC-001).",
+                  "unanswered_keys": unanswered}
     result["over_cap"] = over_cap
     if over_cap:
         result["warning"] = _cap_warning(

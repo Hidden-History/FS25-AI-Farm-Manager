@@ -36,6 +36,35 @@ that detects loss is how loss stops being detectable.
 
 `farm_id` arrives here ALREADY RESOLVED, by cache_layout.resolve_farm_id(). This
 module never reads config and never defaults: it records the int it is handed.
+THE IN-GAME DAY AND THE MEASUREMENTS ARRIVE THE SAME WAY, for the same reason:
+this module runs no parser, opens no savegame and derives nothing. It records
+what it is handed, and says so when it is handed nothing.
+
+THE IN-GAME DAY, AND WHY THE RECORD CARRIES BOTH FIELDS. Every record before
+this change carried `recorded_at` -- WALL-CLOCK -- and nothing else. Measured on
+the live log: 17 records, zero day fields, and records 5-17 span thirteen
+generations inside four wall-clock hours, almost all on ONE in-game day. Wall
+clock is not the denominator of anything a farm does, so every one of those
+samples is unusable for a rate. `<save>/environment.xml` carries TWO counters,
+`currentDay` and `currentMonotonicDay`, and they read the same number today, so
+nothing observable distinguishes them. The name `currentMonotonicDay` only earns
+its keep if `currentDay` can wrap; whether it can is NOT settled by the
+FS25 Community LUADOC corpus (searched 2026-08-22 at commit 24afb18e7cfb --
+`monotonic` appears nowhere in its 1,661-page index). So this record stamps BOTH
+under `game_day_fields` and names which one `game_day` is a copy of in
+`game_day_authority`. Stamping only `currentDay` would break every span and
+every rate SILENTLY at a year boundary, long after the code looked correct;
+stamping both costs one integer and cannot.
+
+VALUES, NOT ONLY HASHES -- AND STILL NOT A RATE. `domains` answers "did anything
+move?"; it cannot answer "by how much", because a hash is not a quantity. So a
+record now also carries `measurements`: the numeric fields of each domain's own
+rows, keyed by the section's own `identity_fields`. ⛔ NOTHING HERE DIVIDES, and
+that is not an omission. Two snapshots give a NET CHANGE, never a rate: a refill
+between them is arithmetically indistinguishable from lower usage, and nothing
+in either snapshot records one. This payload exists so that a rate BECOMES
+possible later, from enough samples plus the gap records that already ship --
+`spans_a_gap()` is the question a consumer must ask before it divides anything.
 
 ⚠ A LOST WATERMARK IS NOT A PASS. It degrades the check to UNCHECKABLE and says
 so. (`UNCHECKABLE` is the post-rename structural word § 8.4 mandates. The word it
@@ -55,6 +84,119 @@ RETENTION_LOG = "history"      # rotated on its own schedule, never truncated
 RETENTION_WATERMARK = "register"   # NEVER rotated -- see the module docstring
 
 UNCHECKABLE = "UNCHECKABLE"
+
+# ⛔ WHICH FIELD `game_day` IS A COPY OF. Settled at build time on purpose: the
+# two counters are equal today, so a year boundary is the first moment anything
+# could tell a right answer from a wrong one, and that is far too late to find
+# out. Recorded in the record itself so a consumer never has to infer it.
+DAY_AUTHORITY = "current_monotonic_day"
+
+# The vocabulary is the duty register's, not a new one. duty-register.md's
+# "three degradation axes" fixes axis 2 -- the reader could not run -- as
+# `status: unavailable` PLUS "the reader's own `error` string, surfaced, never
+# swallowed". `partial` is its axis 3: some but not all of what was needed came
+# back readable.
+STATUS_OK = "ok"
+STATUS_PARTIAL = "partial"
+STATUS_UNAVAILABLE = "unavailable"
+
+
+def game_day_unavailable(reason):
+    """The typed-absence form of a day stamp, for a caller that has no day.
+
+    ⛔ THERE IS NO "JUST LEAVE IT OUT" PATH, and that is the point. An omitted
+    key reads as "fine" to every consumer that does not go looking for it, which
+    is DEC-001's failure mode exactly: absence must be impossible to mistake for
+    data. So a run that could not read the day still stamps all five fields --
+    the value as an explicit null, the status, and the reader's own words for
+    WHY. A consumer can then refuse the sample rather than average across it.
+    """
+    return {
+        "current_day": None,
+        "current_monotonic_day": None,
+        "status": STATUS_UNAVAILABLE,
+        "reason": reason,
+    }
+
+
+def _day_fields(game_day):
+    """Normalise a resolved day into the five fields every record carries.
+
+    ⚠ NEVER SUBSTITUTES ONE COUNTER FOR THE OTHER. If the monotonic field is
+    absent but `currentDay` is present, the honest answer is `partial` with a
+    reason naming what is missing -- NOT `currentDay` quietly promoted into the
+    authority slot. That substitution is the exact silent-wrap defect the
+    two-field stamp exists to prevent, and it would be invisible until a year
+    boundary.
+    """
+    if game_day is None:
+        game_day = game_day_unavailable(
+            "no in-game day was supplied to the delta log for this run, so this "
+            "record's denominator is wall-clock only and cannot carry a rate.")
+    if not isinstance(game_day, dict):
+        game_day = game_day_unavailable(
+            "the in-game day supplied to the delta log was %r, which is not a "
+            "resolved day record." % (game_day,))
+
+    current = game_day.get("current_day")
+    monotonic = game_day.get("current_monotonic_day")
+    status = game_day.get("status")
+    reason = game_day.get("reason")
+
+    if status is None:
+        # A day handed over with no status is not trusted into `ok`: the caller
+        # said nothing about it, so this says nothing about it either.
+        status = STATUS_UNAVAILABLE
+        reason = reason or (
+            "the in-game day supplied to the delta log carried no status, so "
+            "nothing establishes that it was read rather than assumed.")
+
+    authoritative = game_day.get(DAY_AUTHORITY)
+    if status == STATUS_OK and authoritative is None:
+        status = STATUS_PARTIAL
+        # ⚠ The SAVE's tag name, not this module's field name. They differ
+        # (<currentMonotonicDay> vs current_monotonic_day) and a reader chasing
+        # this message is going to grep environment.xml, not our JSON.
+        reason = reason or (
+            "environment.xml carried <currentDay> but no <currentMonotonicDay>, "
+            "so the counter this log treats as authoritative (%s) is absent. The "
+            "present counter is recorded under game_day_fields and is NOT "
+            "promoted into game_day: if currentDay can wrap, promoting it would "
+            "break every span silently at a year boundary." % DAY_AUTHORITY)
+
+    return {
+        "game_day": authoritative,
+        "game_day_status": status,
+        "game_day_reason": reason,
+        "game_day_authority": DAY_AUTHORITY,
+        "game_day_fields": {
+            "current_day": current,
+            "current_monotonic_day": monotonic,
+        },
+    }
+
+
+def _measurement_fields(measurements):
+    """The retained VALUES, or an explicit statement that there are none.
+
+    ⛔ NOT A RATE, AND NEVER ROUNDED INTO ONE. This module stores quantities and
+    the day they were observed on. Dividing two of them is a separate decision
+    that needs a monotonicity nobody has established -- see the module
+    docstring.
+    """
+    if measurements is None:
+        return {
+            "measurements": None,
+            "measurements_status": STATUS_UNAVAILABLE,
+            "measurements_reason": (
+                "no measurements were supplied to the delta log for this run, "
+                "so this record says what MOVED and cannot say by how much."),
+        }
+    return {
+        "measurements": measurements,
+        "measurements_status": STATUS_OK,
+        "measurements_reason": None,
+    }
 
 
 def history_paths(sanctum_dir):
@@ -174,8 +316,16 @@ def detect_break(log_path, watermark):
     return None, detail
 
 
-def append(sanctum_dir, farm_id, per_domain_hashes, changes, generator):
+def append(sanctum_dir, farm_id, per_domain_hashes, changes, generator,
+           game_day=None, measurements=None):
     """Append one run's delta record. Returns (record, error).
+
+    ⚠ `game_day` AND `measurements` DEFAULT TO None AND STILL PRODUCE FIELDS.
+    They are keyword arguments with defaults so an existing caller keeps working,
+    but a defaulted call does NOT produce a quieter record -- it produces one
+    that says, in `game_day_status` and `measurements_status`, that nothing was
+    supplied and why that matters. A default that made the keys vanish would let
+    a caller silently opt out of the very thing this change exists to add.
 
     THE ONLY WRITE PATH, and the only "a"-mode open in this layer. The sequence:
 
@@ -211,6 +361,11 @@ def append(sanctum_dir, farm_id, per_domain_hashes, changes, generator):
     tail = records[-1] if records else None
     next_seq = (tail.get("seq", 0) + 1) if tail else 1
 
+    # Both records get the SAME stamp: a gap and the delta that follows it are
+    # observed in one run, on one in-game day, and a consumer bounding a gap in
+    # game days needs the gap record to carry one at all.
+    day_stamp = _day_fields(game_day)
+
     pending = []
     if break_reason:
         pending.append({
@@ -218,6 +373,7 @@ def append(sanctum_dir, farm_id, per_domain_hashes, changes, generator):
             "seq": next_seq,
             "prev_seq": tail.get("seq") if tail else None,
             "recorded_at": _now(),
+            **day_stamp,
             "farm_id": farm_id,
             "reason": break_reason,
             "detail": break_detail,
@@ -232,12 +388,14 @@ def append(sanctum_dir, farm_id, per_domain_hashes, changes, generator):
         "seq": next_seq,
         "prev_seq": tail.get("seq") if tail else None,
         "recorded_at": _now(),
+        **day_stamp,
         "farm_id": farm_id,
         "generator": generator,
         "source_set_hash": composite_hash(per_domain_hashes),
         "prev_source_set_hash": (tail or {}).get("source_set_hash"),
         "domains": dict(sorted(per_domain_hashes.items())),
         "changes": changes,
+        **_measurement_fields(measurements),
         "retention_class": RETENTION_LOG,
     }
     pending.append(record)

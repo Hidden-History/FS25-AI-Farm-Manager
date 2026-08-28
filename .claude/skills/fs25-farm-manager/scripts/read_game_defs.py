@@ -301,48 +301,312 @@ def collect_spray_types(resolver):
         "base:data/maps/maps_sprayTypes.xml"
 
 
-# A fruit's <foliageState> elements ARE its growth states, in document order: the
-# Nth element is growthState N. The names are semantic, so the meaning is READ
-# from the game rather than hardcoded.
+# A fruit's <foliageState> elements ARE its growth states, in document order:
+# the Nth element is growthState N. That indexing is confirmed against this save
+# (RESEARCH-field-operations-model-2026-08-23.md sec. 12: for every ground-marked
+# field, growthState never lands BELOW the marker index -- 0 counter-examples out
+# of 122 fields; if the index were wrong they would land on both sides).
 #
-#   oat:    1 invisible .. 5 harvestReady, 6 dead, 7 harvested, 8 tireTracks
-#   canola: 1 invisible .. 9 harvestReady, 10 dead, 11 harvested, 12 tireTracks
-#   maize:  .. 5 harvestReadyGreen, 6 harvestReadyGreen2, 7 harvestReady3,
-#              8 dead, 9 harvestedGreen, 10 harvested, ...
+# ==> READ THE DECLARED ATTRIBUTE, NEVER THE STATE'S NAME. <==
 #
-# Maize is why these are PREFIX rules and not exact names: it has THREE ready
-# states and TWO cut states, and matching "harvestReady" exactly silently dropped
-# four of one farm's fields into "unknown".
+# This function used to classify by NAME PREFIX -- "harvestready..." meant ready,
+# "harvested..." meant cut. That was measured against the declared
+# `isHarvestReady` attribute on this save's own resolved crops and IT DISAGREES
+# FOR 8 OF 29 CROPS. The name is a label; the attribute is what the engine reads.
 #
-# These prefixes are safe, unlike the groundType prefix this replaces:
-# "harvestready..." and "harvested..." diverge at character 8 (r vs d), so no
-# string can match both. groundType's HARVEST_READY / HARVEST_READY_OTHER could
-# not be told apart by startswith() -- that was F-002's shape and it is why this
-# reads growthState instead.
+#   crop        name-prefix says   isHarvestReady says   live fields affected
+#   maize       ready @ 5,6,7      ready @ 7             8    <- over-claims 2 states
+#   potato      ready @ 6          ready @ 9             7    <- wrong in BOTH directions
+#   sugarbeet   ready @ 8          ready @ 11            10   <- 3 states EARLY
+#   sugarcane   ready @ 8          ready @ 11            0
+#   spinach     ready @ 6          ready @ 6,7           2    <- misses a ready state
+#   grass       ready @ 4          ready @ 3,4           11   <- misses a ready state
+#   alfalfa     ready @ 4          ready @ 3,4           7
+#   clover/meadow  ready @ 4       ready @ 3,4           7
 #
-# NEVER hardcode the numbers. canola=9/10/11 is true of THIS map's canola; a map
-# shipping its own foliage gets different ones. Same lesson as read_fields.py:39.
+# That is 50+ of this farm's 122 fields told the wrong thing about harvest, and
+# EVERY ONE OF THEM WOULD HAVE LOOKED RIGHT: sugarbeet's state 8 really is named
+# "harvestReady", it just is not harvest-ready. The name tracks the ground
+# marker, which is a texture; the attribute tracks readiness, which is the fact.
+# Same defect shape as reading groundType -- one layer further in, and it
+# survived because the growth table never actually built on the live save (see
+# derive_growth_states in read_fields.py), so nobody ever saw the wrong answer.
+#
+# ⚠ THE NAME-DERIVED ANSWER IS STILL COMPUTED AND STILL REPORTED, under
+# `name_derived_cross_check`, precisely so this disagreement stays VISIBLE rather
+# than being quietly replaced. A future map whose foliage drops the attributes
+# would otherwise degrade to silence.
 READY_PREFIX = "harvestready"
 CUT_PREFIX = "harvested"
 DEAD_NAMES = ("dead", "withered")
 
+# The declared flags, as they appear on <foliageState>. Measured across all 29
+# resolved crops on this save: isHarvestReady is declared by ALL of them, isCut
+# by all but the 2-state cover crop oilseedRadish. So absence is rare and real,
+# never the common case -- and it is reported as absence, not as "none".
+READY_ATTR = "isHarvestReady"
+CUT_ATTR = "isCut"
+WITHERED_ATTR = "isWithered"
+WEEDING_ATTR = "allowsWeeding"
+HOEING_ATTR = "allowsHoeing"
 
-def classify_growth_states(names):
-    """foliageState names in document order -> which growthState numbers mean what.
 
-    Returns (ready, cut, dead) lists of 1-based indices. Empty lists mean the
-    fruit declares no such state -- which is a real answer for e.g. grass, and
-    must not be confused with "could not read it"."""
-    ready, cut, dead = [], [], []
+def _flagged(states, attr):
+    """1-based indices of the <foliageState> elements carrying attr="true"."""
+    return [i for i, fs in enumerate(states, start=1)
+            if (fs.attrib.get(attr) or "").strip().lower() == "true"]
+
+
+def classify_growth_states(states):
+    """<foliageState> elements in document order -> what each growthState means.
+
+    `states` is the list of ELEMENTS, not their names -- the attributes are the
+    answer and the names are only a cross-check (see the block comment above).
+
+    Returns a dict. Empty lists mean the fruit DECLARES no such state, which is a
+    real answer for e.g. grass (no weeding ever) and must not be confused with
+    "could not read it" -- an unreadable crop never reaches here, it is reported
+    as an unresolved fruitType instead.
+    """
+    names = [fs.attrib.get("name") for fs in states]
+
+    # The name-prefix reading, kept only to expose drift. Never used as the answer.
+    n_ready, n_cut, n_dead = [], [], []
     for i, n in enumerate(names, start=1):
         k = (n or "").lower()
         if k.startswith(READY_PREFIX):
-            ready.append(i)
+            n_ready.append(i)
         elif k.startswith(CUT_PREFIX):
-            cut.append(i)
+            n_cut.append(i)
         elif k in DEAD_NAMES:
-            dead.append(i)
-    return ready, cut, dead
+            n_dead.append(i)
+
+    ready = _flagged(states, READY_ATTR)
+    cut = _flagged(states, CUT_ATTR)
+    dead = _flagged(states, WITHERED_ATTR)
+    # A few crops mark witheredness by NAME only. Falling back is safe here in a
+    # way it is not for readiness: `dead` is advisory, and the name "dead" is
+    # unambiguous where the attribute is simply absent. Labelled either way.
+    dead_basis = "isWithered attribute"
+    if not dead and n_dead:
+        dead = n_dead
+        dead_basis = "state name ('dead'/'withered') -- no isWithered attribute declared"
+
+    return {
+        "state_names": names,
+        "ready": ready,
+        "cut": cut,
+        "dead": dead,
+        "allows_weeding": _flagged(states, WEEDING_ATTR),
+        "allows_hoeing": _flagged(states, HOEING_ATTR),
+        "basis": (
+            "1-based index into this crop's own <foliageState> list, read from "
+            "the declared isHarvestReady/isCut attributes -- NOT from the state's "
+            "name, which disagrees for 8 of this map's 29 crops."
+        ),
+        "dead_basis": dead_basis,
+        "name_derived_cross_check": {
+            "ready": n_ready,
+            "cut": n_cut,
+            "agrees": n_ready == ready and n_cut == cut,
+            "note": (
+                "The superseded name-prefix reading, compared on BOTH ready and "
+                "cut. `agrees: false` is EXPECTED on this map for a substantial "
+                "minority of crops and is not a fault -- it is reported so the "
+                "divergence stays visible, and it is never the answer. No count "
+                "is stated here on purpose: it moves with the map's fruitType "
+                "list, and a figure that drifts inside a caveat reads as a "
+                "checkable fact. Count it from this output if you need it."
+            ),
+        },
+    }
+
+
+# --------------------------------------------------------------------------
+# THE WEED MODEL AND THE STONE RULE -- both read from the game, never constants.
+#
+# ⛔ DEC-108: WEED CAPABILITY IS A MEMBERSHIP TEST, NEVER A THRESHOLD. The
+# relation is non-monotonic, so `weed_state <= N` is wrong by construction for
+# every N. On the base table `weederHoe` clears {1,2,3,4,6} -- the hole at 5 is
+# real -- while `mulcher` clears {3..9} and cannot touch 1 or 2. No single
+# number separates "handled" from "not handled" for any tool.
+#
+# ⭐ THREE OUTCOMES, NOT TWO: a tool CLEARS a state (-> 0), TRANSFORMS it
+# (herbicide moves 3,4,5,6 to 7,8,9 -- states only a mulcher clears), or does
+# NOTHING AT ALL (no row). A model with only handles/doesn't-handle cannot say
+# that a weeder sent to a state-5 field achieves literally nothing, and a manager
+# built on one will report work done that was not done. `handles != clears`.
+MAP_CONFIG_SECTION_WEED = "weed"
+
+
+def _map_config_root(resolver, map_id):
+    """The map's own config XML, located the way the GAME locates it.
+
+    modDesc.xml declares <map id=... configFilename=...>; that reference is READ,
+    not guessed from a naming convention, because a mod is free to name its
+    config anything. Returns (root, inner_path, error_or_None). A base-game map
+    (no zip) returns (None, None, None) -- a real answer, not a failure.
+    """
+    if resolver._zip is None:
+        return None, None, None
+    try:
+        desc = ET.fromstring(resolver._zip.read("modDesc.xml"))
+    except (KeyError, ET.ParseError, OSError) as e:
+        return None, None, f"could not read modDesc.xml from the map zip: {e}"
+    short_id = map_id.split(".", 1)[1] if map_id and "." in map_id else None
+    chosen = None
+    for node in desc.iter("map"):
+        cfg = node.attrib.get("configFilename")
+        if not cfg:
+            continue
+        if short_id is None or node.attrib.get("id") == short_id:
+            chosen = cfg
+            break
+    if chosen is None:
+        return None, None, (
+            f"modDesc.xml in the map zip declares no <map configFilename=> for "
+            f"map id {short_id!r}; the map's own config could not be located."
+        )
+    root, err = resolver.read_map_xml(chosen)
+    if root is None:
+        return None, chosen, err
+    return root, chosen, None
+
+
+def _parse_replacements(root):
+    """<replacements><tool><replacements [fruitType=]><replacement .../>.
+
+    Returns {tool: {"default": {src: tgt}, "by_fruit_type": {FRUIT: {src: tgt}}}}.
+    A target of 0 means CLEARED; any other target means transformed, not cleared.
+    """
+    tools = {}
+    container = root.find("replacements")
+    if container is None:
+        return tools
+    for tool_node in container:
+        entry = {"default": {}, "by_fruit_type": {}}
+        for group in tool_node.findall("replacements"):
+            fruit = group.attrib.get("fruitType")
+            target = entry["default"] if fruit is None else \
+                entry["by_fruit_type"].setdefault(fruit.upper(), {})
+            for rep in group.findall("replacement"):
+                try:
+                    src = int(rep.attrib["sourceState"])
+                    tgt = int(rep.attrib["targetState"])
+                except (KeyError, ValueError):
+                    continue
+                target[src] = tgt
+        tools[tool_node.tag] = entry
+    return tools
+
+
+def _summarise_tools(tools):
+    """Per tool: which states it CLEARS, which it merely CHANGES. Sorted lists,
+    not sets, so the payload is JSON and a reader can diff two runs."""
+    out = {}
+    for tool, entry in sorted(tools.items()):
+        def split(mapping):
+            return {
+                "clears": sorted(s for s, t in mapping.items() if t == 0),
+                "changes_without_clearing": {str(s): t for s, t in sorted(mapping.items()) if t != 0},
+            }
+        out[tool] = {
+            "default": split(entry["default"]),
+            "by_fruit_type": {f: split(m) for f, m in sorted(entry["by_fruit_type"].items())},
+        }
+    return out
+
+
+def collect_weed_model(resolver, map_id):
+    """The resolved weed replacement table -- MAP FIRST, BASE SECOND, and the
+    map is CHECKED rather than assumed to contribute nothing.
+
+    ⚠ On this save the map's own weed.xml declares an <infoLayer> and no
+    <replacements> at all, so the BASE table is in force. That is a MEASUREMENT,
+    not an assumption, and this function re-makes it every run: a map update that
+    adds replacements must change the answer, not be silently ignored.
+    """
+    info = {
+        "map_config": None,
+        "map_weed_file": None,
+        "map_contributes_replacements": None,
+        "base_file": None,
+        "resolution_rule": (
+            "The map's own weed config is read first via modDesc.xml's declared "
+            "<map configFilename=>. If it declares <replacements> those are the "
+            "table. If it declares none -- the common case -- the base install's "
+            "data/maps/maps_weed.xml is in force, and this says so explicitly "
+            "rather than leaving base-in-force as an unstated default."
+        ),
+        "error": None,
+    }
+
+    map_root, cfg_path, err = _map_config_root(resolver, map_id)
+    info["map_config"] = cfg_path
+    if err:
+        info["error"] = err
+    if map_root is not None:
+        node = map_root.find(MAP_CONFIG_SECTION_WEED)
+        inner = node.attrib.get("filename") if node is not None else None
+        info["map_weed_file"] = inner
+        if inner:
+            weed_root, werr = resolver.read_map_xml(inner)
+            if weed_root is None:
+                info["error"] = werr
+            else:
+                map_tools = _parse_replacements(weed_root)
+                info["map_contributes_replacements"] = bool(map_tools)
+                if map_tools:
+                    info["source"] = f"map:{inner}"
+                    return _summarise_tools(map_tools), info
+
+    base_rel = os.path.join("maps", "maps_weed.xml")
+    base_root, berr = resolver.read_base_xml(base_rel)
+    info["base_file"] = "base:data/" + base_rel.replace(os.sep, "/")
+    if base_root is None:
+        info["error"] = berr
+        return None, info
+    info["source"] = info["base_file"]
+    return _summarise_tools(_parse_replacements(base_root)), info
+
+
+def collect_stone_picking(resolver):
+    """<picking minValue= maxValue= pickedValue=> -> the pickable MEMBERSHIP set.
+
+    ⛔ The working mod this project studied uses `stoneLevel >= 3`, and that is
+    wrong in BOTH directions against the game's own declaration: it misses state
+    2 (pickable) and wrongly includes state 5 (pickedValue -- already picked).
+    A threshold cannot express a bounded band with an above-band "done" marker.
+    """
+    info = {"source": None, "error": None}
+    base_rel = os.path.join("maps", "maps_stones.xml")
+    root, err = resolver.read_base_xml(base_rel)
+    info["source"] = "base:data/" + base_rel.replace(os.sep, "/")
+    if root is None:
+        info["error"] = err
+        return None, info
+    node = root.find(".//picking")
+    if node is None:
+        info["error"] = "maps_stones.xml declares no <picking> element"
+        return None, info
+    try:
+        low = int(node.attrib["minValue"])
+        high = int(node.attrib["maxValue"])
+        picked = int(node.attrib["pickedValue"])
+    except (KeyError, ValueError) as e:
+        info["error"] = f"<picking> is missing or malformed: {e}"
+        return None, info
+    return {
+        "pickable_states": list(range(low, high + 1)),
+        "picked_state": picked,
+        "min_value": low,
+        "max_value": high,
+        "rule": (
+            "Membership, not a threshold: a field needs stone picking when its "
+            "stoneLevel is IN pickable_states. picked_state means it has already "
+            "been picked and needs nothing."
+        ),
+    }, info
 
 
 def scan_foliage_dir(resolver, already_declared):
@@ -374,8 +638,7 @@ def scan_foliage_dir(resolver, already_declared):
         # disagree the folder is the guess and the declaration is the fact.
         if not name or name.lower() in already_declared:
             continue
-        state_names = [fs.attrib.get("name") for fs in root.iter("foliageState")]
-        ready_i, cut_i, dead_i = classify_growth_states(state_names)
+        growth = classify_growth_states(list(root.iter("foliageState")))
         seeding = node.find("seeding")
         per_sqm = None
         if seeding is not None and "litersPerSqm" in seeding.attrib:
@@ -389,12 +652,7 @@ def scan_foliage_dir(resolver, already_declared):
             "resolved_from": "base:foliage-scan",
             "litres_per_sqm": per_sqm,
             "litres_per_hectare": round(per_sqm * SQM_PER_HECTARE, 2) if per_sqm else None,
-            "growth_states": {
-                "state_names": state_names,
-                "ready": ready_i,
-                "cut": cut_i,
-                "dead": dead_i,
-            },
+            "growth_states": growth,
             "note": "Found by scanning data/foliage/ -- NOT declared by the map's or the "
                     "base map's fruitType list, yet present in the install. Onion is the "
                     "known case. Weaker provenance than a declared fruit; the states "
@@ -444,15 +702,8 @@ def collect_seed_rates(resolver):
         # before the seeding early-outs below -- attaching it only to the happy
         # path would silently strip states from exactly the odd crops that need
         # explaining.
-        state_names = [fs.attrib.get("name") for fs in froot.iter("foliageState")]
-        ready_i, cut_i, dead_i = classify_growth_states(state_names)
-        growth = {
-            "state_names": state_names,
-            "ready": ready_i,
-            "cut": cut_i,
-            "dead": dead_i,
-        }
-        if not state_names:
+        growth = classify_growth_states(list(froot.iter("foliageState")))
+        if not growth["state_names"]:
             growth["error"] = ("this fruit's foliage XML declares no <foliageState> -- its "
                                "growth states are UNKNOWN. Do not infer readiness for it.")
 
@@ -553,6 +804,12 @@ def main():
     spray_types, spray_source = collect_spray_types(resolver)
     crops, crop_source, crop_err = collect_seed_rates(resolver)
 
+    # The two field-work rule sources. Neither is fatal: a farm can still be told
+    # what is ready to harvest without them, and a null table must read as
+    # "unknown" downstream, never as "nothing to do" (DEC-001).
+    weed_model, weed_info = collect_weed_model(resolver, map_id)
+    stone_picking, stone_info = collect_stone_picking(resolver)
+
     # Second, independent positive source (F-311 fix, step (2)): a
     # placeables.xml selling station this save has actually traded with. A
     # failure here is NOT fatal -- it degrades to the category-only source,
@@ -596,6 +853,23 @@ def main():
             "data; input_fill_types below is a SEPARATE, independently-sourced positive list, "
             "not the complement of this one."
         ),
+        # ⛔ MEMBERSHIP TABLES, NOT THRESHOLDS (DEC-108). Read every run from the
+        # game's own files so a map that rebalances them changes the answer.
+        # null means the table could not be resolved -- UNKNOWN, never "no work".
+        "weed_model": weed_model,
+        "weed_model_source": weed_info,
+        "weed_model_rule": (
+            "Per tool: `clears` are the weedStates that go to 0, "
+            "`changes_without_clearing` are states the tool alters WITHOUT "
+            "removing the weed. A state in neither list is untouched by that "
+            "tool. Test MEMBERSHIP -- the relation is non-monotonic and no "
+            "threshold expresses it. ⚠ This table says what a TOOL can do; it "
+            "does NOT say whether the CROP permits the operation. That gate is "
+            "each crop's own allows_weeding / allows_hoeing state list under "
+            "seed_rates[].growth_states. Both must be consulted."
+        ),
+        "stone_picking": stone_picking,
+        "stone_picking_source": stone_info,
         "spray_input_fill_types": sorted(spray_types),
         "spray_input_source": spray_source,
         "input_fill_types": sorted(spray_types | set(ENGINE_LEVEL_INPUT_FILL_TYPES)),

@@ -11,6 +11,10 @@ first live sessions on a real save.
 
 ### Added
 
+- **Setup now asks your name and what language to speak, right at the start.** Before this,
+  the manager never asked either — it addressed you as "partner" and spoke English no matter
+  what language you actually use. Now it asks first, and speaks the language you give it from
+  that point on.
 - **A new cache layer.** Dedicated scripts now gather your farm's state and write it to a
   verified cache whenever the game saves — including pushing fleet fuel/repair alerts
   straight to your on-screen overlay the moment a threshold is crossed, with no need to ask.
@@ -26,6 +30,15 @@ first live sessions on a real save.
   individually. Nothing is batched, and nothing goes anywhere without your say-so.
 - Setup now asks which farm is yours when your save has more than one (for example, a joined
   multiplayer save), instead of assuming.
+- **A field-by-field work list of what needs doing today.** Each field reports the operation
+  its own state calls for — ploughing, liming, weeding, and more — grounded in the same read
+  of the field's own state, not a generic checklist, and with the reading behind each
+  recommendation carried alongside it.
+- **Cyrus can now tell you which of your production lines are running dry**, and how many
+  hours you have before each one empties — checked against that line's own input stock, not
+  your farm's stock as a whole, so a full silo elsewhere doesn't hide a bin that's actually
+  about to run out. Where the underlying data can't say, it tells you that instead of
+  guessing.
 
 ### Changed
 
@@ -52,24 +65,18 @@ first live sessions on a real save.
   longer keeps re-asking or goes searching your disk for a folder that isn't there.
 - Checking what equipment you're missing could time out on a large fleet; it now gets more
   time to finish that specific check.
-
-## [2.2.4.0] - 2026-07-24
-
-_Maintenance release — internal quality and documentation. No gameplay changes._
-
-### Security
-
-- Hardened the pre-publish privacy gate that scans every shipped file for absolute paths
-  and personal data before a release. Closed several path-matching gaps so developer-machine
-  paths (including drive-rooted `mods` folders and WSL/UNC paths) can no longer slip into a
-  public build, while keeping legitimate documentation placeholders exempt.
-
-### Changed
-
-- Eval-harness hardening: the release-quality checks now exercise the real privacy scanner
-  end-to-end, with expanded corpus coverage, so a passing check reflects the mechanism it
-  guards rather than a stand-in.
-- Documentation touch-ups (README, briefing-freshness step).
+- A quick freshness check on your cached data (used when a full re-check would take too long)
+  could report that data as "verified" when it had only compared each file's timestamp and
+  size, never read its actual contents. It no longer claims more than it checked.
+- Every field's crop-growth stage was reading as unknown, always, on every save — a step in
+  building the underlying growth-stage table was silently missing its data, so the table
+  never built. It now builds correctly, and crop state populates the way it was always meant
+  to.
+- Whether a crop was ready to harvest was being judged by the *name* of its growth stage
+  instead of the flag that actually marks it ready. On this map several crops have a stage
+  named as if it were ready when it isn't, while the truly ready stage is named something
+  unrelated — so a crop could read as ready when it wasn't, and vice versa. Readiness is now
+  read from the correct flag.
 
 ## [2.2.3.0] - 2026-07-23
 

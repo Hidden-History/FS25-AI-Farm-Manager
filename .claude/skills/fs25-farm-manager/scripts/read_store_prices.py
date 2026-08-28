@@ -140,10 +140,11 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(__file__))
-from xml_utils import load_xml, emit, arg_or_exit, xml_to_dict
+from xml_utils import load_xml, emit, arg_or_exit, xml_to_dict, resolve_game_xml
 
+# Still used below to name the owning mod on a resolved item. The resolution
+# itself now lives in xml_utils.resolve_game_xml; DATA_PREFIX_RE moved with it.
 MODDIR_RE = re.compile(r"^\$moddir\$([^/]+)/(.+)$")
-DATA_PREFIX_RE = re.compile(r"^\$?data/(.+)$")
 
 # type= attribute values (root <vehicle type="...">) observed in this
 # install's base game data, grouped into the categories this farm is
@@ -280,66 +281,19 @@ def extract_store_item(root, source_label, verbose=False):
 
 
 def _load_root_for_filename(filename, install_dir, mods_dir):
-    """Locate and parse the XML root for a savegame-style filename -- the
-    shared resolution step behind resolve_filename (store price) and
-    run_fuel_capacity (fuel tank size, added 2026-07-24), so the
-    $moddir$/base-install lookup logic (F-019) lives in exactly one place
-    rather than drifting between two copies.
+    """Locate and parse the XML root for a savegame-style filename.
+
+    ⚠ THE IMPLEMENTATION MOVED, THE CONTRACT DID NOT. This logic -- the
+    $moddir$/base-install lookup and its no-basename-fallback rule (F-019) --
+    now lives in xml_utils.resolve_game_xml, because the capacity work needs the
+    SAME join and a second copy would drift from this one. The move was made
+    with the return shape unchanged, so the two callers below and every existing
+    caveat in this module's docstring remain exactly true.
 
     Returns (root_or_None, source_label_or_None, resolution_kind, error_or_None).
     resolution_kind is one of "base", "mod", "unresolved" -- always set, even
     on error, so callers can tally without re-deriving it."""
-    if not filename:
-        return None, None, "unresolved", "empty filename"
-
-    mod_match = MODDIR_RE.match(filename)
-    if mod_match:
-        mod_name, inner_path = mod_match.group(1), mod_match.group(2)
-        zip_path = os.path.join(mods_dir, mod_name + ".zip")
-        if not os.path.isfile(zip_path):
-            return None, None, "mod", f"mod zip not found: {zip_path}"
-        try:
-            with zipfile.ZipFile(zip_path) as z:
-                names = z.namelist()
-                # Exact match only -- no basename fallback (see F-019 in the
-                # module docstring: that fallback is the bug this exists to avoid).
-                match = inner_path if inner_path in names else None
-                if match is None:
-                    # Try case-insensitive exact match on the full path only.
-                    lower_map = {n.lower(): n for n in names}
-                    match = lower_map.get(inner_path.lower())
-                if match is None:
-                    return None, None, "mod", (
-                        f"{inner_path!r} not found inside {zip_path} "
-                        f"(zip has {len(names)} entries; not falling back to a "
-                        f"basename search inside the zip)."
-                    )
-                data = z.read(match)
-        except (zipfile.BadZipFile, KeyError, OSError) as e:
-            return None, None, "mod", f"could not read {inner_path!r} from {zip_path}: {e}"
-
-        try:
-            root = ET.fromstring(data)
-        except ET.ParseError as e:
-            return None, None, "mod", f"XML parse error in {zip_path}!{inner_path}: {e}"
-
-        return root, f"{mod_name}.zip!{inner_path}", "mod", None
-
-    data_match = DATA_PREFIX_RE.match(filename)
-    if data_match or filename.startswith("data/"):
-        rel = data_match.group(1) if data_match else filename[len("data/"):]
-        full_path = os.path.join(install_dir, "data", rel)
-        if not os.path.isfile(full_path):
-            return None, None, "base", f"base install file not found: {full_path}"
-        root, generic = load_xml(full_path)
-        if root is None:
-            return None, None, "base", f"could not parse {full_path}: {generic.get('error')}"
-        return root, full_path, "base", None
-
-    return None, None, "unresolved", (
-        f"filename {filename!r} matches neither '$moddir$<ModName>/...' nor "
-        f"'data/...'/'$data/...' -- unrecognized pattern, not resolved."
-    )
+    return resolve_game_xml(filename, install_dir, mods_dir)
 
 
 def resolve_filename(filename, install_dir, mods_dir, verbose=False):

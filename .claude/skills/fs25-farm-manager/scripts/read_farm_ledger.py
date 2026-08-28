@@ -495,6 +495,243 @@ def build_lifetime_statistics(target, farm_id):
     )
 
 
+
+# ---------------------------------------------------------------------------
+# ITEM ③c -- LIFETIME AVERAGES. A real rate, from ONE save, free.
+#
+# `<statistics>` holds 47 unbounded counters AND `playTime` in the same snapshot,
+# so counter / playTime is a genuine lifetime mean without a second sample and
+# without touching the delta log. It is COARSE and it is a MEAN -- that is stated
+# on every row rather than left for a reader to infer.
+#
+# ⭐ UNITS ARE SETTLED BY MEASUREMENT (DEC-114), not by convention and not by
+# asking: `playTime` is REAL MINUTES. Eight timestamped snapshots in
+# savegameBackup/ give within-session dplayTime/dreal of 0.971 / 0.977 / 0.957,
+# and the identity dgame = timeScale x dplayTime holds to four decimals at every
+# declared timeScale. So `playTime` divided into a counter yields "per real hour
+# of play". ⚠ `timeScale` is a MUTABLE SETTING'S SNAPSHOT, never a lifetime
+# property -- it is NOT applied here, and no game-time figure is emitted.
+#
+# ⛔⛔ THREE COUNTERS CARRY TRAPS AND EACH WOULD OTHERWISE SHIP A PLAUSIBLE,
+# WRONG, PLAYER-FACING NUMBER. The caveats travel WITH the rows, in the output,
+# because a caveat that lives only in a docstring does not reach the consumer:
+#
+#   workedTime        MEASURED 6,879 AGAINST A playTime OF 4,080 -- it EXCEEDS
+#                     it. The counter accrues PER WORK AREA, so parallel
+#                     implements and helpers double-count. Any "% of playtime
+#                     spent working" figure built on it EXCEEDS 100%.
+#   traveledDistance  kilometres, and it EXCLUDES AI-helper driving. A "fuel per
+#                     km" figure would divide ALL-vehicle fuel by
+#                     PLAYER-DRIVEN-ONLY distance.
+#   fuelUsage         NOT diesel. Diesel + DEF + electric charge + methane summed
+#                     into one number, AND scaled by the save's `fuelUsage`
+#                     difficulty setting (careerSavegame.xml; `2` on this save).
+#                     Wrong on two axes at once if either half is missed.
+#
+# ⚠ RESIDUAL, NAMED NOT GUESSED: whether farms.xml `<playTime>` is per-farm or a
+# global mirror is UNDETERMINED -- this save has one farm and the values are
+# identical. Read per farm regardless: correct under either answer, and
+# scope-safe (BUG-016). `target` here is already the resolved farm element.
+# ---------------------------------------------------------------------------
+
+# Counter -> the trap a consumer must not walk into. Emitted, never a comment.
+#
+# ⛔ THE CAVEATS COVER FAMILIES, NOT THREE NAMED COUNTERS, AND THAT WAS A REAL
+# GAP. An earlier version named only `workedTime`, `traveledDistance` and
+# `fuelUsage`. Measured on the owner's own save, farm 1:
+#   * `threshedTime` is 4,614.86 against a playTime of 4,080.06 -- **113.1% of
+#     playtime**, carrying `workedTime`'s trap exactly, and it had no caveat.
+#     All five *Time counters accrue the same way.
+#   * `tractorDistance + truckDistance + carDistance + horseDistance` equals
+#     `traveledDistance` to five decimals (230.8858), so every one of them is
+#     kilometres and every one of them inherits the AI-helper exclusion.
+# Found by the DEC-113 verification lane. A caveat set that names instances
+# rather than classes protects the instance that was noticed and ships the rest.
+_PER_WORK_AREA = {
+    "caveat": "ACCRUES PER WORK AREA, so parallel implements and helpers "
+              "double-count. On this save `workedTime` and `threshedTime` both "
+              "EXCEED playTime.",
+    "never_present_as_percentage_of_playtime": True,
+    "why": "the ratio can exceed 100% and reads as a broken figure or, worse, "
+           "as a true one.",
+}
+_DISTANCE_KM = {
+    "caveat": "KILOMETRES, and it EXCLUDES AI-helper driving (the counter is "
+              "guarded by getIsAIActive).",
+    "never_combine_with_all_vehicle_totals": True,
+    "why": "a fuel-per-km figure would divide ALL-vehicle fuel by "
+           "PLAYER-DRIVEN-ONLY distance.",
+}
+
+LIFETIME_COUNTER_CAVEATS = {
+    # Every counter that measures TIME SPENT WORKING. Measured: workedTime
+    # 168.6% and threshedTime 113.1% of playTime on this save.
+    "workedTime": dict(_PER_WORK_AREA),
+    "threshedTime": dict(_PER_WORK_AREA),
+    "cultivatedTime": dict(_PER_WORK_AREA),
+    "sownTime": dict(_PER_WORK_AREA),
+    "plowedTime": dict(_PER_WORK_AREA),
+    "sprayedTime": dict(_PER_WORK_AREA),
+    # Every DISTANCE counter. They sum to traveledDistance exactly.
+    "traveledDistance": dict(_DISTANCE_KM),
+    "tractorDistance": dict(_DISTANCE_KM),
+    "truckDistance": dict(_DISTANCE_KM),
+    "carDistance": dict(_DISTANCE_KM),
+    "horseDistance": dict(_DISTANCE_KM),
+    "fuelUsage": {
+        "caveat": "NOT diesel. Diesel + DEF + electric charge + methane in ONE "
+                  "number, AND scaled by the save's `fuelUsage` difficulty "
+                  "setting in careerSavegame.xml, which this savegame-only "
+                  "section does not read.",
+        "never_price_as_diesel": True,
+        "why": "any per-litre cost or efficiency figure is wrong on two axes at "
+               "once -- the fuel mix and the difficulty scale.",
+    },
+}
+
+# Every counter naming a span of working time or distance.
+# ⚠ WAVE 3B / FINDING 9 -- THE COMMENT HERE WAS FALSE AND IS CORRECTED. It read
+# "Used only to prove coverage", and these two names are referenced NOWHERE in
+# the tree: the coverage proof it describes is real but is done by
+# test_every_time_counter_that_can_exceed_playtime_carries_the_percentage_caveat
+# and test_every_distance_counter_carries_the_km_and_ai_caveat, which hardcode
+# .endswith("Time") / .endswith("Distance") instead of importing these. A
+# comment claiming a guard that does not use it is worse than no comment: it
+# reads as a checkable fact and stops the next reader looking for the gap.
+# ⛔ THE GAP ITSELF IS NOT CLOSED HERE, DELIBERATELY. LIFETIME_COUNTER_CAVEATS is
+# a hand-maintained allowlist keyed by exact counter name, and nothing
+# AUTOMATICALLY flags an uncaveated member of the *Time/*Distance family -- this
+# project has already shipped that defect twice (threshedTime, sprayedTime),
+# each caught by someone measuring the owner's save. Wiring these constants into
+# a structural assertion would close it, and is a behaviour change to the caveat
+# contract that the wave-3 review rated LOW and this wave's mandate does not
+# cover. Deferred as tech debt rather than smuggled in beside a NaN guard.
+WORK_TIME_COUNTER_SUFFIX = "Time"
+DISTANCE_COUNTER_SUFFIX = "Distance"
+
+MINUTES_PER_HOUR = 60.0
+
+
+def _as_float(text):
+    """(value, None) or (None, reason). NEVER a coerced guess -- these counters
+    are emitted raw elsewhere precisely because their units are unestablished."""
+    if text is None or str(text).strip() == "":
+        return None, "absent or empty"
+    try:
+        value = float(str(text).strip())
+    except (TypeError, ValueError):
+        return None, "not numeric: %r" % (text,)
+    # ⛔ FINDING 5 (wave 3b). The same hole H4 closed for money, still open for
+    # counters. float() accepts "nan"/"inf"/"-inf", and the `play_minutes <= 0`
+    # denominator guard below CANNOT catch a NaN -- every comparison against
+    # NaN is False, so a NaN playTime sails past it and every per_play_hour in
+    # a `status: "ok"` section computes to NaN. JSON has no NaN: jq rewrites it
+    # to null, so the section would publish absence dressed as a figure.
+    if not math.isfinite(value):
+        return None, "not a finite number: %r" % (text,)
+    return value, None
+
+
+def build_lifetime_averages(target, farm_id):
+    """③c -- counter / playTime, per farm. Returns a § 6.2 section, always."""
+    common = dict(
+        shape="record",
+        capability_ids=["b40"],
+        typing={"*": "float"},
+        typing_guarantee={
+            "*": "Every average is a float computed as counter / playTime_hours. "
+                 "The COUNTERS remain raw and unconverted in lifetime_statistics; "
+                 "nothing here re-types them, and no unit is asserted for any "
+                 "counter whose unit farms.xml does not state."},
+        identity_fields=list(IDENTITY_FIELDS_NONE),
+        absence_guarantee=None,
+        source_elements=["farms.xml:farm/statistics/*"],
+        blocked_by=None,
+    )
+
+    statistics_elems = target.findall("statistics")
+    if len(statistics_elems) > 1:
+        fail(f"farm_id {farm_id} carries {len(statistics_elems)} <statistics> "
+             "elements. Refusing to average over one of them.", True)
+    statistics_elem = statistics_elems[0] if statistics_elems else None
+    if statistics_elem is None:
+        return section(
+            status="unavailable",
+            reason=(f"farm_id {farm_id} has no <statistics> element, so there is no "
+                    "playTime to divide by and no counter to divide. Absent "
+                    "container, not a farm with no history."),
+            empty_means=None, count=0, data={}, **common)
+
+    counters = {c.tag: (c.text or "").strip() for c in statistics_elem}
+    if not counters:
+        return section(
+            status="unknown_by_design",
+            reason="<statistics> is present and holds no counters -- this farm has "
+                   "recorded nothing yet, so there is nothing to average.",
+            empty_means="farm_has_none", count=0, data={}, **common)
+
+    play_minutes, play_err = _as_float(counters.get("playTime"))
+    if play_err is not None:
+        return section(
+            status="unavailable",
+            reason=("playTime is %s, so no average can be computed. Emitting the "
+                    "counters without a denominator would invite a reader to "
+                    "supply their own." % play_err),
+            empty_means=None, count=0, data={}, **common)
+    if play_minutes <= 0:
+        return section(
+            status="unavailable",
+            reason=("playTime is %r. A zero or negative denominator cannot produce "
+                    "a rate, and substituting one would manufacture every figure "
+                    "in this section." % play_minutes),
+            empty_means=None, count=0, data={}, **common)
+
+    play_hours = play_minutes / MINUTES_PER_HOUR
+    averages, unreadable = {}, {}
+    for tag in sorted(counters):
+        if tag == "playTime":
+            continue
+        value, err = _as_float(counters[tag])
+        if err is not None:
+            # Reported, never skipped: a counter missing from this map would be
+            # indistinguishable from a counter this farm has never touched.
+            unreadable[tag] = {"raw": counters[tag], "reason": err}
+            continue
+        entry = {
+            "lifetime_total_raw": counters[tag],
+            "per_play_hour": round(value / play_hours, 6),
+        }
+        if tag in LIFETIME_COUNTER_CAVEATS:
+            entry["caveat"] = dict(LIFETIME_COUNTER_CAVEATS[tag])
+        averages[tag] = entry
+
+    return section(
+        status="ok",
+        reason=None,
+        empty_means=None,
+        count=len(averages),
+        data={
+            "denominator": {
+                "playTime_minutes": play_minutes,
+                "playTime_hours": round(play_hours, 6),
+                "unit": "REAL minutes of play (DEC-114, settled by measurement "
+                        "against 8 timestamped savegameBackup snapshots)",
+                "timeScale_is_not_applied": (
+                    "timeScale is a mutable setting's snapshot, not a lifetime "
+                    "property -- one interval on this save ran at 11.25. No "
+                    "game-time figure is emitted here."),
+                "farm_scoped": (
+                    "Read from THIS farm's <statistics> element. Whether "
+                    "farms.xml playTime is per-farm or a global mirror is "
+                    "UNDETERMINED; reading per farm is correct under either "
+                    "answer and is scope-safe (BUG-016)."),
+            },
+            "averages": averages,
+            "unreadable_counters": unreadable,
+        },
+        **common)
+
+
 def roll_up(sections):
     """Top-level status/reason -- § 6.3.3, rev 4. TOTAL, ORDERED, FIRST MATCH WINS.
 
@@ -623,6 +860,9 @@ def main():
     sections = {
         "finance_ledger": build_finance_ledger(target, farm_id),
         "lifetime_statistics": build_lifetime_statistics(target, farm_id),
+        # ③c -- the lifetime mean beside the raw counters it is derived from,
+        # never instead of them.
+        "lifetime_averages": build_lifetime_averages(target, farm_id),
     }
     status, reason = roll_up(sections)
 

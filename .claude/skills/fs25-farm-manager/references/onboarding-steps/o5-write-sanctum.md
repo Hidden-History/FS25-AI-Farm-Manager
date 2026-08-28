@@ -11,12 +11,30 @@ description: 'Write the three files onboarding owns — config.json, creed, deci
 
 **Write the sanctum** from the templates — and ⛔ **exactly these three, no more:**
 
-1. **`sanctum/config.json`** — savegame path, the `paths` block from O1, slot, farm name,
-   `session_count: 0`, and `sanctum_schema_version`. **Keep the template's value** for that last
-   one; it stamps this fresh sanctum at the current structural schema so no migration ever runs
-   against it.
+1. **`sanctum/config.json`** — savegame path, the `paths` block from O1, slot,
+   `player_name` and `language` from **O1**, `session_count: 0`, and `sanctum_schema_version`.
+   **Keep the template's value** for that last one; it stamps this fresh sanctum at the current
+   structural schema so no migration ever runs against it.
+   ⚠ **`farm_name` is already written — O2 recorded the player's answer before the state gate ran.**
+   Carry it through unchanged. Re-deriving it here, or overwriting it with the save's own name,
+   discards an answer the player gave.
+   ⛔ **Leave no `{{...}}` placeholder in a live config.** `sanctum_maintain.py check` reports a
+   *missing* required key, but an unanswered placeholder sitting in a present key reads to every
+   check as an answer. `player_name` and `language` were asked at the very top of **O1**,
+   before any command ran: write what the player said.
+   ⛔ **Never write the literal `"unknown"` into `player_name` or `language`.** Both are in
+   `CONFIG_REQUIRED_KEYS`, and the judgement `sanctum_maintain check` imports
+   (`aggregate_render._is_placeholder`) classifies `"unknown"` as a placeholder — so the farm
+   would report **STALE every session** until someone hand-edited the file. `templates/config.json`'s
+   own guide for these keys says the same; this is not a style preference. ⚠ **Any answer is an
+   answer**: *"just call me farmer"* is a complete reply, so record **that**. Both keys were asked
+   at O1, so by the time you reach this step a real answer exists to write — if one somehow does
+   not, go back and ask rather than inventing a filler.
 2. **`sanctum/identity/creed.md`**
-3. **`sanctum/identity/decision-making.md`** — from the O3 answers.
+3. **`sanctum/identity/decision-making.md`** — from the doctrine answers O3 collected.
+   ⛔ **Its language line is a POINTER to `config.json`'s `language` and must stay one** — don't substitute the chosen language
+   into it. `player_name` is frozen, so the creed restates it; `language` is a preference the player
+   can change, and a mutable value held in two files is how one starts quietly lying.
 
 Each template carries its own prose guide on how to fill it; **follow those rather than
 improvising.**
@@ -37,7 +55,9 @@ standing priorities.**
 
 ## Confirm ready
 
-Tell the player onboarding is done and you're ready for the first session.
+Tell the player onboarding is done and you're ready for the first session — **in the language they
+chose at O1**, and **by their name**. This sentence is the first thing that shows whether either
+answer was actually recorded or merely heard.
 
 ## Done
 

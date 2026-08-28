@@ -70,6 +70,10 @@ GENERATOR_VERSION = "1.0.0"
 ENVELOPE_DOMAINS = (
     "bales_pallets",
     "farm_ledger",
+    # `fields` was registered in collect_state.PARSERS but absent here, so the
+    # domain that answers "what needs doing today" never reached the cache at
+    # all. read_fields.py now emits the sec. 6.2 envelope, so it belongs here.
+    "fields",
     "fleet",
     "livestock",
     "production_defs",
@@ -82,20 +86,59 @@ ENVELOPE_DOMAINS = (
 # isolated as one, never silently retried.
 PARSER_TIMEOUT_SECONDS = 900
 
+# BUG-024. THE ORCHESTRATOR MUST FORWARD THE PATH CONFIG, AND IT MUST NOT
+# FORWARD IT TO EVERYONE.
+#
+# Three envelope parsers need `install_dir`/`mods_dir` -- facts the savegame
+# directory cannot supply. Given no `--config` they fall back to resolving
+# `sanctum/config.json` RELATIVE TO THE CURRENT WORKING DIRECTORY, so from any
+# other cwd `read_production_defs.py` exits 1 and its domain is written
+# "unavailable". Measured from /tmp at exactly the argv shape below:
+#   {"error": "no --install-dir/--mods-dir given and no config at
+#              'sanctum/config.json'. ... Refusing to guess an install location."}
+# The parser is RIGHT to refuse; the caller was wrong to make it guess.
+#
+# ⛔ AND THE OBVIOUS FIX -- forward `--config` to every parser -- IS WRONG, and
+# wrong in the direction that makes things worse. BUG-024's own suggested
+# direction says "parsers that do not take it already ignore unknown args".
+# MEASURED, ALL FIVE, at this argv shape: read_bales_pallets, read_farm_ledger,
+# read_fleet, read_livestock and read_productions each exit 1 with
+# "unrecognised argument '--config' -- refusing to ignore it". Unconditional
+# forwarding therefore turns a ONE-domain failure into a SIX-domain failure.
+# Those parsers are also right: silently ignoring an argument you do not
+# understand is how a caller's intent gets lost.
+#
+# So the set is DECLARED here, never sniffed -- and
+# tests/test_datalayer_wave3_config_forwarding.py re-measures the declaration
+# against what the parsers actually accept, by RUNNING them, so this tuple
+# cannot drift from reality in either direction.
+CONFIG_AWARE_DOMAINS = (
+    "fields",
+    "production_defs",
+    "weather",
+)
+
 
 def _now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def run_parser(scripts_dir, script, savegame_dir, farm_id):
+def run_parser(scripts_dir, script, savegame_dir, farm_id, config_path=None):
     """Run one parser. Returns (envelope, None) or (None, failure_dict).
 
     The failure dict carries the parser's own words -- exit code, stderr tail,
     stdout head. A domain that fails must say why in terms a player can act on.
+
+    `config_path` is forwarded as `--config` ONLY when the caller passes it, and
+    the caller passes it only for CONFIG_AWARE_DOMAINS (BUG-024). Every other
+    parser rejects the flag outright, so "forward it to everyone" is not a
+    harmless superset -- see the note on that tuple.
     """
     cmd = [sys.executable, os.path.join(scripts_dir, script), savegame_dir]
     if farm_id is not None:
         cmd += ["--farm-id", str(farm_id)]
+    if config_path is not None:
+        cmd += ["--config", config_path]
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=PARSER_TIMEOUT_SECONDS)
@@ -125,7 +168,249 @@ def run_parser(scripts_dir, script, savegame_dir, farm_id):
             "parser_error": envelope.get("error") if isinstance(envelope, dict) else None,
             "stderr": result.stderr[-2000:],
         }
+
+    # ⛔ A ZERO EXIT IS NOT A SUCCESS SIGNAL ON ITS OWN. Measured in this tree:
+    # eleven parsers emit a top-level {"error": ...} AND EXIT 0 -- e.g.
+    # `read_environment.py <dir-with-no-environment.xml>` prints
+    # {"error": "file not found: .../environment.xml"} and returns 0. Branching
+    # on returncode alone therefore reads a stated failure as a valid payload
+    # and caches it, or hands it to a caller as data.
+    #
+    # THOSE PARSERS ARE LATENT TODAY ONLY BECAUSE A HUMAN READS THE OUTPUT, and
+    # this architecture removes the human by design -- that is the whole point
+    # of it. So the CONSUMER stops trusting the exit code here. ⚠ The eleven
+    # producers are NOT touched from here: fixing them is another round's work,
+    # and a consumer that defends itself is correct whether or not they are ever
+    # fixed. This is "check the artifact, not the exit code" applied in the
+    # direction it binds a reader.
+    #
+    # Only a NON-NULL top-level `error` trips this. The sec. 6.2 envelope has no
+    # `error` key at all on success -- all seven envelope parsers emit one only
+    # as their hard-failure payload, alongside exit 1 -- so `error: null` and an
+    # absent key both stay clean.
+    if isinstance(envelope, dict) and envelope.get("error") is not None:
+        return None, {
+            "reason": "parser exited 0 but its output is an error payload, not "
+                      "data. A stated failure must never be cached or read as a "
+                      "result because the exit code disagreed with it.",
+            "cmd": " ".join(cmd[1:]),
+            "exit_code": result.returncode,
+            "parser_error": envelope["error"],
+            "stderr": result.stderr[-2000:],
+        }
     return envelope, None
+
+
+# The domain whose parser answers "what in-game day is it?". Taken from the
+# registry rather than written as a literal, so the script name has exactly one
+# source of truth (collect_state.PARSERS) and cannot drift from it here.
+DAY_DOMAIN = "environment"
+
+
+def resolve_game_day(scripts_dir, savegame_dir):
+    """Read the in-game day for this run. Returns a resolved-day dict, always.
+
+    ⛔ ONE SUBPROCESS, NO ENVELOPE CONVERSION, NO DERIVATION. `read_environment.py`
+    already emits `current_day` and `current_monotonic_day` (:184-185), and
+    `run_parser` above validates no envelope -- it runs a script, parses stdout
+    and checks the outcome. So the two integers are one call away through
+    machinery this script already uses seven times a run. Making `environment`
+    an envelope domain is a parser rewrite that buys nothing this needs, and the
+    delta log does not read the cache anyway (delta_log.py:4-7).
+
+    ⛔ AND NOTHING IS DERIVED. The owner's ruling, 2026-08-22: the day counter is
+    established by the map from savegame start -- absolute and monotonic. There
+    is no timescale to apply and no conversion layer to build. An implementer
+    who reads "get the in-game day" as "compute the in-game day" builds
+    something unnecessary and probably wrong.
+
+    ⚠ A FAILURE HERE IS NEVER FATAL TO THE RUN. The cache is the deliverable and
+    seven domains may be perfectly readable while environment.xml is not. So
+    this returns the typed-absence form and the run continues with a record that
+    states it has no day -- never a record that silently has none.
+    """
+    script, takes_farm_id, _ = PARSERS[DAY_DOMAIN]
+    # `takes_farm_id` is False for this domain -- the day belongs to the save,
+    # not to a farm -- but it is read from the registry rather than assumed, so
+    # a registry change cannot leave a hardcoded argument shape behind.
+    payload, failure = run_parser(
+        scripts_dir, script, savegame_dir, None if not takes_farm_id else 0)
+
+    if failure is not None:
+        # duty-register.md's axis 2, verbatim: `status: unavailable` plus the
+        # reader's own error string, surfaced, never swallowed.
+        return delta_log.game_day_unavailable(
+            "%s could not supply the in-game day: %s"
+            % (script, failure.get("parser_error") or failure.get("reason")))
+
+    if not isinstance(payload, dict):
+        return delta_log.game_day_unavailable(
+            "%s emitted JSON that is not an object, so it carries no day." % script)
+
+    current = payload.get("current_day")
+    monotonic = payload.get("current_monotonic_day")
+    if current is None and monotonic is None:
+        return delta_log.game_day_unavailable(
+            "%s ran and emitted neither current_day nor current_monotonic_day."
+            % script)
+
+    return {
+        "current_day": current,
+        "current_monotonic_day": monotonic,
+        # `ok` claims only that the read happened. delta_log downgrades this to
+        # `partial` itself if the authoritative counter is the missing one --
+        # the decision about which field is authoritative lives there, in one
+        # place, and is not re-made here.
+        "status": "ok",
+        "reason": None,
+        "source": script,
+    }
+
+
+# Numeric typings, per the parsers' own `typing` blocks. Anything else in a row
+# is descriptive, not a quantity, and a delta log full of names retains nothing
+# a rate could ever be built from.
+NUMERIC_TYPINGS = ("int", "float")
+
+
+def extract_measurements(collected):
+    """The VALUES each domain reported this run, for later rate work.
+
+    ⛔ THIS INVENTS NO SCHEMA, and refusing to was the design decision. The
+    obvious alternative -- copy duty-register.md's output keys in here and map
+    each parser onto them -- would plant a SECOND SOURCE OF TRUTH for what a
+    domain reports, which is the failure SKILL.md:129-131 names by name:
+    "Prose that duplicates runtime state is a second source of truth, and it
+    will drift. Ask the script, not the doc."
+
+    So every key comes from the ENVELOPE ITSELF. Each section already declares
+    `identity_fields` (which columns name a row) and `typing` (which columns are
+    numbers), because sec. 6.2 makes it. This reads those declarations and keeps
+    the identity plus the numbers. A parser that gains a quantity is retained
+    automatically; a parser that renames one renames it here too, in step,
+    because there is only ever the one declaration.
+
+    What is taken verbatim FROM duty-register.md is its CONTRACT, not its column
+    names: "Every row's output carries a `status` field", and every row states
+    what an empty result means -- so `status`, `reason` and `empty_means` are
+    carried through per section, unaltered, and a section that reports nothing
+    still appears with the reason it reported nothing.
+
+    ⛔ NOTHING HERE DIVIDES. See delta_log's module docstring: two snapshots are
+    a net change, not a rate.
+    """
+    measurements = {}
+    for domain, envelope, failure in collected:
+        if envelope is None:
+            # duty-register axis 2 again: a reader that could not run is
+            # `unavailable` WITH its own words, never an absent domain. An
+            # omitted domain would read as "this farm has none of that".
+            measurements[domain] = {
+                "status": "unavailable",
+                "reason": (failure or {}).get("reason", "the parser did not run"),
+                "sections": {},
+            }
+            continue
+
+        sections = envelope.get("sections")
+        if not isinstance(sections, dict):
+            measurements[domain] = {
+                "status": "unavailable",
+                "reason": "the parser emitted no 'sections' object to measure",
+                "sections": {},
+            }
+            continue
+
+        per_section = {}
+        for name in sorted(sections):
+            section = sections[name]
+            if not isinstance(section, dict):
+                per_section[name] = {
+                    "status": "unavailable",
+                    "reason": "this section is not an object",
+                    "rows": [],
+                    "count": 0,
+                }
+                continue
+
+            typing = section.get("typing")
+            typing = typing if isinstance(typing, dict) else {}
+            identity = section.get("identity_fields")
+            identity = identity if isinstance(identity, list) else []
+            data = section.get("data")
+            data = data if isinstance(data, list) else []
+
+            # ⚠ `"*"` IS A WILDCARD TYPING, NOT A COLUMN NAMED "*".
+            # read_farm_ledger.py:321 declares `typing={"*": "float"}`, meaning
+            # EVERY column of that row is a float. Reading it literally stored
+            # `{"*": null}` and threw the actual numbers away -- on the 5-day x
+            # 33-category finance ledger, the single most rate-relevant block in
+            # the save. That is DEC-001 inverted: a fabricated null standing
+            # where real data was. Found by running this against the live save,
+            # not by reading the code.
+            wildcard = typing.get("*")
+            if wildcard in NUMERIC_TYPINGS:
+                numeric = sorted({k for row in data if isinstance(row, dict)
+                                  for k in row} - set(identity))
+            else:
+                numeric = sorted(k for k, t in typing.items()
+                                 if t in NUMERIC_TYPINGS and k != "*")
+
+            # ⛔ A SECTION DECLARING NO NUMBER HAS NO QUANTITY TO RETAIN, and
+            # keeping its rows anyway is not caution -- it is 71% of this
+            # payload's bytes (measured live: 126,349 of 176,691) spent on rows
+            # that cannot contribute to any rate, in the ONE artifact here that
+            # is never rotated and cannot be regenerated. `fleet` alone offered
+            # 1,507 identity-only rows.
+            #
+            # ⚠ THE SECTION STILL APPEARS, with its status, its reason, its real
+            # row count and an explicit `rows_omitted_reason`. Dropping the rows
+            # is not the same as dropping the section, and only the second would
+            # be the DEC-001 failure -- a reader can see exactly what was left
+            # out and why, and can go to the cache for the rows themselves.
+            rows = []
+            omitted_reason = None
+            if numeric:
+                for row in data:
+                    if not isinstance(row, dict):
+                        continue
+                    kept = {k: row.get(k) for k in identity}
+                    kept.update({k: row.get(k) for k in numeric})
+                    if kept:
+                        rows.append(kept)
+            elif data:
+                omitted_reason = (
+                    "this section's envelope declares no int or float column, "
+                    "so it reports no quantity this log could retain. Its %d "
+                    "row(s) are identity and descriptive fields only and stay "
+                    "in the cache rather than being copied into history."
+                    % len(data))
+
+            per_section[name] = {
+                # Carried through unaltered. A section that says
+                # `unknown_by_design` with a reason must still say exactly that
+                # here -- restating it in this layer's own words would be the
+                # second source of truth again, one layer down.
+                "status": section.get("status"),
+                "reason": section.get("reason"),
+                "empty_means": section.get("empty_means"),
+                "identity_fields": identity,
+                "measured_fields": numeric,
+                # The rows the SECTION reported, never the rows this log chose
+                # to keep -- those are `rows_retained`. Collapsing the two would
+                # make an omission read as an empty domain.
+                "count": len(data),
+                "rows_retained": len(rows),
+                "rows_omitted_reason": omitted_reason,
+                "rows": rows,
+            }
+
+        measurements[domain] = {
+            "status": envelope.get("status"),
+            "reason": envelope.get("reason"),
+            "sections": per_section,
+        }
+    return measurements
 
 
 # sec. 6.2's two licence kinds, per entry.
@@ -285,6 +570,18 @@ def main():
                      % (savegame_dir,)}))
         sys.exit(1)
 
+    # BUG-024. A config-aware domain that is not an envelope domain would be a
+    # declaration nothing ever reads -- silent, and exactly how the missing
+    # forward went unnoticed for the life of the file. Checked, never assumed.
+    stray = [d for d in CONFIG_AWARE_DOMAINS if d not in ENVELOPE_DOMAINS]
+    if stray:
+        print(json.dumps({
+            "error": "CONFIG_AWARE_DOMAINS names %s, which %s not envelope "
+                     "domain(s), so the --config forward would never fire for "
+                     "them. Fix the declaration."
+                     % (", ".join(stray), "is" if len(stray) == 1 else "are")}))
+        sys.exit(1)
+
     # An empty target set must be RED, never a green run over nothing.
     targets = [d for d in ENVELOPE_DOMAINS if not only or d in only]
     unknown = [d for d in only if d not in ENVELOPE_DOMAINS]
@@ -341,7 +638,8 @@ def main():
     for domain in targets:
         script, takes_farm_id, _ = PARSERS[domain]
         envelope, failure = run_parser(
-            scripts_dir, script, savegame_dir, farm_id if takes_farm_id else None)
+            scripts_dir, script, savegame_dir, farm_id if takes_farm_id else None,
+            config_path=config_path if domain in CONFIG_AWARE_DOMAINS else None)
 
         if envelope is not None:
             invalid = validate_envelope(domain, envelope)
@@ -417,12 +715,23 @@ def main():
     # One delta entry per run, appended AFTER the cache is complete: a delta
     # describing a generation that failed halfway would be a lie about history,
     # and history is the one thing here that cannot be regenerated.
+    #
+    # ⭐ THE DAY IS READ HERE, NOT EARLIER, and the ordering is deliberate: it is
+    # read as close as possible to the moment it is stamped, so the number in
+    # the record is the day the generation actually happened on rather than the
+    # day the run started on. A run over the slow parsers can straddle an
+    # in-game midnight.
+    game_day = resolve_game_day(scripts_dir, savegame_dir)
+    measurements = extract_measurements(collected)
+
     delta, delta_err = delta_log.append(
         sanctum_dir,
         farm_id,
         current_hashes,
         delta_log.diff_domains(previous_hashes, current_hashes),
         GENERATOR,
+        game_day=game_day,
+        measurements=measurements,
     )
     if delta_err and delta is None:
         print(json.dumps({
@@ -458,6 +767,13 @@ def main():
         "delta_log_seq": delta.get("seq"),
         "delta_log_changes": delta.get("changes"),
         "delta_log_warning": delta_err,
+        # ⚠ SURFACED IN THIS RUN'S OWN OUTPUT, not only buried in the log. A day
+        # that could not be read is a sample that can never carry a rate, and a
+        # degradation nobody renders is indistinguishable from success -- the
+        # same rule that makes `domains_skipped` appear above.
+        "game_day": delta.get("game_day"),
+        "game_day_status": delta.get("game_day_status"),
+        "game_day_reason": delta.get("game_day_reason"),
         "coverage_note": (
             "This cache covers %d of %d registered domains. It is complete over "
             "those %d and says nothing about the rest."

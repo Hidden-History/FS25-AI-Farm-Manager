@@ -10,7 +10,12 @@ nextStepFile: './o4-bridge-check.md'
 
 **Now ask the judgment questions**, informed by the position O2 just put on the table:
 
-- **Identity**: farm name (confirm it, don't assume it).
+- **Identity — already answered; do NOT re-ask.** The player's `player_name` and `language` were
+  asked at the very top of O1, before any command ran, and `farm_name` was confirmed at O2 ahead of
+  the gate that needs it. All three are recorded in `config.json`. ⛔ **Re-asking any of them here
+  tells the player you weren't listening** — and re-asking the language after ten minutes of
+  speaking it is worse than not asking at all. ⭐ **You should already be speaking their language;
+  keep doing so** for this interview, O4, O5 and every session after.
 - **Doctrine**: open `templates/decision-making.md` and ask what its sections ask for. **That file
   is the source of truth for this interview**, and it covers more than a list here would keep up
   with — including how the player wants to be *told* things, which shapes tone more than any other

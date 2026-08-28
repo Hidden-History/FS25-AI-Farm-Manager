@@ -1,12 +1,42 @@
 ---
 name: o2-present-position
-description: 'Take delivery of the state view, then show the player the real position before asking them anything.'
+description: 'Confirm the farm name the state gate requires, take delivery of the state view, then show the player the real position before asking them anything else.'
 nextStepFile: './o3-profile.md'
 ---
 
 # O2: Take delivery and present the position
 
 **Progress: Step 2 of 5** — Next: The profile conversation
+
+## First, confirm the farm's name — before anything reads the config
+
+⛔ **This question comes before the two commands below, and the ordering is the fix.**
+`read_state.py` renders through `aggregate_render.build_header`, which **refuses** a `farm_name`
+that is unset or still a placeholder — correctly, because falling back to the sanctum directory
+name would put a filesystem accident in front of the player as their farm's name. O1 bound the
+save but recorded no name, so a fresh sanctum arrives here with nothing to render and the **whole
+view is refused** before the player has ever been asked (BUG-025 (iii)).
+
+`locate_save.py` already showed you this save's own farm name, read from `farms.xml`. **Put it to
+the player as a question, not as a fact** — *"your save calls this farm X; is that what I should
+call it, or do you have another name for it?"* — and record **their answer** as `farm_name` in
+`sanctum/config.json`.
+
+⛔ **Ask first, then write. Never write a name and ask for confirmation afterwards.** Writing a
+default and confirming it later satisfies the gate **without answering the question**: no error is
+ever emitted, onboarding completes cleanly, and an invented name sits in the config reading exactly
+like an answered one. That is what happened live, and it is why this step exists. The save's own
+name is a **candidate to confirm**, never a value to record before the player has spoken.
+
+⚠ **This is the only question ON THIS STEP that precedes the position display, and the exemption
+is narrow.** F-010's rule below governs **judgment** questions — the ones whose answers are only
+meaningful once the player has seen the real position. `farm_name` is not one of those: it is an
+**input the read itself requires**, so it can never be informed by a read that cannot run without
+it. ⚠ **`player_name` and `language` were already asked at the top of O1**, under a separate and
+equally narrow exemption: they are identity **data**, not judgments, so no briefing could inform
+them — and every sentence this step speaks is spoken in some language, so asking later means
+having already got it wrong. **Those three keys are the whole list.** Nothing else on this step,
+and nothing on O3, gets an exemption.
 
 ## Take delivery of the state view
 

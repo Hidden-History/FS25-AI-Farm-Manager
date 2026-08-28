@@ -133,7 +133,9 @@ and it will drift. Ask the script, not the doc.**
 
 **Before trusting any parser's output, read `references/reading-the-save.md`** — the reading
 discipline this skill runs on (absence-vs-data, unit traps, ownership/`--farm-id` filtering,
-`groundType` vs `crop_state`, why FS25 has no harvest event) — and
+why `crop_state` is read from `growthState` against each crop's own foliage states and never
+from `groundType`, the **terrain texture**, which still says `HARVEST_READY` on a field cut
+days ago, and why FS25 has no harvest event) — and
 **`references/what-we-cannot-know.md`** for the short, deliberately short list of what
 genuinely has to be asked rather than read.
 
