@@ -10,9 +10,11 @@ are worth recording — not pre-created for every building on onboarding. The
 `state/husbandry-roster.md` is the index of buildings owned; these are the per-building
 detail.
 
-**What must NOT go here:** live fill/count/health figures — those are answered
-fresh every session by `read_placeables.py` / `farm_snapshot.py`. A dossier holds
-durable facts (feed supplier, observed consumption rate, sell-price patterns) and
+**What must NOT go here:** live fill/count/health figures — fill state is answered
+fresh every session by `read_placeables.py` (feeding `farm_snapshot.py`'s digest);
+count/health come from `read_livestock.py`, run on its own — `farm_snapshot.py`
+carries no husbandry section. A dossier holds durable facts (feed supplier,
+observed consumption rate, sell-price patterns) and
 an append-only History table, never a cached "current state" (friction-log F-117).
 
 **History sidecars:** when a dossier's History table would push it over cap, the

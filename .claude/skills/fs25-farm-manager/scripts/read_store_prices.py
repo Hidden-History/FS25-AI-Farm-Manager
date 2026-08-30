@@ -9,7 +9,7 @@ for modded content.
 Usage:
     python3 read_store_prices.py <savegame_dir> [--farm-id N]
         [--config PATH] [--install-dir DIR] [--mods-dir DIR]
-        (--fleet | --lookup FILENAME | --search KEYWORD | --gaps)
+        (--fleet | --lookup FILENAME | --search KEYWORD | --gaps | --fuel-capacity)
         [--category vehicles|placeables|objects] [--include-mods] [--limit N] [--verbose]
 
 Modes (exactly one; default is --fleet if none given):
@@ -17,6 +17,13 @@ Modes (exactly one; default is --fleet if none given):
                             OWNED vehicles (vehicles.xml, filtered --farm-id,
                             same as read_vehicles.py). THE validation gate for
                             this whole script -- see "Validation" below.
+    --fuel-capacity         Resolve every owned vehicle's real DIESEL tank
+                            capacity (litres) from its own store/mod XML
+                            (added 2026-07-24, for the fuel/repair alert
+                            house rule -- see CHANGELOG.md). Capacity is NOT
+                            in vehicles.xml (see read_vehicles.py); this is
+                            the one place that resolves it, same $moddir$/
+                            base-install logic as --fleet (F-019).
     --lookup FILENAME       Resolve one savegame-style filename (exactly as it
                             appears in vehicles.xml/placeables.xml, e.g.
                             "$moddir$FS25_Edison_BDE/xml/bde.xml" or
@@ -133,10 +140,11 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(__file__))
-from xml_utils import load_xml, emit, arg_or_exit, xml_to_dict
+from xml_utils import load_xml, emit, arg_or_exit, xml_to_dict, resolve_game_xml
 
+# Still used below to name the owning mod on a resolved item. The resolution
+# itself now lives in xml_utils.resolve_game_xml; DATA_PREFIX_RE moved with it.
 MODDIR_RE = re.compile(r"^\$moddir\$([^/]+)/(.+)$")
-DATA_PREFIX_RE = re.compile(r"^\$?data/(.+)$")
 
 # type= attribute values (root <vehicle type="...">) observed in this
 # install's base game data, grouped into the categories this farm is
@@ -272,71 +280,88 @@ def extract_store_item(root, source_label, verbose=False):
     }
 
 
+def _load_root_for_filename(filename, install_dir, mods_dir):
+    """Locate and parse the XML root for a savegame-style filename.
+
+    ⚠ THE IMPLEMENTATION MOVED, THE CONTRACT DID NOT. This logic -- the
+    $moddir$/base-install lookup and its no-basename-fallback rule (F-019) --
+    now lives in xml_utils.resolve_game_xml, because the capacity work needs the
+    SAME join and a second copy would drift from this one. The move was made
+    with the return shape unchanged, so the two callers below and every existing
+    caveat in this module's docstring remain exactly true.
+
+    Returns (root_or_None, source_label_or_None, resolution_kind, error_or_None).
+    resolution_kind is one of "base", "mod", "unresolved" -- always set, even
+    on error, so callers can tally without re-deriving it."""
+    return resolve_game_xml(filename, install_dir, mods_dir)
+
+
 def resolve_filename(filename, install_dir, mods_dir, verbose=False):
     """Resolve a savegame-style filename to its store item.
     Returns (item_dict_or_None, error_or_None, resolution_kind).
     resolution_kind is one of "base", "mod", "unresolved" -- always set, even
     on error, so callers can tally without re-deriving it."""
-    if not filename:
-        return None, "empty filename", "unresolved"
+    root, source_label, kind, err = _load_root_for_filename(filename, install_dir, mods_dir)
+    if root is None:
+        return None, err, kind
 
-    mod_match = MODDIR_RE.match(filename)
-    if mod_match:
-        mod_name, inner_path = mod_match.group(1), mod_match.group(2)
-        zip_path = os.path.join(mods_dir, mod_name + ".zip")
-        if not os.path.isfile(zip_path):
-            return None, f"mod zip not found: {zip_path}", "mod"
-        try:
-            with zipfile.ZipFile(zip_path) as z:
-                names = z.namelist()
-                # Exact match only -- no basename fallback (see F-019 in the
-                # module docstring: that fallback is the bug this exists to avoid).
-                match = inner_path if inner_path in names else None
-                if match is None:
-                    # Try case-insensitive exact match on the full path only.
-                    lower_map = {n.lower(): n for n in names}
-                    match = lower_map.get(inner_path.lower())
-                if match is None:
-                    return None, (
-                        f"{inner_path!r} not found inside {zip_path} "
-                        f"(zip has {len(names)} entries; not falling back to a "
-                        f"basename search inside the zip)."
-                    ), "mod"
-                data = z.read(match)
-        except (zipfile.BadZipFile, KeyError, OSError) as e:
-            return None, f"could not read {inner_path!r} from {zip_path}: {e}", "mod"
+    item = extract_store_item(root, source_label, verbose=verbose)
+    if item is None:
+        return None, f"{source_label} parsed but has no <storeData>", kind
+    item["resolved_from"] = kind
+    if kind == "mod":
+        item["mod_name"] = MODDIR_RE.match(filename).group(1)
+    return item, None, kind
 
-        try:
-            root = ET.fromstring(data)
-        except ET.ParseError as e:
-            return None, f"XML parse error in {zip_path}!{inner_path}: {e}", "mod"
 
-        item = extract_store_item(root, f"{mod_name}.zip!{inner_path}", verbose=verbose)
-        if item is None:
-            return None, f"{zip_path}!{inner_path} parsed but has no <storeData>", "mod"
-        item["resolved_from"] = "mod"
-        item["mod_name"] = mod_name
-        return item, None, "mod"
+def extract_fill_unit_capacities(root):
+    """Parse a store item's <fillUnit><fillUnitConfigurations> into an
+    ordered list of per-configuration DIESEL tank capacities (litres).
 
-    data_match = DATA_PREFIX_RE.match(filename)
-    if data_match or filename.startswith("data/"):
-        rel = data_match.group(1) if data_match else filename[len("data/"):]
-        full_path = os.path.join(install_dir, "data", rel)
-        if not os.path.isfile(full_path):
-            return None, f"base install file not found: {full_path}", "base"
-        root, generic = load_xml(full_path)
-        if root is None:
-            return None, f"could not parse {full_path}: {generic.get('error')}", "base"
-        item = extract_store_item(root, full_path, verbose=verbose)
-        if item is None:
-            return None, f"{full_path} parsed but has no <storeData>", "base"
-        item["resolved_from"] = "base"
-        return item, None, "base"
+    Verified structure (both a base-game tractor and a modded combine carry
+    it, 2026-07-24): every vehicle with a fill unit wraps it in
+    <fillUnit><fillUnitConfigurations><fillUnitConfiguration>...</>, even
+    when there's only one configuration -- so this is always the right shape
+    to look for, never a fallback. Each <fillUnitConfiguration> is one
+    SELECTABLE option (e.g. a bigger grain tank); the save's own
+    <configuration name="fillUnit" id="N" isActive="true"/> (see
+    read_vehicles.py) picks one by its 1-indexed POSITION in this list --
+    confirmed exactly on this fleet's own modded X9: id="3" in the save
+    matches the 3rd <fillUnitConfiguration> declared in the mod's XML,
+    whose grain tank is 240,000 L (see read_vehicles.py's module docstring).
 
-    return None, (
-        f"filename {filename!r} matches neither '$moddir$<ModName>/...' nor "
-        f"'data/...'/'$data/...' -- unrecognized pattern, not resolved."
-    ), "unresolved"
+    Returns (configs_or_None, error_or_None). configs[i] is
+    {"diesel_capacity_litres": float_or_None} for the (i+1)-th configuration.
+    None (with a reason) means this vehicle has no fill unit at all -- a
+    real, common case (many implements/trailers), not a parse failure.
+    """
+    fill_unit = root.find("fillUnit")
+    if fill_unit is None:
+        return None, "no <fillUnit> element -- this vehicle has no fill unit at all"
+    configurations = fill_unit.find("fillUnitConfigurations")
+    if configurations is None:
+        return None, "no <fillUnitConfigurations> under <fillUnit> -- unexpected shape"
+
+    configs = configurations.findall("fillUnitConfiguration")
+    if not configs:
+        return None, "<fillUnitConfigurations> present but has no <fillUnitConfiguration> children"
+
+    out = []
+    for cfg in configs:
+        diesel_capacity = None
+        units = cfg.find("fillUnits")
+        if units is not None:
+            for u in units.findall("fillUnit"):
+                fill_types = (u.attrib.get("fillTypes") or "").lower().split()
+                if "diesel" in fill_types:
+                    cap_raw = u.attrib.get("capacity")
+                    try:
+                        diesel_capacity = float(cap_raw) if cap_raw is not None else None
+                    except ValueError:
+                        diesel_capacity = None
+                    break
+        out.append({"diesel_capacity_litres": diesel_capacity})
+    return out, None
 
 
 # --------------------------------------------------------------------------
@@ -428,6 +453,147 @@ def run_fleet(savegame_dir, farm_id, install_dir, mods_dir, verbose):
         "calibration_needed": False,
     }
     emit(output)
+
+
+def extract_active_fill_unit_config_id(v_elem):
+    """The save's own record of which fillUnit configuration (grain tank
+    size, diesel tank size, etc.) a vehicle currently has active -- read
+    directly off <configuration name="fillUnit" id="N" isActive="true"/>
+    (a direct child of <vehicle>, confirmed against this save 2026-07-24).
+
+    Returns (config_id, note_or_None). Defaults to 1 with a note if no such
+    element is present -- observed on every single-fillUnit-option vehicle
+    checked so far, which the game still writes explicitly every time seen,
+    but defaulting defensively (rather than erroring) covers a vehicle type
+    that omits it."""
+    for cfg in v_elem.findall("configuration"):
+        if cfg.attrib.get("name") == "fillUnit" and cfg.attrib.get("isActive") == "true":
+            raw_id = cfg.attrib.get("id")
+            try:
+                return int(raw_id), None
+            except (TypeError, ValueError):
+                return None, f"unparsable fillUnit configuration id {raw_id!r}"
+    return 1, ("no explicit <configuration name=\"fillUnit\"> on this vehicle -- "
+               "defaulting to configuration 1")
+
+
+def run_fuel_capacity(savegame_dir, farm_id, install_dir, mods_dir):
+    """--fuel-capacity mode: resolve every owned vehicle's real DIESEL tank
+    capacity (litres), added 2026-07-24 so fuel can be reported as a real
+    percent-full rather than raw litres alone (see read_vehicles.py's module
+    docstring -- capacity was never in vehicles.xml, only in each vehicle's
+    own store/mod XML). Joined against read_vehicles.py's `fuel_level` by
+    `unique_id` downstream in farm_snapshot.py."""
+    vehicles_path = os.path.join(savegame_dir, "vehicles.xml")
+    root, generic = load_xml(vehicles_path)
+    if root is None:
+        emit({"error": f"could not read vehicles.xml: {generic.get('error')}"})
+        return
+
+    owned = [v for v in root.iter("vehicle") if v.attrib.get("farmId") == str(farm_id)]
+    if not owned:
+        emit({
+            "error": f"no <vehicle farmId=\"{farm_id}\"> found in vehicles.xml -- verify --farm-id.",
+            "calibration_needed": False,
+        })
+        return
+
+    # Cache the parse per FILENAME, not per vehicle -- a fleet commonly owns
+    # several identical machines (this save: 10x series8R, 4x the modded X9),
+    # and re-opening/re-parsing the same base file or mod zip once per
+    # vehicle was pure waste (measured: ~8s for ~109 owned vehicles across
+    # ~40 distinct filenames before this cache existed).
+    parsed_by_filename = {}
+
+    def get_parsed(filename):
+        if filename in parsed_by_filename:
+            return parsed_by_filename[filename]
+        root, source_label, kind, load_err = _load_root_for_filename(filename, install_dir, mods_dir)
+        if root is None:
+            result = {"kind": kind, "load_err": load_err, "name": None, "configs": None, "cfg_err": None}
+        else:
+            item = extract_store_item(root, source_label)
+            configs, cfg_err = extract_fill_unit_capacities(root)
+            result = {
+                "kind": kind, "load_err": None,
+                "name": (item or {}).get("name_literal") or (item or {}).get("derived_label"),
+                "configs": configs, "cfg_err": cfg_err, "source_label": source_label,
+            }
+        parsed_by_filename[filename] = result
+        return result
+
+    rows = []
+    resolved_count = 0
+    unresolved_count = 0
+    for v in owned:
+        a = v.attrib
+        filename = a.get("filename")
+        config_id, config_note = extract_active_fill_unit_config_id(v)
+        parsed = get_parsed(filename)
+
+        row = {
+            "unique_id": a.get("uniqueId"),
+            "filename": filename,
+            "active_fill_unit_config_id": config_id,
+            "config_id_note": config_note,
+            "resolution_kind": parsed["kind"],
+            "name": parsed["name"],
+        }
+        if parsed["load_err"]:
+            row["resolved"] = False
+            row["error"] = parsed["load_err"]
+            unresolved_count += 1
+            rows.append(row)
+            continue
+
+        configs = parsed["configs"]
+        if configs is None:
+            row["resolved"] = False
+            row["error"] = parsed["cfg_err"]
+            unresolved_count += 1
+            rows.append(row)
+            continue
+
+        idx = config_id - 1
+        if idx < 0 or idx >= len(configs):
+            row["resolved"] = False
+            row["error"] = (
+                f"config id {config_id} out of range -- {parsed['source_label']} declares "
+                f"{len(configs)} fillUnit configuration(s)"
+            )
+            unresolved_count += 1
+            rows.append(row)
+            continue
+
+        capacity = configs[idx]["diesel_capacity_litres"]
+        if capacity is None:
+            row["resolved"] = False
+            row["error"] = f"configuration {config_id} of {parsed['source_label']} has no DIESEL fill unit"
+            unresolved_count += 1
+        else:
+            row["resolved"] = True
+            row["diesel_capacity_litres"] = capacity
+            resolved_count += 1
+        rows.append(row)
+
+    emit({
+        "mode": "fuel_capacity",
+        "farm_id": farm_id,
+        "owned_count": len(owned),
+        "resolved_count": resolved_count,
+        "unresolved_count": unresolved_count,
+        "vehicles": rows,
+        "note": (
+            "diesel_capacity_litres is resolved from each vehicle's own store/mod XML "
+            "(fillUnit -> fillUnitConfigurations -> the Nth fillUnitConfiguration, N being "
+            "the save's own active <configuration name=\"fillUnit\" id=\"N\">) -- never "
+            "assumed from a base-game default. A vehicle with no DIESEL fill unit (an "
+            "implement/trailer) or an unresolvable filename reports resolved: false with a "
+            "reason, never a guessed capacity. Join on unique_id against read_vehicles.py's "
+            "fuel_level (raw litres in the tank) to compute a real percent-full."
+        ),
+        "calibration_needed": False,
+    })
 
 
 # --------------------------------------------------------------------------
@@ -648,6 +814,8 @@ def parse_args(argv):
             opts["mode"] = "search"; opts["search"] = args[i + 1]; i += 2
         elif a == "--gaps":
             opts["mode"] = "gaps"; i += 1
+        elif a == "--fuel-capacity":
+            opts["mode"] = "fuel_capacity"; i += 1
         elif a == "--category":
             opts["category"] = args[i + 1]; i += 2
         elif a == "--include-mods":
@@ -699,6 +867,8 @@ def main():
         run_search(opts["search"], opts["category"], install_dir, mods_dir, opts["include_mods"], opts["limit"], opts["verbose"])
     elif opts["mode"] == "gaps":
         run_gaps(install_dir, mods_dir, opts["include_mods"], opts["limit"], opts["verbose"])
+    elif opts["mode"] == "fuel_capacity":
+        run_fuel_capacity(savegame_dir, opts["farm_id"], install_dir, mods_dir)
 
 
 if __name__ == "__main__":

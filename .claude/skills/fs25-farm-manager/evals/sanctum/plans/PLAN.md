@@ -220,6 +220,7 @@ narrative is not rotated; it is kept bounded by being rewritten in place, not by
   `- _[archived DATE] "TITLE" (N lines) → history/archive/plan-2026.md_`.
 - **Conservation:** the archive file is append-only and kept in full; only the always-loaded
   live file sheds bulk. Prove nothing is lost before writing (the archive-not-delete
-  discipline). This is agent-rotation: `sanctum_maintain.py rotate` reports `agent-rotation`
-  rather than moving these entries itself, because they are prose blocks rather than table
-  rows — the move is the agent's job, and it is normal upkeep, not a failure.
+  discipline). `cap_lines`/`cap_kb` is a recommendation, not a limit — `sanctum_maintain.py
+  rotate` reports `compound` with a `warning` rather than moving these entries itself, because
+  they are prose blocks rather than table rows — the move is the agent's job, and it is normal
+  upkeep, not a failure.

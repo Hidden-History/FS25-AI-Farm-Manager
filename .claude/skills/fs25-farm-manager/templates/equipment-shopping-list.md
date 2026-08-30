@@ -21,11 +21,15 @@ list -- an entry means the farm has actually thought about the trade, not just
 noticed a machine exists._
 
 **New-equipment prices for anything not yet owned are usually readable, not
-guessable.** Check `config.json`'s `paths.install_dir` (base game) and
-`paths.mods_dir` (modded equipment) for the store's own price XML before asking
-the player what something costs -- see `state/equipment-roster.md` for the same
-caveat. **Used-market prices are genuinely not in any file** -- those have to
-come from what the player reports seeing in-game.
+guessable.** Run `read_store_prices.py` before asking the player what something costs — it
+resolves store prices from the install and mod zips directly (`--search`/`--lookup`/`--gaps`),
+so there is no need to hand-locate a price XML under `config.json`'s `paths.install_dir`/
+`paths.mods_dir` yourself. **Used-market listing prices are readable too** — run
+`read_equipment_market.py`: every listing carries its `listed_price` straight off `sales.xml`,
+and where the listing resolves to a matching new-price item it also computes `discount_vs_new`/
+`discount_pct` — the actual "is this a bargain?" number. Only the item's `new_price` can be
+genuinely unresolved (no store match); when that happens the listing still carries its
+`listed_price`, just without a discount comparison to weigh it against.
 
 ## Watching to buy
 

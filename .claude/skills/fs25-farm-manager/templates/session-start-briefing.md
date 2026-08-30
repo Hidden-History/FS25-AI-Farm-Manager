@@ -6,10 +6,13 @@
 # Morning Briefing — {{DATE}} (Session #{{SESSION_NUMBER}})
 
 *Compose in the manager's own voice (creed tone), not as a form — lead with what needs a decision
-today; the numbers back the recommendation, they aren't the point. Fill only from live sources
-(`farm_snapshot.py`, `history/closeout-latest.md` for what changed, `plans/PLAN.md` +
-`identity/decision-making.md` for standing plans), never from memory of a prior session. Run
-`check_sanctum_freshness.py` first — an `unverifiable` verdict is not a pass.*
+today; the numbers back the recommendation, they aren't the point. **The schema is primary: every
+figure and verdict below is a RENDERING of a duty's structured output (`references/duty-register.md`,
+S4), never freely composed** — fill from live sources (`farm_snapshot.py`, `history/closeout-latest.md`
+for what changed, `plans/PLAN.md` + `identity/decision-making.md` for standing plans), never from
+memory of a prior session. Run `check_sanctum_freshness.py` first — an `unverifiable` verdict is not
+a pass. Any duty whose `escalate: true` (D-02, D-13, D-16) is a decision put to the player, not a
+fact stated — lead with those, per the "Needs attention" section below.*
 
 **In-game:** {{INGAME_DATE_TIME_SEASON}}
 **Since last time:** {{TIME_ELAPSED_OR_CHANGES_SINCE_LAST_CLOSEOUT}}

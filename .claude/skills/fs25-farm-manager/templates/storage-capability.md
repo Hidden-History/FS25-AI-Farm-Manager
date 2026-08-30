@@ -22,8 +22,11 @@ onion" wrong by only looking at one attribute. Genuinely durable: what a node ca
 change session-to-session — re-verify an entry only when a new mod is added or a node is
 rebuilt/upgraded._
 
-_Populating this cheaply and reliably needs a dev-side script (`read_storage_capability.py`, per
-F-116's "Fix needed") that reads both attributes; until it ships, rows here are resolved by hand._
+_`read_storage_capability.py` has shipped and reads both attributes — run it per storage node
+(`--placeable <TYPE definition xml>`, plus `--fill-types-xml`/`--config` as needed to expand
+categories) rather than resolving rows by hand. It is the source for every row below; a row
+resolved by hand instead of by the script is the exact F-102/F-116 shape this file exists to
+prevent — re-run the script before trusting a hand-entered row that predates it._
 
 ## What each storage node accepts
 

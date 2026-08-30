@@ -16,8 +16,11 @@ parity_spec:
 
 *In-game open/close time + elapsed, `timeScale`: {{TIMES}}. Write in three passes — fill the table
 from `farm_snapshot.py`'s digest (never estimate a delta you didn't read), then 3–6 bullets of what
-happened, then the honesty sections. If most fields already changed during the session (the
-"write as you go" rule), this file is verification, not reconstruction.*
+happened, then the honesty sections. **The State delta table renders duty output, never authored
+prose** — Cash/Loan trace to D-01, Fleet to D-12/D-13, Land to D-16 (`references/duty-register.md`);
+if a duty's `status` is `unavailable`/`unknown_by_design`, the cell says so, never a guessed delta.
+If most fields already changed during the session (the "write as you go" rule), this file is
+verification, not reconstruction.*
 
 ## State delta
 
@@ -56,7 +59,7 @@ dossier) with just a pointer here.}}
 {{Pointer only — what changed in `plans/PLAN.md` (Current focus rewritten? directives opened,
 touched, or closed?) and the session-plan file written this closeout, or "none this session."
 Never restate the plan text — `plans/sessions/{{DATE}}-session-{{SESSION_NUMBER}}.md` and
-`plans/PLAN.md` own it. See `closeout-steps/step-06-update-plan.md`.}}
+`plans/PLAN.md` own it. See `closeout-steps/c3-close-plan.md`.}}
 
 ## Frictions this session
 

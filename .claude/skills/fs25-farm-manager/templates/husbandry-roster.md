@@ -8,15 +8,27 @@ rotation_trigger: on-resolve
 archive_target: "history/archive/husbandry-roster-archive.md"
 resolved_markers: ["SOLD", "REMOVED"]
 reconciliation: "sold/removed buildings MOVE to archive (never blind row-shed); Count is live, Last updated is its confirm-date"
-format_version: 2
+format_version: 3
 parity_spec:
-  required_sections: ["## Buildings owned", "## Reading of it"]
+  required_sections: ["## Read live — Count is never a cached figure", "## Buildings owned", "## Reading of it"]
 ---
 
 # Animal Husbandry Roster
 
+## Read live — Count is never a cached figure
+
+**`Count` is live** — `read_livestock.py` answers it fresh every session, never trusted from
+this table. The durable content here is the *list of buildings owned* (the index); the count
+itself lives in the save, and this file is only touched when a building is bought/sold/removed —
+so a `Count` cell can sit unrevised session after session while the real number drifts (the same
+stale-but-confident shape F-117 names for equipment). **A `Count` without a current-session
+`Last updated` is not this session's answer** — re-run `read_livestock.py` before trusting a
+number in the table below.
+
 _Snapshot: {{DATE}} ({{onboarding | updated at session N}}). Source:
-`placeables.xml` husbandry buildings filtered to this farm's `farm_id`._
+`placeables.xml` husbandry buildings filtered to this farm's `farm_id`. **This provenance line
+describes the DURABLE building list — which buildings exist — never the `Count` column, which is
+live per the banner above.**_
 
 **If this farm owns no animal buildings, say so explicitly and stop there --
 don't leave the file looking unpopulated.** "0 husbandry buildings owned as of
@@ -34,7 +46,7 @@ heading.)_
 |---|---|---|---|
 | {{BUILDING_NAME_OR_ID}} | {{ANIMAL_TYPE}} | {{NUM_ANIMALS}} | {{DATE}} |
 
-**`Count` is live** — `read_placeables.py` answers it fresh every session. `Last updated` is its
+**`Count` is live** — `read_livestock.py` answers it fresh every session. `Last updated` is its
 confirm-date, not decoration: don't trust a `Count` older than the current session without
 re-checking. The durable content here is the *list of buildings owned* (the index); the count
 lives in the save. When a building is sold or removed, MOVE its row to

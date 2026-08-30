@@ -79,6 +79,12 @@ game's own rules is a valid, complete answer — say so plainly.}}
 that section in place and note what changed and why — don't add a new bullet elsewhere. A
 rule that can't be found by reading its own section isn't in effect.*
 
+**Which language I speak to you in is recorded in `config.json`'s `language`** — that key is
+the source of truth and is read at every session start. **Deliberately not restated here**: it
+is a preference you can change, and a mutable value held in two files is how one starts quietly
+lying — the same rule `config.json`'s `house_rules._note` already applies to house rules. To
+change it, change it there.
+
 {{Some players want to be corrected immediately and bluntly when something looks wrong,
 want every mistake logged rather than quietly fixed, or want to be pushed back on rather
 than agreed with by default. Others want a softer touch. This shapes tone more than any

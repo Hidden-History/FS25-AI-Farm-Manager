@@ -302,3 +302,87 @@ that should now exist, the count that should have changed, the diff that
 should be non-empty — not against the process substitute for that evidence.
 This is the same discipline as "sanity-check the values, not the success
 flag," applied to shell commands instead of parsers.
+
+## `--farm-id`, and what "ownership is resolved" actually rests on
+
+**Pass `--farm-id` (default `1`) or you'll describe the map, not the farm.** Filtering parsers
+report `owned_count` beside `total_seen` — quote both. "You own 24 machines" without "of 51 on
+the map" hides whether the filter worked at all. `placeables.xml` also carries a `farmId="15"`
+owning much of the map's infrastructure while appearing in no farm list; `read_placeables.py`
+surfaces that as `unrecognized_farm_ids` rather than folding it into either bucket.
+
+**Never ask how many hectares/parcels they own, or their cost — it's resolved, map-independently
+by design, PROVIDED the map's own mod zip can be read.** `read_fields.py` composes
+`read_farmland_areas.py`, which decodes the map's `infoLayer_farmlands.grle` raster for
+per-parcel area, cost, and owner — unlike field-level ownership (below), nothing here is gated
+to one named map. But it is still a parser with a real input: it **hard-errors** if the save's
+map-mod `.zip` isn't found in `mods_dir` (`read_farmland_areas.py:1554-1567`) — check `error`/
+`calibration_needed` before treating an area/value figure as resolved. Precedence: explicit
+`--owned-fields` (the player's word always wins) → gate-checked derivation → honest `null`.
+It never guesses: it **refuses to emit area/value if either hard gate fails** rather than ship
+a plausible wrong number. ⚠ **The `<fieldPurchase>` cross-check it used to run every run is
+DISABLED** (DEC-057 ⑨) — that read was BUG-014's defect and the field it emitted is still
+blocked, so **do not describe the land total as self-checked against `farms.xml`**; the two
+gates are what earn it trust, and they are enough. `farms.xml` does still record
+`fieldPurchase`, `newVehiclesCost`, `constructionCost` and `loanInterest` directly (F-012),
+but note BUG-014's finding before treating it as a second route: `<fieldPurchase>` is a
+**cash-flow spend** across per-period `<stats>` slots, not a land **valuation**, so the two
+answer different questions and agreeing is not the same as corroborating.
+
+⚠ **And ownership is resolved for PARCELS, not for FIELDS — and never ask which FIELDS are
+theirs off a map other than the one this is ruled for.** Which *parcels* a farm owns is
+read straight from `farmland.xml`, on any map. Which *fields* it owns additionally assumes
+`field_id == farmland_id` — a map-specific rule the savegame cannot confirm, ruled **only for
+`FS25_Montana_4X.MapMontana`** (`read_farmland_areas.py`'s `RULED_MAP_ID`). Off that map the
+parser correctly claims **no** field→farmland ownership at all and says so in `calibration_notes`
+— it does not silently fall back to guessing. On a map whose field ids sit inside its parcel
+ids, the ruling's own falsifiability check cannot refute the assumption either. `read_farmland_areas.py`
+labels every such row and reports that section `partial`. **On the ruled map, field-level
+ownership is ALWAYS assumed — no value of the `ARCH-R3-04` entry's `id_space_overlap.falsifiable` lifts that.**
+(`interpretation_guarantee` is a **list** since DEC-077, so select that entry by its `ruling`
+id — never by position.) That flag reports only whether the check *could* have caught a
+violation, never that the join was measured: `false` means the field ids are a subset of the
+parcel ids, so the guard had no reachable failing input and "0 unmatched" is **not** evidence
+of correctness; `true` means unmatched fields were found and the assumption **demonstrably
+failed** for them; `null` means `fields.xml` was unreadable and nothing was checked. Every
+value is a reason to trust the join less or the same — none is a reason to trust it more.
+
+## `groundType` is not crop readiness, and FS25 has no harvest event
+
+**`groundType` is NOT readiness — it is the terrain texture.** It still reads
+`HARVEST_READY` on a field harvested days ago, because the texture is not repainted when the
+crop comes off. It also cannot distinguish `HARVEST_READY` from `HARVEST_READY_OTHER`, which
+is not a readiness distinction at all — the same crop at the same growth stage appears under
+both. **Read `crop_state`**, which `read_fields.py` derives from `growthState` against the
+crop's own `<foliageState>` list. Reading groundType told this farm to go harvest two fields
+it had already harvested (F-039).
+
+**FS25 records no harvest event.** `crop_state: "harvested"` is a STATE, not a timestamp.
+Nothing on disk says *when* — to date it, diff against the previous session's closeout. Never
+invent a harvest day.
+
+## Two citations for the rule at the top, so they aren't lost
+
+Concrete evidence behind "absence must never be allowed to look like data" and "a success flag
+is necessary but not sufficient," specific enough to be worth keeping rather than only the
+abstract rule:
+
+- An empty ownership list, read as "this farm owns no land," when the farm owned 18 parcels —
+  forced a rewrite of `config.json`, `identity/creed.md`, and `state/finances-ledger.md` during
+  onboarding (F-001, F-010). A `0`, a `null`, and a missing key are three different claims;
+  keep them distinct.
+- `calibration_needed` once read `false` while `day` and `time` returned the same wrong number
+  (F-002) — a flag reporting "a tag matched" is not the same claim as "the value is right."
+  Sanity-check values even when nothing complained: does the farm appear to own zero land?
+  Does `day` equal `time`? Does a count look like the whole map?
+
+## The savegame's mtime, and `timeScale`, in this skill's own scripts
+
+**The savegame's mtime is the only honest freshness signal**, and this skill's own timing
+depends on it: `autoSaveInterval` bounds nothing — FS25 defers the write until the player next
+opens the map, so a save can be arbitrarily stale mid-session with nothing wrong (F-023). Never
+infer player activity from write patterns.
+
+**`timeScale` may not read live.** Whether `<timeScale>` updates when the player changes speed,
+or only at the next autosave, is **open** — polling during live play caught no write at all.
+Don't build advice on the file's value matching the speed selected *right now*.

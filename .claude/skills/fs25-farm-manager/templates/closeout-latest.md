@@ -17,7 +17,9 @@ _No sessions yet. This file is written after the first closeout._
 _What this file is: a single, always-current snapshot of the most recent
 session's closeout -- not a log. It gets **fully overwritten** at the end of
 every session with that session's write-up (it takes the same shape as
-`templates/session-closeout.md`), while a permanent copy of each one is archived to
+`templates/session-closeout.md`, and the same rule applies: figures render duty
+output, `references/duty-register.md`, never authored prose), while a
+permanent copy of each one is archived to
 `sanctum/history/journal/{{date}}-session-{{n}}.md` so the history isn't lost. The full
 overwrite each close **is** its rotation -- it never accumulates, so its only bloat risk is
 per-session size, which the 90-line/5 KB cap bounds. The next session's briefing reads this file

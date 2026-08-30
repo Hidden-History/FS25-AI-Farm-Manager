@@ -18,11 +18,15 @@ parity_spec:
 
 ## Read live — don't trust a cached figure here
 
-Input fill on hand, outputs accumulated, running/idle status, efficiency — all of it changes
-between sessions and is answered authoritatively by `read_placeables.py` / `farm_snapshot.py`
-every session. This file does **not** carry those numbers: a cached copy goes stale the moment
-it's written and reads as current when it isn't (friction-log F-117, F-106). A "current state"
-figure written here is an error in the file, not this session's answer.
+Running/idle status — `read_productions.py` (`is_enabled`), never `read_placeables.py`, which
+carries no production-line enabled state. Input fill on hand and outputs accumulated are the
+line's own storage fill state — `read_placeables.py`, which feeds `farm_snapshot.py`'s digest.
+Running/idle status does not: `farm_snapshot.py` carries no production-line section, so run
+`read_productions.py` on its own for that half. All of it changes between sessions and is
+answered authoritatively every session. This file does **not** carry those numbers: a cached
+copy goes stale the moment it's written and reads as
+current when it isn't (friction-log F-117, F-106). A "current state" figure written here is an
+error in the file, not this session's answer.
 
 ## Durable facts (the reason this file exists)
 

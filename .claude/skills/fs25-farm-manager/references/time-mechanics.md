@@ -69,12 +69,12 @@ The test, which needs ×≠1 (baseline captured at ×3: dayTime 650.463745, play
   - contracts expiring before the target (they'll be lost)
   - **standing harvest-ready crops — a harvest window here can be ~1 day; sleeping past it
     spoils the crop**
-  - **animals needing feed/water** — read `farm_snapshot.py`; **never assume a farm has no
+  - **animals needing feed/water** — read `read_livestock.py`; **never assume a farm has no
     husbandry.** An earlier version of this file asserted "(none on this farm)" here as
     portable fact. It was imported from a different farm and was **wrong** for the next
     one — that farm actually had livestock and production points — following this checklist
     verbatim would have cleared a sleep that could starve livestock.
-  - **production chains needing input** — same rule, same reason: read it, don't assume it.
+  - **production chains needing input** — same rule, same reason: read `read_productions.py`, don't assume it.
 - **Weather matters when skipping**: hail/rain in the forecast can damage or block work.
 - **Idle in-game days on a leveraged farm are not free, but not the way you'd guess** — loan
   interest is charged once at each **month-end**, on the balance (see `sanctum/identity/creed.md`), not

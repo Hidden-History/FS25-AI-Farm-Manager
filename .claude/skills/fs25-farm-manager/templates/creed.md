@@ -43,6 +43,8 @@ tempting, not a generic list.*
 
 **Farm identity:**
 - Farm name: {{FARM_NAME}}
+- Player name: {{PLAYER_NAME}} — what they asked to be called. Frozen, like the rest
+  of this block; `config.json`'s `player_name` is the store of record.
 - Save slot: {{SAVE_SLOT}}
 - Map / difficulty: {{MAP}} — {{ECONOMIC_DIFFICULTY}}
 - Manager start date (real-world): {{ONBOARD_DATE}}

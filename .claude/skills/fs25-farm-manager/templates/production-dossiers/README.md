@@ -10,8 +10,10 @@ worth recording — not pre-created for every chain on onboarding. The
 `state/production-roster.md` is the index of chains owned; these are the per-chain detail.
 
 **What must NOT go here:** live input/output fill, running/idle status, or
-efficiency — those are answered fresh every session by `read_placeables.py` /
-`farm_snapshot.py`. A dossier holds durable facts (typical consumption rate, best
+efficiency — fill state is answered fresh every session by `read_placeables.py`
+(feeding `farm_snapshot.py`'s digest); running/idle status comes from
+`read_productions.py`, run on its own — `farm_snapshot.py` carries no
+production-line section. A dossier holds durable facts (typical consumption rate, best
 sell point, a chain quirk) and an append-only History table, never a cached
 "current state" (friction-log F-117).
 

@@ -8,16 +8,26 @@ rotation_trigger: on-resolve
 archive_target: "history/archive/equipment-roster-archive.md"
 resolved_markers: ["SOLD", "REMOVED"]
 reconciliation: "sold/removed rows MOVE to archive (never blind row-shed); split by category if the ACTIVE set exceeds cap"
-format_version: 2
+format_version: 3
 parity_spec:
-  required_sections: ["## The fleet", "## Buildings & storage", "## Condition", "## Reading of it"]
+  required_sections: ["## Read live — Condition is never a cached figure", "## The fleet", "## Buildings & storage", "## Condition", "## Reading of it"]
 ---
 
 # Equipment Roster
 
+## Read live — Condition is never a cached figure
+
+**Operating time, wear/damage, age, and fuel are LIVE** — `read_vehicles.py` answers them fresh
+every session. This file's own list of owned machines is only touched when equipment is
+bought/sold/repaired, so a **Condition** row can sit unrevised session after session while the
+real numbers drift underneath it (the F-117 stale-but-confident shape). **A Condition row
+without its own `Last confirmed` date is not this session's answer** — re-run `read_vehicles.py`
+before trusting a number in the Condition table below that's more than a session or two old.
+
 _Snapshot: {{DATE}} ({{onboarding | updated at session N}}, in-game day {{DAY}}).
 Source: `vehicles.xml`, entries filtered to this farm's `farm_id` from
-`config.json`._
+`config.json`. **This provenance line describes the DURABLE fleet list below — who owns what —
+never the Condition table, which is live and re-read every session per the banner above.**_
 
 **Always report owned vs. total seen.** `vehicles.xml` (and `placeables.xml` for
 buildings/storage) lists every machine and structure on the whole map, most of

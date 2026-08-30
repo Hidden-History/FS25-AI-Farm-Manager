@@ -42,7 +42,7 @@ instead."
 
 | Session | In-game day | Cash | Loan | Notes |
 |---|---|---|---|---|
-| 0 (anchor) | {{DAY}} | {{CASH — from farms.xml `money`}} | {{LOAN — from farms.xml `loan`}} | Opening snapshot at onboarding. |
+| 0 (anchor) | {{DAY}} | {{CASH — from `read_economy.py`}} | {{LOAN — from `read_economy.py`}} | Opening snapshot at onboarding. |
 
 ## If this farm runs a house-rule ledger
 
