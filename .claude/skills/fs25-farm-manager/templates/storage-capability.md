@@ -17,7 +17,7 @@ parity_spec:
 _What each owned storage node can **accept** — not what it currently holds (that's live, via
 `read_placeables.py`). Resolving this requires reading **both** `fillTypes` **and**
 `fillTypeCategories` per node, then expanding categories against base + map + mod `fillTypes.xml`
-definitions (friction-log F-102, F-116) — this is exactly the check that got "no silo accepts
+definitions — this is exactly the check that got "no silo accepts
 onion" wrong by only looking at one attribute. Genuinely durable: what a node can accept doesn't
 change session-to-session — re-verify an entry only when a new mod is added or a node is
 rebuilt/upgraded._
@@ -25,7 +25,7 @@ rebuilt/upgraded._
 _`read_storage_capability.py` has shipped and reads both attributes — run it per storage node
 (`--placeable <TYPE definition xml>`, plus `--fill-types-xml`/`--config` as needed to expand
 categories) rather than resolving rows by hand. It is the source for every row below; a row
-resolved by hand instead of by the script is the exact F-102/F-116 shape this file exists to
+resolved by hand instead of by the script is the exact 'no silo accepts onion' shape this file exists to
 prevent — re-run the script before trusting a hand-entered row that predates it._
 
 ## What each storage node accepts

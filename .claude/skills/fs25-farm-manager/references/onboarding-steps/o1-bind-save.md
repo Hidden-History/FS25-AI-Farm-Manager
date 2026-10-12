@@ -36,7 +36,7 @@ END of onboarding, by which time the value has been overwritten — so the write
 invisible to every gate. **Absence is the detectable state.** This is the same defect the farm-name
 step exists to prevent, and it must not be re-introduced on these two keys.
 
-⚠ **Why this is allowed to precede the position (F-010).** F-010's rule is that the position
+⚠ **Why this is allowed to precede the position.** The position-first rule is that the position
 precedes every **judgment** question — the ones whose answers are only meaningful once the player
 has seen their real farm. **A name and a language are identity DATA, not judgments**: nothing in the
 save informs them and no briefing could change the answer. **This exemption covers `player_name` and
@@ -45,7 +45,7 @@ save informs them and no briefing could change the answer. **This exemption cove
 ## Then find and bind the save
 
 **Find the save, then ask only for what's left.** Run `locate_save.py` with no arguments — it
-auto-detects WSL, native Windows, and every install layout it knows about (`FRICTION-LOG.md` F-007,
+auto-detects WSL, native Windows, and every install layout it knows about (previously a gap,
 now fixed), and lists the slots it finds with farm names and mtimes:
 
 ```bash
@@ -74,6 +74,16 @@ Record the three directories in `sanctum/config.json` under `paths` (`savegame_d
 right here is what spares the player every future price question. Record `farm_id` at the top
 level — `farm_snapshot.py` and every parser that filters by ownership take `--farm-id`, and this
 step is what supplies it.
+
+**Also record `savegame_key` at the top level: the BASENAME of `paths.savegame_dir`** (e.g.
+`"savegame3"`). The mod stores each savegame's cards and replies under
+`modSettings/FS25_AIFarmManager25/<savegame_key>/`, keyed off the save folder's own name, and
+`notify_farm_manager.py` writes to the same folder — one manager talks to one savegame. Write it
+down here so it is visible to a human rather than re-derived silently in three places. ⛔ It is
+**checked, not trusted**: the sender re-derives the key from `paths.savegame_dir` and **fails loud**
+if the two disagree, because a key that drifts off its own save writes cards where nobody reads them
+and still reports success. ⛔ Never key on `save_slot` — it is a hand-recorded string nothing
+validates.
 
 ## Next
 

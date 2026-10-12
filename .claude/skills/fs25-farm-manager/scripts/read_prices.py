@@ -120,7 +120,7 @@ def main():
                 "UNKNOWN, not zero. No trade has ever been recorded at this station for "
                 "this fill type (received and paid are both 0), so meanValue is an "
                 "uninitialized placeholder, not a price. Never report this as a $0 "
-                "sell price (FRICTION-LOG.md F-001/F-018/F-025 -- absence looking like "
+                "sell price (absence looking like "
                 "data). Use economy.xml's per-period price history for real sell-price "
                 "guidance instead."
             )

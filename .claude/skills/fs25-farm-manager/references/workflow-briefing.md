@@ -41,9 +41,12 @@ everything after.
 > ⚠ **This conduct half is retained here deliberately, and its long-term home is elsewhere.** The
 > design of record places ongoing session conduct in a separate fourth workflow that **is not built
 > and whose steps are specified nowhere.** It is kept in place rather than shed, because the rules
-> below are live — in particular, **this is the only place the event watcher is armed, and the
+> below are live — in particular, **this is where a NORMAL session arms the event watcher, and the
 > closeout exists to disarm it.** Removing it would leave `workflow-closeout.md` and C5 disarming
-> something nothing arms. When the fourth workflow lands, this section moves there whole.
+> something nothing arms. ⚠ **It is no longer the only arm site**: none of onboarding's own steps opens
+> this file, so `onboarding-steps/o6-arm-watcher.md` arms it there as an executed step. Both are
+> check-then-arm against `sanctum/watch.pid`, so whichever runs first, the end state is one live
+> watcher. When the fourth workflow lands, this section moves there whole.
 
 This is the part that makes you a manager instead of a report generator: for contracts, storage,
 animals, equipment, selling, production, and field expansion, don't just surface data — form a
@@ -54,21 +57,42 @@ So you proactively:
 
 - Recommend next actions, but ask before committing to purchases, sales, or planting choices that are
   the player's call.
-- Update `sanctum/state/field-dossiers/field-{id}.md` (create from `templates/field-dossier.md` if
-  new) whenever a field's state materially changes or you learn something worth remembering.
+- Update `sanctum/state/field-dossiers/field-{id}.md` (a new one for an ordinary field is created
+  with `record_field_merges.py … --single <id>`, see `references/sanctum-upkeep.md`; never by hand)
+  whenever a field's state materially changes or you learn something worth remembering.
 - Update `sanctum/plans/PLAN.md` — the Current focus narrative and its Standing directives (using
   `templates/directive-entry.md` for a new directive) — whenever a long-term plan is set, changed, or
   completed. Write as you go; closeout verifies the plan, it doesn't reconstruct it.
 - Update `sanctum/state/equipment-roster.md` when equipment is bought, sold, repaired, or flagged.
 
-- **Log harvests as they appear.** `field_state.harvested_on_owned_land` lists fields whose crop is
-  CUT. A field that was `ready` at last closeout and is `harvested` now means the player harvested it
-  in between — write that to `sanctum/state/field-dossiers/field-{id}.md` with the in-game day.
+- **Log harvests as they appear.** `derived.owned_land_crop_state.harvested`, from the most recent
+  gate read (below), lists owned fields whose crop is CUT — past five entries it arrives as an
+  envelope whose `item_count` gives the true total; log the entries actually shown, report that
+  total, and say the rest were not read, never logging only the shown few as though that were the
+  whole harvest. A field that was `ready` at last closeout and is `harvested` now means the player
+  harvested it in between — write that to `sanctum/state/field-dossiers/field-{id}.md` with the
+  in-game day.
   **FS25 stores no harvest timestamp**, so the honest entry is a bracket ("ready on day 7, cut by day
   9"), never a precise day you did not read.
-- **Never tell them to harvest a field that is already cut.** Use `harvest_ready_on_owned_land`, which
-  is derived from `crop_state`. If `unknown_crop_state_on_owned_land` is non-empty, those fields are
-  UNKNOWN — say so rather than omitting them, which reads as "nothing to do there".
+- **Never tell them to harvest a field that is already cut.** Use `harvest_ready` in
+  `documents.read_state.document.derived.owned_land_crop_state` from the **most recent** gate read —
+  session start's document, or the after-save document once a save has landed. It is re-derived
+  from the verified cache on every read, so after a save it is the save's. Past five entries it
+  arrives as an envelope: name the fields actually shown, report the `item_count` as the number
+  ready, and say the rest were not read — never counting the shown few as the whole ready set.
+  ⛔ **Not** `field_state.harvest_ready_on_owned_land`, and **not** a "Field N is READY … harvest"
+  line in `decisions_needed`: both come from `farm_snapshot.py`, which only session start runs, so
+  after a mid-session save they still name a field the player has since cut.
+  If `crop_state_unknown` or `ownership_unknown_field_ids` is non-empty, those fields are UNKNOWN —
+  say so rather than omitting them, which reads as "nothing to do there". Past five entries either
+  list arrives as an envelope: name the fields actually shown, report the `item_count`, and say the
+  rest were not read — never implying the shown few are the whole unknown set. A `status` of
+  `unknown_by_design` means ownership is unresolved: **say you don't know**, never "nothing to harvest".
+  `unavailable` means the fields data could not be read: the lists are null, so **say you don't
+  know**. `stale` (the fields domain was read stale) and `unverified` (it was not verified current)
+  mean the lists, where present, describe the cache and **not necessarily the farm now** —
+  `staleness_warning` says why and `status_before_staleness_mark` what it read before the mark. Say
+  the harvest picture may be out of date; never advise from it as though it were current.
 
 - **Push a notification to their screen only when it can't wait for you to be asked.** If
   `config.json` has `notifications.available: true`, `scripts/notify_farm_manager.py` puts a card on
@@ -99,25 +123,59 @@ the watcher** so the manager reacts on its own and idles at ~zero token cost bet
    It prints one `STARTED …` line (arm confirmed — silence would mean it never armed), then one line
    per settled write. An `ERROR …` line with a non-zero exit means the arm FAILED — surface it; never
    mistake a dead watcher for a quiet game.
-3. **React to each event automatically:**
+   ⚠ **Check the `refresh=` field on that `STARTED` line.** `refresh=auto:<config>` means the watcher
+   will regenerate state on every save by itself. `refresh=off`, which also prints its own `WARN`
+   line, means it will report saves and regenerate **nothing** — that is the exact defect the trigger
+   exists to fix, so re-arm it **with** `--config` rather than working around it by hand.
+3. **React to each event — and note which ones are no longer yours:**
    - **`EVENT replies …`** → the player answered a card. Run
      `python3 ".claude/skills/fs25-farm-manager/scripts/read_replies.py" --config sanctum/config.json`, reconcile
      the new ledger entries against what you asked, and **respond** — usually a follow-up card via
      `notify_farm_manager.py` (`references/notifications.md`). Ingest is idempotent (its
      `(id, action)` ledger dedup), so a re-read never double-counts.
-   - **`EVENT savegame …`** → the game wrote a save. **Re-read live state through the gate** so your
-     next recommendation reflects what actually changed:
+   - **`EVENT savegame …`** → the game wrote a save. **The watcher regenerates state itself** — it
+     fires `refresh_state.py auto` and reports what happened on the next line, so there is nothing
+     here for you to generate. Read that line before anything else:
+     - **`REFRESH auto exit=0 refreshed`** → state is current.
+     - **`REFRESH auto exit=0 refreshed; FIELDS tab REFUSED: …`** (or `NOT PUBLISHED`, `published
+       DEGRADED`) → the cache is current but **that tab is not** — tell the player which tab and
+       why. A FIELDS refusal naming `_UNASSESSED.md` means the merged-fields question is open (S2).
+     - **`REFRESH auto exit=3 … retrying in …`** → the save is still being written (53 files over
+       ~8.7 s, and the generator will not read a half-written save). The watcher re-fires on its own
+       backoff. **Wait for the `exit=0`**; do not run the generator by hand to hurry it.
+     - **`ERROR refresh_state.py auto …`** → the refresh failed, or gave up after its bounded
+       retries. **State is stale and the tabs are showing old numbers.** Surface it; never read on as
+       though the save had been absorbed.
+
+     Once you have seen `exit=0`, **re-read live state through the gate** so your next recommendation
+     reflects what actually changed:
      ```bash
-     python3 ".claude/skills/fs25-farm-manager/scripts/generate_state.py" --config sanctum/config.json
-     python3 ".claude/skills/fs25-farm-manager/scripts/read_state.py"     --config sanctum/config.json
+     python3 ".claude/skills/fs25-farm-manager/scripts/refresh_state.py" after-save --config sanctum/config.json
      ```
-     S2's trust contract applies to this read exactly as it does at session start — the `error` key
-     rather than the exit status, `"sections"` rather than `"status"`. **Then run
-     `check_fleet_alerts.py`** (house rule set 2026-07-24 — `sanctum/config.json` →
-     `house_rules.fuel_and_repair_alerts`): it diffs the fleet's fuel/wear tiers against
+     It runs `read_state.py` and hands it back at `documents.read_state.document`, under the same
+     pointer rule as S2's `session-start` — a list that arrives as an envelope holds `item_count`
+     items, not `len(shown)`, and `read_the_rest_at` is **always a command** (S2's two shapes) — run
+     it when the answer needs the rest; never open a cache file. S2's trust contract applies to this read exactly as it does at session start — the
+     `error` key rather than the exit status (a refusal from the gate is at the **top-level** `error`
+     as well as inside the document), `"sections"` rather than `"status"`. **It re-reads nothing
+     else**: the live position from `farm_snapshot.py` is still the one session start read — which is
+     why the harvest rules above read `derived.owned_land_crop_state`, not `field_state`. ⚠ **Its
+     signal guarantee covers `read_state.py`'s document as printed — not what `read_state.py`'s own
+     renderer had already summarised before that**; the document counts those lists in
+     `signal_preservation.envelopes_elided_upstream` and states the limit beside the guarantee.
+     `derived.production_input_demand.data` arrives **most urgent first**, and its
+     `unknown_runway_count` gives the total number of lines with an input whose runway nobody could
+     compute. Report that total, then name the lines actually shown in `unknown_runway_lines` —
+     past five lines this arrives as an envelope holding only the first few, never all of them —
+     with the input(s) each gives, since one may be the next to run dry. That includes lines ranked
+     by a known input: a line stops when ANY input empties, so their `hours_upper_bound` is the
+     most they have, never their runway. **Then run
+     `check_fleet_alerts.py`** (always, unless the player turned it off — the script reads
+     `fleet_alerts_enabled` in `sanctum/config.json` itself and prints `"status": "disabled"` if it
+     is `false`; a config with no such key means on, so never skip it for a missing key): it diffs the fleet's fuel/wear tiers against
      `sanctum/fleet-alert-state.json` and pushes an individual, actionable (`ack`) card for every NEW
      crossing only — never a repeat for an unchanged tier, never a card for recovering. Cards are sent
-     one at a time, each waiting for its own delivery outcome (never batch — see FRICTION-LOG F-210);
+     one at a time, each waiting for its own delivery outcome (never batch);
      if several land in the same event, only the last one survives on disk when the game is closed,
      which the script's own output flags rather than hides.
 

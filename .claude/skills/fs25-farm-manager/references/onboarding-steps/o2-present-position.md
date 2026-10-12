@@ -15,7 +15,7 @@ nextStepFile: './o3-profile.md'
 that is unset or still a placeholder — correctly, because falling back to the sanctum directory
 name would put a filesystem accident in front of the player as their farm's name. O1 bound the
 save but recorded no name, so a fresh sanctum arrives here with nothing to render and the **whole
-view is refused** before the player has ever been asked (BUG-025 (iii)).
+view is refused** before the player has ever been asked.
 
 `locate_save.py` already showed you this save's own farm name, read from `farms.xml`. **Put it to
 the player as a question, not as a fact** — *"your save calls this farm X; is that what I should
@@ -29,7 +29,7 @@ like an answered one. That is what happened live, and it is why this step exists
 name is a **candidate to confirm**, never a value to record before the player has spoken.
 
 ⚠ **This is the only question ON THIS STEP that precedes the position display, and the exemption
-is narrow.** F-010's rule below governs **judgment** questions — the ones whose answers are only
+is narrow.** The position-first rule below governs **judgment** questions — the ones whose answers are only
 meaningful once the player has seen the real position. `farm_name` is not one of those: it is an
 **input the read itself requires**, so it can never be informed by a read that cannot run without
 it. ⚠ **`player_name` and `language` were already asked at the top of O1**, under a separate and
@@ -98,8 +98,8 @@ version of this step — it is a different step that loses data nothing else sup
 **Present the real position to the player, plainly**: cash, loan, owned land, fleet, day/season,
 difficulty.
 
-⛔ **Position precedes every question.** This ordering is load-bearing and it is not a matter of
-style. It is the fix for a real and expensive mistake (F-010): an earlier session asked the player a
+⛔ **Position precedes every question.** This ordering (the position-first rule) is load-bearing and it is not a matter of
+style. It is the fix for a real and expensive mistake: an earlier session asked the player a
 planning question while genuinely believing — from a since-fixed parser bug — that the farm was a
 blank slate. It actually owned 18 parcels, 24 machines, and millions in debt-funded iron. **The
 question got answered on a false premise, and three sanctum files had to be rewritten afterwards.**

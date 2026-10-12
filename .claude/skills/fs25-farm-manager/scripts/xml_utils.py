@@ -139,9 +139,100 @@ def load_xml(path):
     }
 
 
+# ---------------------------------------------------------------------------
+# THE FINITENESS CHOKE POINT (TECH-DEBT-108)
+#
+# `float("nan") <= 0` is False, and so is every other comparison against a nan.
+# So a range guard written the obvious way -- `if value <= 0: reject` -- passes
+# nan, inf and -inf straight through and labels them with whatever confidence
+# the healthy path carries. json.dumps then writes them as bare `NaN`,
+# `Infinity` and `-Infinity`, which are NOT JSON: a strict consumer (Lua's
+# dkjson, jq, any conforming parser) fails on the WHOLE snapshot, so one bad
+# attribute in one field costs the player every other figure in the file.
+#
+# The guard below already existed and was already complete -- in
+# emit_farm_xml.py's `_num`, protecting the FARM tab only. This is that test,
+# moved beside `emit` so every parser gets it from one place instead of
+# fifteen private range checks that each have to remember nan.
+#
+# ⚠ VENDORED COPY, DELIBERATE. emit_farm_xml.py does not import xml_utils at
+# all, and it is not this lane's file to change. `_num` therefore stays where
+# it is and is a vendored copy of this function -- CLAUDE.md requires vendored
+# copies to match their source, so tests/test_td108_finiteness_chokepoint.py
+# carries a PARITY test that runs both over one shared value table. Collapsing
+# the duplication is a follow-up for whoever owns emit_farm_xml.py.
+def finite_number(value):
+    """A finite number, or None. Absence must never become 0.
+
+    ⚠ COERCES NUMERIC STRINGS, and that is not laxity -- these parsers read XML
+    attributes and hand them back as the strings they are (read_vehicles.py
+    emits damage as "0.027986"). A non-numeric string is still None. bool is
+    rejected before int, because `isinstance(True, int)` is True in Python and
+    a flag is not a measurement.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+    if not isinstance(value, (int, float)):
+        return None
+    # `v != v` is the nan test that does not need math imported; the explicit
+    # infinities catch what a range comparison never will.
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return value
+
+
+def nonfinite_paths(obj, path="$"):
+    """Every JSON path in `obj` holding a nan or an infinity, in document order.
+
+    This exists so `emit` can refuse with a REASON that names the offending
+    field. `json.dumps(allow_nan=False)` raises "Out of range float values are
+    not JSON compliant" and never says WHICH value -- an error a reader cannot
+    act on is barely better than the silent corruption it replaced (DEC-001).
+    """
+    found = []
+    if isinstance(obj, float) and (obj != obj or obj in (float("inf"), float("-inf"))):
+        found.append((path, obj))
+    elif isinstance(obj, dict):
+        for key, val in obj.items():
+            found.extend(nonfinite_paths(val, "%s.%s" % (path, key)))
+    elif isinstance(obj, (list, tuple)):
+        for index, val in enumerate(obj):
+            found.extend(nonfinite_paths(val, "%s[%d]" % (path, index)))
+    return found
+
+
 def emit(result):
-    """Print a result dict as JSON to stdout (the standard output contract for these scripts)."""
-    print(json.dumps(result, indent=2))
+    """Print a result dict as JSON to stdout (the standard output contract for these scripts).
+
+    ⛔ REFUSES TO EMIT INVALID JSON (TECH-DEBT-108). `allow_nan=False` is the
+    choke point: whatever a parser failed to range-check upstream, a nan or an
+    infinity stops HERE rather than reaching the consumer as bare `NaN`.
+
+    The refusal is itself a valid JSON error object on stdout with a non-zero
+    exit, never a traceback: this skill's contract is that a parser emits
+    `{"error": ...}` and never nothing, so letting the ValueError propagate
+    would trade one contract violation for another.
+    """
+    try:
+        text = json.dumps(result, indent=2, allow_nan=False)
+    except ValueError:
+        offenders = nonfinite_paths(result)
+        print(json.dumps({
+            "error": (
+                "refusing to emit: %d non-finite value(s) would have been "
+                "written as bare NaN/Infinity, which is not JSON and would "
+                "fail a strict consumer on the whole document"
+                % len(offenders)),
+            "nonfinite_paths": [
+                {"path": path, "repr": repr(value)} for path, value in offenders],
+        }, indent=2))
+        sys.exit(1)
+    print(text)
 
 
 def arg_or_exit(usage):
@@ -219,7 +310,7 @@ def resolve_game_xml(filename, install_dir, mods_dir):
             return None, None, "mod", (
                 f"{filename!r} is a $moddir$ path but no mods directory was given, "
                 f"so it cannot be resolved. Not falling back to the base install: "
-                f"a $moddir$ file is not there (F-019)."
+                f"a $moddir$ file is not there."
             )
         zip_path = os.path.join(mods_dir, mod_name + ".zip")
         if not os.path.isfile(zip_path):

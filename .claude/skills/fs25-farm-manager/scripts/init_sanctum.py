@@ -88,6 +88,15 @@ TEMPLATE_FILES = {
     # index). Seeded empty so the first closeout has an INDEX to append to. The per-session
     # plan files (plans/sessions/{{date}}-session-{{n}}.md) are produced at closeout, not seeded.
     "sanctum/plans/INDEX.md": "plan-index.md",
+    # RSK-031. field-dossiers/ is seeded EMPTY and an empty directory cannot say
+    # whether anyone has looked in it. This marker says so out loud; the merge
+    # reader refuses while it is present, and removing it is how a session
+    # records that the farm WAS assessed -- including when the answer is "none".
+    "sanctum/state/field-dossiers/_UNASSESSED.md": "field-dossiers-unassessed.md",
+    # SPEC-livetest-fixes-2026-10-01 item 3: the per-field crop plan the FIELDS tab shows.
+    # Seeded header-only: zero rows is "nothing planned yet", never a statement about the
+    # save. Written only by scripts/record_field_plan.py (references/field-plan-format.md).
+    "sanctum/state/field-plan.md": "field-plan.md",
 }
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates")

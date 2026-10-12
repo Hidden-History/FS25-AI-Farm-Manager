@@ -3,12 +3,17 @@ Check the fleet's fuel/damage tiers (via farm_snapshot.py) against the last
 alerted state and push an individual, actionable in-game card for every NEW
 threshold crossing -- never a repeat for a tier that hasn't gotten worse.
 
-Usage: python3 check_fleet_alerts.py <savegame_dir> [--farm-id N] [--config PATH]
-    [--state PATH] [--dry-run]
+Usage: python3 check_fleet_alerts.py <savegame_dir> [--farm-id N]
+    (--config PATH | --state PATH) [--dry-run]
 
-House rule (set 2026-07-24, player asked directly -- see
-sanctum/config.json house_rules.fuel_and_repair_alerts and
-sanctum/identity/decision-making.md): deterministic thresholds instead of a
+ON BY DEFAULT, FOR EVERY PLAYER. The script reads its own switch from the
+sanctum's config.json (top-level key `fleet_alerts_enabled`, see ALERTS_KEY):
+a config with NO such key -- every sanctum made before the key existed --
+counts as ON; `false` turns the alerts off (no card, no state file written,
+exit 0, a structured {"status": "disabled", ...} naming the key); `true` is
+the shipped default. Any other value is an error, never a silent ON or OFF.
+The step files tell the manager to run this unless the switch is off; the
+manager never decides that from prose. Deterministic thresholds instead of a
 judgment call every session --
     fuel remaining  <=50% minor (yellow/warn) / <=25% severe (red/critical)
     damage (worn)   >=50% minor (yellow/warn) / >=75% severe (red/critical)
@@ -70,14 +75,32 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from xml_utils import emit, arg_or_exit
 from notify_farm_manager import send_notification, BridgeError
+from cache_layout import paths_escape_savegame
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_STATE_PATH = os.path.join("sanctum", "fleet-alert-state.json")
+
+# How long the --fleet-only snapshot may run. It contains the resolver pass
+# (`read_store_prices.py --fuel-capacity`, inner timeout
+# farm_snapshot.FUEL_CAPACITY_TIMEOUT = 90 s, ~20 s measured live), so this MUST
+# stay ABOVE that inner timeout: at 60 s a slow-but-healthy pass timed the alert
+# check out first, a bigger failure than the degraded "fuel unavailable" the
+# inner timeout is meant to produce.
+SNAPSHOT_TIMEOUT = 120
+# The state file lives in the CONFIGURED sanctum -- the directory holding the
+# --config this run was given (same rule as generate_state.py) -- never in a
+# "sanctum/" under the working directory. The old CWD-relative default created
+# a stray sanctum/ wherever the script was run from (measured 2026-09-09:
+# FS25/sanctum/fleet-alert-state.json), and run from inside a savegame folder
+# it would break the published promise that nothing is written there.
+STATE_FILENAME = "fleet-alert-state.json"
 
 # F-210: the mod's poll cadence for a given session is unknown up front, and
 # the default library timeout (2s) was proven too short once already. 10s
 # matches the timeout that resolved F-210 on retry.
 NOTIFY_TIMEOUT = 10.0
+
+# The switch. Top level in config.json, boolean. ABSENT == ON (see docstring).
+ALERTS_KEY = "fleet_alerts_enabled"
 
 SEVERITY_BY_TIER = {"minor": "warn", "severe": "critical"}
 TITLE_BY_METRIC = {"fuel": "Fuel", "damage": "Repair"}
@@ -97,9 +120,9 @@ def call_snapshot(savegame_dir, farm_id, config_path):
     if config_path:
         cmd += ["--config", config_path]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=SNAPSHOT_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return None, "farm_snapshot.py --fleet-only timed out after 60s"
+        return None, f"farm_snapshot.py --fleet-only timed out after {SNAPSHOT_TIMEOUT}s"
     try:
         return json.loads(result.stdout), None
     except json.JSONDecodeError:
@@ -141,8 +164,57 @@ def format_message(row, metric, day):
     return f"{name}: {pct_txt}{day_bit}."
 
 
+def resolve_state_path(state, config, savegame_dir):
+    """(absolute path, None) or (None, error). Never falls back to the working
+    directory: a --state is honoured as given, otherwise the file sits beside
+    --config; with neither, the sanctum is unknown and that is an error."""
+    if state:
+        path = state
+    elif config:
+        if not os.path.isfile(config):
+            return None, (
+                f"--config {config!r} is not a file (relative paths resolve from the "
+                f"working directory, {os.getcwd()!r}), so the sanctum that holds "
+                f"{STATE_FILENAME} cannot be determined. Pass an absolute --config, "
+                f"or --state explicitly.")
+        path = os.path.join(os.path.dirname(os.path.abspath(config)), STATE_FILENAME)
+    else:
+        return None, (
+            f"no --config and no --state: the sanctum that holds {STATE_FILENAME} "
+            f"cannot be determined. Refusing to fall back to the working directory.")
+    path = os.path.abspath(path)
+    if paths_escape_savegame({"state": path}, savegame_dir):
+        return None, (
+            f"state path {path!r} is inside the savegame folder {savegame_dir!r}: "
+            f"the manager writes nothing into the savegame folder.")
+    return path, None
+
+
+def read_switch(config_path):
+    """(enabled, None) or (None, error). Absent key == ON; only a real boolean
+    is accepted. No --config means there is nothing to read: ON. A config that
+    is unreadable or not valid JSON, or a non-boolean value, is an error --
+    the script never turns alerts on or off on a guess."""
+    if not config_path:
+        return True, None
+    try:
+        with open(config_path, "r") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:  # ValueError: invalid JSON and non-UTF-8 bytes alike
+        return None, f"cannot read the alert switch from --config {config_path!r}: {e}"
+    if not isinstance(cfg, dict):
+        return None, f"--config {config_path!r} is not a JSON object"
+    if ALERTS_KEY not in cfg:
+        return True, None
+    value = cfg[ALERTS_KEY]
+    if isinstance(value, bool):
+        return value, None
+    return None, (f"config.json key {ALERTS_KEY!r} must be true or false, got "
+                  f"{value!r}; fix it or remove the key (absent means on).")
+
+
 def parse_args(argv):
-    opts = {"farm_id": 1, "config": None, "state": DEFAULT_STATE_PATH, "dry_run": False}
+    opts = {"farm_id": 1, "config": None, "state": None, "dry_run": False}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -161,10 +233,32 @@ def parse_args(argv):
 
 def main():
     savegame_dir = arg_or_exit(
-        "check_fleet_alerts.py <savegame_dir> [--farm-id N] [--config PATH] "
-        "[--state PATH] [--dry-run]"
+        "check_fleet_alerts.py <savegame_dir> [--farm-id N] "
+        "(--config PATH | --state PATH) [--dry-run]"
     )
     opts = parse_args(sys.argv[2:])
+
+    state_path, err = resolve_state_path(opts["state"], opts["config"], savegame_dir)
+    if err:
+        emit({"error": err})
+        sys.exit(1)
+
+    enabled, err = read_switch(opts["config"])
+    if err:
+        emit({"error": err})
+        sys.exit(1)
+    if not enabled:
+        emit({
+            "status": "disabled",
+            "key": ALERTS_KEY,
+            "config": os.path.abspath(opts["config"]),
+            "sent": [],
+            "errors": [],
+            "note": (f"Fleet fuel/repair alerts are switched off in config.json "
+                     f"({ALERTS_KEY} is false). No card was sent and no state was "
+                     f"written. Set it to true, or remove the key, to turn them on."),
+        })
+        return
 
     snapshot, err = call_snapshot(savegame_dir, opts["farm_id"], opts["config"])
     if err or snapshot is None:
@@ -179,7 +273,7 @@ def main():
     day = (snapshot.get("when") or {}).get("in_game_day")
     rows_by_id = {r.get("unique_id"): r for r in (fleet.get("vehicles") or [])}
 
-    state = load_state(opts["state"])
+    state = load_state(state_path)
     vehicles_state = state["vehicles"]
 
     # Every (unique_id, metric) touched either by this check or by prior
@@ -246,18 +340,20 @@ def main():
             del vehicles_state[uid]
 
     if not opts["dry_run"]:
-        save_state(opts["state"], state)
+        save_state(state_path, state)
 
     emit({
+        "alerts_switch": ("on: no --config was given, so there is no config.json switch to read"
+                          if not opts["config"] else f"on: {ALERTS_KEY} is true or absent"),
         "checked_day": day,
         "needs_attention_count": len(fleet.get("needs_attention") or []),
         "sent": sent,
         "errors": errors,
         "skipped_unknown": skipped_unknown,
-        "state_path": opts["state"],
+        "state_path": state_path,
         "note": (
             "Cards are sent one at a time, each waiting for its own delivery outcome "
-            "(F-210) -- but the bridge is single-slot, so if the game was CLOSED for more "
+            "-- but the bridge is single-slot, so if the game was CLOSED for more "
             "than one crossing in this run, only the LAST card in `sent` actually reached "
             "disk; earlier ones were overwritten before anything could read them. This is a "
             "known bridge limitation, not a bug in this script."

@@ -92,7 +92,7 @@ def resolve_storage(placeable_xml, categories):
         "from_categories": {k: sorted(v) for k, v in from_categories.items()},
         "unresolved_categories": sorted(unresolved),
         "note": "accepted_fill_types is the UNION of explicit fillTypes and expanded "
-                "fillTypeCategories -- reading only fillTypes is the F-102 'no silo "
+                "fillTypeCategories -- reading only fillTypes is the 'no silo "
                 "accepts onion' false negative. Unresolved categories are 'unknown', not 'no'.",
     }
 

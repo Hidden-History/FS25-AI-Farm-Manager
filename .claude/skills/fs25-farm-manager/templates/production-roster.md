@@ -21,7 +21,7 @@ parity_spec:
 trusted from this table. The durable content here is the *list of chains owned* (the index);
 the status itself lives in the save, and this file is only touched when a chain is
 started/stopped/removed — so a `Running / idle` cell can sit unrevised session after session
-while the real status drifts underneath it (the same stale-but-confident shape F-117 names for
+while the real status drifts underneath it (the same stale-but-confident shape named for
 equipment). **A status without a current-session `Last updated` is not this session's answer** —
 re-run `read_productions.py` before trusting a status in the table below.
 

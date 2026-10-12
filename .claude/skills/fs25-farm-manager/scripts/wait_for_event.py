@@ -4,24 +4,82 @@ wait_for_event.py
 
 The idle-at-zero-cost half of the manager's event loop: poll the two files the
 GAME writes -- the bound savegame's careerSavegame.xml and the mod's
-replies.xml -- and emit ONE stdout line per settled write, so a persistent
-Claude Code Monitor can wake the manager only when something actually changed.
+replies.xml -- and, on a save, RUN THE GENERATOR ITSELF.
 
     python3 wait_for_event.py --config /path/to/sanctum/config.json
     python3 wait_for_event.py --replies R.xml --savegame S.xml --marker M.json
 
 Run it under a persistent Monitor: the wait then lives in the shell, never the
 model loop, so cost scales with the number of real events, not idle time
-(BP-066). Each stdout line is an event the manager reacts to:
+(BP-066). Its stdout lines are:
 
-    STARTED wait_for_event pid=<n> interval=<s> replies=<path> savegame=<path>
+    STARTED wait_for_event pid=<n> interval=<s> refresh=<mode> replies=<path> savegame=<path>
     EVENT replies content:<hash>
     EVENT savegame <mtime>:<size> (startup-backlog)
-    ERROR <message>            (also exits non-zero -- a failed arm is VISIBLE)
+    REFRESH auto exit=<n> <result> (attempt <n>)
+    WARN <message>             (armed, but with a capability switched off)
+    ERROR <message>            (a failed arm also exits non-zero -- VISIBLE)
 
 - EVENT replies  -> a player answered a card; run read_replies.py, reconcile,
-                    respond.
-- EVENT savegame -> the game wrote a save; re-read live state.
+                    respond. THIS HALF IS STILL THE MANAGER'S -- answering a
+                    player takes judgement, which is what an agent is for.
+- EVENT savegame -> the game wrote a save. THIS HALF IS NOT THE MANAGER'S ANY
+                    MORE: this script fires refresh_state.py auto itself and
+                    reports the outcome on a REFRESH line. The session reads
+                    generated artifacts; it does not run the generator.
+
+---------------------------------------------------------------------------
+WHY THE WATCHER PULLS THE TRIGGER
+---------------------------------------------------------------------------
+The owner live-tested and reported "nothing has changed in the tabs". The tabs
+render files a Python script generates, and NOTHING RAN THE SCRIPT -- the
+generator existed and had no home for its on-save trigger. There was nowhere
+else to put it: neither .claude/ carries hooks, WSL cannot watch /mnt/c
+(WSL#4739), and Claude Code has no hook for "an external file changed". This
+process is already awake, already polling at 1 s, and already knows the moment
+a save lands. Waking an AGENT to run a script it could run itself costs a turn
+and tokens for no judgement (DEC-131).
+
+---------------------------------------------------------------------------
+WHY RETRY-UNTIL-0, NOT DEBOUNCE  (the still-saving interaction)
+---------------------------------------------------------------------------
+A save is 53 files over ~8.7 measured seconds, and refresh_state.py refuses to
+read until the newest mtime in the WHOLE save is SETTLE_QUIET_SECONDS (20 s)
+old -- so the first fire after a save is expected to return exit 3
+(still_saving). That is not a failure; it is "ask again in a moment".
+
+The alternative shape -- debounce, fire once ~20 s after the last event -- was
+rejected because THIS WATCHER ONLY WATCHES careerSavegame.xml, one of the 53.
+A debounce that assumed "careerSavegame.xml settled, so the save is over"
+would be depending on write ORDER, which is exactly the dependency
+cache_provenance.py refuses by construction ("no engine documentation promises
+it ... a check built on it would silently become a no-op the day a mod or a
+patch reordered the writes"). If any other file is written after ours, no
+further event ever fires, and a single debounced shot lands inside the quiet
+window, gets exit 3, and is DROPPED -- a missed refresh, silently.
+
+So: fire immediately, then re-fire on a bounded backoff until exit 0.
+Ordering-independent, and biased the way the cost is -- `auto` is a genuine
+no-op when nothing moved, so an extra fire is cheap and a missed one is not.
+
+  exit 0 -> done. Report the result and stop.
+  exit 3 -> retry after the next backoff delay. Bounded: when the delays run
+            out the state is NOT refreshed and nobody knows, so that exhaustion
+            is an ERROR, never a quiet give-up.
+  else   -> FAILED, reported as ERROR and NEVER retried. A refresh that
+            genuinely errored must be visible, not retried into silence.
+
+Nothing here busy-loops: the retry is a due-time checked once per existing
+poll cycle, so the loop keeps its own sleep and never spins.
+
+---------------------------------------------------------------------------
+THE TRIGGER IS ARMED ONLY BY AN EXPLICIT --config
+---------------------------------------------------------------------------
+It never DISCOVERS a config for this. _find_config() walks up from the cwd, and
+on this machine that walk finds a real sanctum bound to the owner's live
+savegame -- a watcher started in the wrong directory would fire the generator
+against a farm nobody asked about. So the trigger takes the path the operator
+named, or it stays off and SAYS SO on a WARN line and in the STARTED line.
 
 ---------------------------------------------------------------------------
 TWO CHANNELS, TWO TRUTHS (the crown-jewel fix)
@@ -92,6 +150,7 @@ import hashlib
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -105,6 +164,12 @@ from typing import Optional
 from notify_farm_manager import BridgeError, _atomic_write, _find_config
 from read_replies import resolve_replies_path
 from xml_utils import _read_stable_bytes
+# The three exit codes are IMPORTED, never re-declared. This file has to tell
+# "still saving" apart from "errored", and a second copy of those numbers is a
+# thing to keep in step -- the same reasoning that made the paths above reused
+# rather than reimplemented. If refresh_state.py renumbers them, this moves with
+# it or fails at import; it cannot silently disagree.
+from refresh_state import EXIT_ERROR, EXIT_OK, EXIT_STILL_SAVING
 
 SAVEGAME_FILE = "careerSavegame.xml"   # the file the game rewrites on every save
 MARKER_NAME = "watch-marker.json"      # machine file at the sanctum root
@@ -114,6 +179,24 @@ REPLY_ELEMENT_MARK = b"<reply"         # a replies.xml carrying at least one rep
 POLL_INTERVAL_DEFAULT = 1.0            # BP-066: 0.5-1s for local checks
 DEBOUNCE_SECONDS = 0.3                 # require the savegame stat stable across this gap
 PIDFILE_ACQUIRE_ATTEMPTS = 3          # bound the stale-pidfile clear+retry (no busy-loop)
+
+REFRESH_SCRIPT = "refresh_state.py"    # the generator this watcher fires
+REFRESH_SUBCOMMAND = "auto"            # no-op when nothing moved; safe to re-fire
+
+# The backoff between re-fires while the save is still being written. The first
+# attempt is immediate (delay 0 is not in this table); these are the waits
+# BEFORE attempts 2..5, so the sequence reaches ~65 s -- comfortably past
+# refresh_state's 20 s quiet window even for a save that starts long and runs
+# late. Bounded on purpose: an unbounded retry turns "the save never settled"
+# into silence, and silence is the failure this whole file exists to prevent.
+REFRESH_RETRY_DELAYS = (5.0, 10.0, 20.0, 30.0)
+REFRESH_TIMEOUT_SECONDS = 600.0        # a generator that hangs is a fault, not a wait
+
+# What one finished refresh means for the trigger.
+REFRESH_DONE = "done"
+REFRESH_RETRY = "retry"
+REFRESH_EXHAUSTED = "exhausted"
+REFRESH_FAILED = "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +483,145 @@ def release_pidfile(path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# the save -> generator trigger
+# ---------------------------------------------------------------------------
+
+def classify_refresh(exit_code, attempt, delays=REFRESH_RETRY_DELAYS):
+    """What one finished `refresh_state.py auto` run MEANS. The whole decision
+    lives here, as one pure function of (exit code, attempt number), because it
+    is the answer this trigger exists to get right.
+
+    `attempt` is 1-based and names the run that just finished. Returns
+    (action, delay_seconds); delay_seconds is None for every action but RETRY.
+
+      EXIT_OK           -> DONE       the cache is current; stop asking.
+      EXIT_STILL_SAVING -> RETRY      not a fault -- "ask again in a moment" --
+                                      until the bounded delays run out, then
+                                      EXHAUSTED, which is reported as an ERROR.
+      anything else     -> FAILED     never retried. Retrying a real error would
+                                      convert a visible fault into a quiet loop,
+                                      and exit 1 already means "nothing was
+                                      published"; asking again cannot fix it.
+    """
+    if exit_code == EXIT_OK:
+        return REFRESH_DONE, None
+    if exit_code == EXIT_STILL_SAVING:
+        if attempt <= len(delays):
+            return REFRESH_RETRY, delays[attempt - 1]
+        return REFRESH_EXHAUSTED, None
+    return REFRESH_FAILED, None
+
+
+def _refresh_summary(stdout, stderr):
+    """One short human line describing what the generator reported. Prefers its
+    own structured output -- `{"error": ...}` on a failure, `result` otherwise
+    (DEC-001: absence is never mistaken for data) -- and falls back to the last
+    line of whatever it actually printed, so a run that produced no JSON is
+    still described rather than reported as nothing."""
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        if payload.get("error"):
+            return str(payload["error"])[:400]
+        if payload.get("result"):
+            # ⛔ F11(1) / BUG-036: a refresh whose TABS failed must not print
+            # as a bare "refreshed" -- name each tab problem on the line.
+            problems = payload.get("tab_publish_problems") or []
+            if problems:
+                return ("%s; %s" % (payload["result"], " | ".join(
+                    str(p) for p in problems)))[:1500]
+            return str(payload["result"])[:400]
+    lines = (stderr or stdout or "").strip().splitlines()
+    return lines[-1][:400] if lines else "no output"
+
+
+def fire_refresh(config_path, scripts_dir=None,
+                 timeout=REFRESH_TIMEOUT_SECONDS):
+    """Run `refresh_state.py auto --config <config_path>` once.
+
+    Returns (exit_code, summary). An outcome we could not observe -- a timeout,
+    a failure to launch -- is EXIT_ERROR, never EXIT_STILL_SAVING: "I do not
+    know what happened" must not be retried as if it were "not yet"."""
+    if scripts_dir is None:
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    cmd = [sys.executable, os.path.join(scripts_dir, REFRESH_SCRIPT),
+           REFRESH_SUBCOMMAND, "--config", config_path]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return EXIT_ERROR, ("%s %s did not finish within %.0fs"
+                            % (REFRESH_SCRIPT, REFRESH_SUBCOMMAND, timeout))
+    except OSError as exc:
+        return EXIT_ERROR, ("could not run %s: %s" % (REFRESH_SCRIPT, exc))
+    return proc.returncode, _refresh_summary(proc.stdout, proc.stderr)
+
+
+class RefreshTrigger:
+    """The save -> generator bridge, as a state machine driven once per poll.
+
+    It holds a due time rather than sleeping, so the retry costs nothing and the
+    watcher keeps polling replies.xml throughout: there is no second loop here
+    and nothing to spin.
+
+    `fire` and `now` are injectable so the DECISIONS can be tested against real
+    exit codes without waiting out a 20 s quiet window in every assertion."""
+
+    def __init__(self, config_path, delays=REFRESH_RETRY_DELAYS,
+                 fire=None, now=None):
+        self.config_path = config_path
+        self.delays = tuple(delays)
+        self._fire = fire if fire is not None else fire_refresh
+        self._now = now if now is not None else time.time
+        self.attempt = 0
+        self.due_at = None                 # None => nothing pending
+
+    @property
+    def pending(self):
+        return self.due_at is not None
+
+    def request(self):
+        """A save landed. Start (or restart) the attempt sequence immediately.
+
+        A second save arriving mid-sequence restarts it rather than queueing:
+        the generator reconciles to CURRENT state, so the newer save subsumes
+        the older one -- the same reconcile-to-state reasoning the savegame
+        channel already uses."""
+        self.attempt = 0
+        self.due_at = self._now()
+
+    def tick(self):
+        """Run at most one attempt, if one is due. Returns the lines to print
+        (it never prints), so the caller owns emission and a test can assert
+        what was CONCLUDED rather than that a call happened."""
+        if self.due_at is None or self._now() < self.due_at:
+            return []
+        self.attempt += 1
+        exit_code, summary = self._fire(self.config_path)
+        action, delay = classify_refresh(exit_code, self.attempt, self.delays)
+
+        if action == REFRESH_RETRY:
+            self.due_at = self._now() + delay
+            return ["REFRESH %s exit=%s %s; retrying in %.1fs (attempt %d)"
+                    % (REFRESH_SUBCOMMAND, exit_code, summary, delay,
+                       self.attempt)]
+
+        self.due_at = None
+        if action == REFRESH_DONE:
+            return ["REFRESH %s exit=%s %s (attempt %d)"
+                    % (REFRESH_SUBCOMMAND, exit_code, summary, self.attempt)]
+        if action == REFRESH_EXHAUSTED:
+            return ["ERROR %s %s still reported still_saving after %d attempts "
+                    "-- STATE WAS NOT REFRESHED. The last word was: %s"
+                    % (REFRESH_SCRIPT, REFRESH_SUBCOMMAND, self.attempt,
+                       summary)]
+        return ["ERROR %s %s exited %s and published nothing: %s"
+                % (REFRESH_SCRIPT, REFRESH_SUBCOMMAND, exit_code, summary)]
+
+
+# ---------------------------------------------------------------------------
 # emit + run loop
 # ---------------------------------------------------------------------------
 
@@ -411,14 +633,21 @@ def emit_event(name: str, mark: str, note: str = "") -> None:
 
 
 def run(replies_path: str, savegame_path: str, marker_path: str, interval: float,
-        once: bool = False, max_cycles: Optional[int] = None) -> None:
-    """Drain the startup backlog, then poll-debounce-emit until stopped.
+        once: bool = False, max_cycles: Optional[int] = None,
+        refresh: Optional["RefreshTrigger"] = None) -> None:
+    """Drain the startup backlog, then poll-debounce-emit-and-REFRESH until
+    stopped.
 
     Two channels, two truths (see the module docstring): the SAVEGAME reconciles
     to a PERSISTED mtime marker; the REPLIES channel keys on content with the
     last-emitted fingerprint held IN MEMORY (`last_replies_fp`), never persisted,
     so a reply survives a session death. `max_cycles` bounds the loop for tests;
-    None runs until stopped."""
+    None runs until stopped.
+
+    `refresh` is the RefreshTrigger. A SAVEGAME event requests it; a REPLIES
+    event does not -- a player answering a card changes nothing the generator
+    reads. It is driven once per cycle whether or not an event fired, because a
+    pending retry has to come due on its own."""
     marker = load_marker(marker_path)          # savegame channel only
     last_replies_fp = None                     # replies channel, in memory
 
@@ -428,6 +657,8 @@ def run(replies_path: str, savegame_path: str, marker_path: str, interval: float
         sg_events, new_marker = reconcile({"savegame": savegame_path}, marker)
         for _name, mark in sg_events:
             emit_event("savegame", mark, note=note)
+        if sg_events and refresh is not None:
+            refresh.request()
         r_emit, last_replies_fp = poll_replies(replies_path, last_replies_fp)
         if r_emit is not None:
             emit_event("replies", f"content:{r_emit[:12]}", note=note)
@@ -436,11 +667,26 @@ def run(replies_path: str, savegame_path: str, marker_path: str, interval: float
             return True
         return False
 
+    def _drive_refresh() -> None:
+        if refresh is None:
+            return
+        for line in refresh.tick():
+            print(line, flush=True)
+
     # Startup backlog handshake: process anything that changed while the watcher
     # was down BEFORE entering the wait.
     _poll_and_emit(backlog=True)
     save_marker(marker_path, marker)
+    _drive_refresh()
     if once:
+        # --once is the diagnostic arm: one drain, one attempt, no wait loop. If
+        # the save was still settling there is nothing left to re-fire, and a
+        # trigger that quietly gave up is exactly the silence this file exists
+        # to prevent -- so say it.
+        if refresh is not None and refresh.pending:
+            print("WARN --once is exiting with a refresh still pending "
+                  "(the save had not settled); nothing will retry it. Run "
+                  "without --once to let the trigger finish.", flush=True)
         return
 
     cycles = 0
@@ -448,6 +694,7 @@ def run(replies_path: str, savegame_path: str, marker_path: str, interval: float
         time.sleep(interval)
         if _poll_and_emit(backlog=False):
             save_marker(marker_path, marker)
+        _drive_refresh()
         cycles += 1
 
 
@@ -474,6 +721,9 @@ def main(argv=None) -> int:
                     help="poll cadence in seconds (default: 1.0)")
     ap.add_argument("--once", action="store_true",
                     help="drain the startup backlog once and exit (no wait loop)")
+    ap.add_argument("--no-refresh", action="store_true",
+                    help="do NOT run refresh_state.py auto on a save; only "
+                         "report the event (the pre-generator behaviour)")
     args = ap.parse_args(argv)
 
     try:
@@ -493,11 +743,33 @@ def main(argv=None) -> int:
     atexit.register(release_pidfile, pidfile_path)
     _install_signal_cleanup(pidfile_path)
 
+    # ARMED ONLY BY AN EXPLICIT --config. `args.config` is what the operator
+    # typed; it is deliberately NOT backfilled from _find_config(), whose
+    # walk-up can land on a sanctum bound to a farm nobody asked about.
+    refresh = None
+    if args.no_refresh:
+        refresh_mode = "off (--no-refresh)"
+    elif args.config:
+        refresh = RefreshTrigger(args.config)
+        refresh_mode = f"{REFRESH_SUBCOMMAND}:{args.config}"
+    else:
+        refresh_mode = "off (no --config)"
+
     print(f"STARTED wait_for_event pid={os.getpid()} interval={args.interval} "
+          f"refresh={refresh_mode} "
           f"replies={replies} savegame={savegame}", flush=True)
+    if refresh is None and not args.no_refresh:
+        # Armed with the trigger off by accident is the ONE state that looks
+        # like success and ships the original defect -- saves get reported and
+        # nothing regenerates. Say it on its own line; do not leave it to
+        # whoever reads the far end of the STARTED line.
+        print("WARN refresh trigger OFF: no --config was given, so a save will "
+              "be reported and NOTHING will regenerate state. Arm it with "
+              "--config <sanctum>/config.json.", flush=True)
 
     try:
-        run(replies, savegame, marker_path, args.interval, once=args.once)
+        run(replies, savegame, marker_path, args.interval, once=args.once,
+            refresh=refresh)
     except KeyboardInterrupt:
         pass
     except Exception as e:

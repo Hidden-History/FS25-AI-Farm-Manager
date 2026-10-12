@@ -6,7 +6,7 @@ cap_lines: 100
 cap_kb: 10
 rotation_trigger: on-age
 archive_target: "history/archive/contracts-archive.md"
-reconciliation: "a payout row is written only AFTER a contract resolves (F-025); oldest taken/skipped rows relocate losslessly on age"
+reconciliation: "a payout row is written only AFTER a contract resolves; oldest taken/skipped rows relocate losslessly on age"
 format_version: 1
 parity_spec:
   required_sections: ["## Payout patterns observed", "## Taken / skipped"]
@@ -22,8 +22,8 @@ correct for a farm that hasn't done contract work yet — say so._
 ## Payout patterns observed
 
 _Only after a contract has resolved — never a guess pre-accept. A field-tied contract reads
-`reward="0"` while on offer and only resolves at accept-time (friction-log F-025): a pre-accept
-`0` is **unknown**, not zero. One observation is not a pattern (n=1 — F-101); record the count._
+`reward="0"` while on offer and only resolves at accept-time: a pre-accept
+`0` is **unknown**, not zero. One observation is not a pattern (n=1); record the count._
 
 | Contract type | Field/crop class | Observed payout | Observations | Notes |
 |---|---|---|---|---|

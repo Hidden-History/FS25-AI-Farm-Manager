@@ -269,7 +269,7 @@ def derive_current_period(savegame_dir):
         "how_to_verify": (
             "Reusable on ANY save, needs no player action: read economy.xml twice while the "
             "game runs and diff the 12 period cells per fillType. FS25 defers its writes, so "
-            "allow a generous window (F-023 -- a 2-minute wait was not enough; ~40 min was). "
+            "allow a generous window (a 2-minute wait was not enough; ~40 min was). "
             "Exactly one period will have moved: that is the live one. Strictly better than "
             "advancing an in-game day, because it works INSIDE a single period."
         ),

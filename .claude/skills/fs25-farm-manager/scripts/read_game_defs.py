@@ -431,9 +431,9 @@ def classify_growth_states(states):
 # real -- while `mulcher` clears {3..9} and cannot touch 1 or 2. No single
 # number separates "handled" from "not handled" for any tool.
 #
-# ⭐ THREE OUTCOMES, NOT TWO: a tool CLEARS a state (-> 0), TRANSFORMS it
-# (herbicide moves 3,4,5,6 to 7,8,9 -- states only a mulcher clears), or does
-# NOTHING AT ALL (no row). A model with only handles/doesn't-handle cannot say
+# ⭐ THREE OUTCOMES, NOT TWO: a tool sends a state to 0, MOVES it to another state
+# (herbicide moves 3,4,5,6 to 7,8,9 -- whether those still cost yield is native and
+# not known), or does NOTHING AT ALL (no row). A model with only handles/doesn't-handle cannot say
 # that a weeder sent to a state-5 field achieves literally nothing, and a manager
 # built on one will report work done that was not done. `handles != clears`.
 MAP_CONFIG_SECTION_WEED = "weed"
@@ -477,7 +477,8 @@ def _parse_replacements(root):
     """<replacements><tool><replacements [fruitType=]><replacement .../>.
 
     Returns {tool: {"default": {src: tgt}, "by_fruit_type": {FRUIT: {src: tgt}}}}.
-    A target of 0 means CLEARED; any other target means transformed, not cleared.
+    A target of 0 means the state goes to 0 (no weed); any other target is a move to
+    another state, whose yield effect is native and not known.
     """
     tools = {}
     container = root.find("replacements")
@@ -508,7 +509,7 @@ def _summarise_tools(tools):
         def split(mapping):
             return {
                 "clears": sorted(s for s, t in mapping.items() if t == 0),
-                "changes_without_clearing": {str(s): t for s, t in sorted(mapping.items()) if t != 0},
+                "moves_to": {str(s): t for s, t in sorted(mapping.items()) if t != 0},
             }
         out[tool] = {
             "default": split(entry["default"]),
@@ -772,7 +773,7 @@ def main():
             "error": (
                 f"{zip_err}. This save's map is a MOD ({map_id}), so the base install's "
                 "definitions are NOT authoritative for it -- reporting them anyway would be "
-                "the F-019 trap (a plausible, wrong answer). Refusing to guess."
+                "a trap (a plausible, wrong answer). Refusing to guess."
             ),
             "map_id": map_id,
             "calibration_needed": True,
@@ -834,7 +835,7 @@ def main():
         "map_mod_zip": resolver.zip_path,
         "resolution_rule": (
             "Map package first, base install ONLY where the map's own XML defers via a "
-            "'$data/' path. Never a basename fallback (F-019). On this map the per-crop seed "
+            "'$data/' path. Never a basename fallback. On this map the per-crop seed "
             "rates happen to match the base install exactly -- which is precisely why the "
             "shortcut is forbidden: agreement today is what makes a base-only lookup look "
             "correct right up until a map rebalances something."
@@ -846,7 +847,7 @@ def main():
             "fillTypeCategory (the game's own price-table grouping) OR in a placeables.xml "
             "selling-station <stats> node for this save. Both sources are POSITIVE evidence "
             "only -- neither is a complete inventory of what the farm can sell, and their "
-            "union is confirmed STILL INCOMPLETE (F-311: MILK sells in-game but appears in "
+            "union is confirmed STILL INCOMPLETE (MILK sells in-game but appears in "
             "neither source on the farm that surfaced this). Absence from sellable_confirmed "
             "means 'not yet confirmed sellable' -- NEVER 'the farm buys this' and never 'this "
             "is unsellable'. There is no reliable way to name what the farm buys from this "
@@ -860,9 +861,10 @@ def main():
         "weed_model_source": weed_info,
         "weed_model_rule": (
             "Per tool: `clears` are the weedStates that go to 0, "
-            "`changes_without_clearing` are states the tool alters WITHOUT "
-            "removing the weed. A state in neither list is untouched by that "
-            "tool. Test MEMBERSHIP -- the relation is non-monotonic and no "
+            "`moves_to` maps each state the tool moves to ANOTHER nonzero state "
+            "(herbicide: 3 to 7, 4 to 8, 5 to 9). The data does not say whether the "
+            "target state still costs yield: that is native and not known. A state "
+            "in neither is untouched by that tool. Test MEMBERSHIP -- the relation is non-monotonic and no "
             "threshold expresses it. ⚠ This table says what a TOOL can do; it "
             "does NOT say whether the CROP permits the operation. That gate is "
             "each crop's own allows_weeding / allows_hoeing state list under "

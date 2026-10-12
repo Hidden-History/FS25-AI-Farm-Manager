@@ -90,9 +90,16 @@ EMPTY_PAYLOAD = '<?xml version="1.0" encoding="utf-8"?>\n<farmManager25Replies/>
 def resolve_replies_path(config: Optional[str] = None,
                          bridge: Optional[str] = None,
                          replies: Optional[str] = None) -> str:
-    """replies.xml lives beside notify.xml in the mod's modSettings folder
-    (the Lua stateFolder) -- derive it from the sender's verified bridge
-    resolution rather than re-implementing any path logic."""
+    """replies.xml lives beside notify.xml in the mod's PER-SAVEGAME folder,
+    modSettings/<MOD>/<savegameKey>/ (the Lua saveFolder) -- derive it from the
+    sender's verified bridge resolution rather than re-implementing any path
+    logic, so the savegame key is decided in exactly one place
+    (notify_farm_manager.resolve_savegame_key) for both halves of the channel.
+
+    The unscoped modSettings/<MOD>/replies.xml that <= v3.0.0.0 wrote is NOT read
+    and is never fallen back to: its entries carry no savegame stamp, so ingesting
+    them would credit one farm's answers to another. The mod discards that file
+    once, on its first scoped load."""
     if replies:
         return replies
     return str(Path(get_bridge_path(config=config, bridge=bridge)).parent

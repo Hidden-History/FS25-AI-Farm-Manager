@@ -21,7 +21,7 @@ parity_spec:
 this table. The durable content here is the *list of buildings owned* (the index); the count
 itself lives in the save, and this file is only touched when a building is bought/sold/removed —
 so a `Count` cell can sit unrevised session after session while the real number drifts (the same
-stale-but-confident shape F-117 names for equipment). **A `Count` without a current-session
+stale-but-confident shape named for equipment). **A `Count` without a current-session
 `Last updated` is not this session's answer** — re-run `read_livestock.py` before trusting a
 number in the table below.
 

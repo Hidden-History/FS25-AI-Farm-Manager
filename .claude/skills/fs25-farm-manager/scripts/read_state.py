@@ -72,13 +72,23 @@ changes what is PRINTED and `--emit-claims PATH` additionally writes the
 manifest out. Neither can skip the check. An unresolved or mismatched claim
 yields `{"error": "CLAIM UNRESOLVED: ..."}` and NO VIEW.
 
+`--list DOMAIN.SECTION.KEY` PRINTS ONE WHOLE LIST (F10 / BUG-033). The view
+elides every list longer than aggregate_render.MAX_INLINE_ITEMS, and its
+`read_the_rest_at` IS this command. It runs every gate above first -- version,
+farm id, staleness, claims -- and then prints only
+{list, domain, domain_status, domain_reason, item_count, items}. `derived.S.K`
+reads the in-process derived view the same way. A path that does not resolve
+to a list is `{"error": "LIST PATH UNRESOLVED: ..."}`, exit 1, never [].
+
 Usage: python3 read_state.py --config <sanctum>/config.json
                              [--accept-stale] [--fast]
                              [--render-only] [--emit-claims PATH]
+                             [--list DOMAIN.SECTION.KEY]
 """
 import json
 import math
 import os
+import shlex
 import sys
 from datetime import datetime, timezone
 
@@ -91,7 +101,8 @@ import cache_provenance as provenance
 READER = "read_state.py"
 READER_VERSION = "1.0.0"
 SUPPORTED_FLAGS = ("--config PATH", "--accept-stale", "--fast",
-                   "--render-only", "--emit-claims PATH")
+                   "--render-only", "--emit-claims PATH",
+                   "--list DOMAIN.SECTION.KEY")
 
 # ⛔ WAVE 3C REMEDIATION (M1). `verify_domain`'s detail says, on every path,
 # whether this run actually COMPARED the domain against its recorded sources.
@@ -837,6 +848,84 @@ def _demand_envelope(body, domain_status, domain_checks, accepted_stale):
     return body
 
 
+def _runway_tier(row):
+    """(tier, hours) -- the sort key for DEC-181 call d. Read only from the reason
+    codes this derivation already emitted; nothing is recomputed.
+
+      0 -- at least one input carries a computed `hours_to_empty`. Ranked by the
+           SMALLEST, because the input that empties first stops the line.
+      1 -- the runway is UNKNOWN: an unmatched line, an ambiguous or unreadable
+           rate, an absent or unreadable stock row, or a tank shared with a line
+           whose rate is unresolved. Any of these may be the next to run dry.
+      2 -- nothing here can run dry: every input is a pass-through or a
+           resolved ZERO burn.
+
+    ⚠ A known shortage outranks a possible one, and a possible one outranks
+    none. With five rows inline, tier 1 can still be pushed out of view by
+    long known runways -- which is why `unknown_runway_count` is carried beside
+    the list rather than left to the order.
+
+    ⚠ A tier-0 row can ALSO carry an input whose runway is unknown, and the
+    line stops when that one empties -- so its hours are only an UPPER BOUND.
+    It keeps its place (DEC-181 d, option 1) but is counted with the unknowns;
+    see `_unknown_runway_inputs`.
+    """
+    known = [e.get("hours_to_empty") for e in row.get("inputs", [])]
+    known = [h for h in known
+             if isinstance(h, (int, float)) and not isinstance(h, bool)]
+    if known:
+        return 0, min(known)
+    if row.get("resolution") != "recipe_matched" or _unknown_runway_inputs(row):
+        return 1, 0.0
+    return 2, 0.0
+
+
+def _unknown_runway_inputs(row):
+    """The fill types of a recipe-matched row whose runway is UNKNOWN: not a
+    computed hours_to_empty, and not a resolved ZERO burn on a readable tank
+    with no unresolved sharer (which never runs dry). Excluded inputs are not
+    consumed and never count."""
+    unknown = []
+    for entry in row["inputs"]:
+        if entry.get("excluded"):
+            continue
+        hours = entry.get("hours_to_empty")
+        if isinstance(hours, (int, float)) and not isinstance(hours, bool):
+            continue
+        shared = entry.get("shared_stock") or {}
+        rate = (shared["combined_per_hour"] if "combined_per_hour" in shared
+                else entry.get("per_hour"))
+        if (entry.get("rate_status") == "resolved"
+                and entry.get("stock_status") == "ok"
+                and not shared.get("unresolved_lines") and rate == 0):
+            continue
+        unknown.append(entry["fill_type"])
+    return unknown
+
+
+def _unknown_runway_line(row):
+    """The `unknown_runway_lines` entry for `row`, or None when every input's
+    runway is known. DEC-181 d: ANY unknown input makes the line's runway
+    unknown, even when another input is known and ranks it."""
+    ids = {"placeable_id": row["placeable_id"],
+           "production_id": row["production_id"]}
+    if row.get("resolution") != "recipe_matched":
+        return dict(ids, why="no recipe matched this production_id, so no "
+                             "input's runway is known")
+    unknown = _unknown_runway_inputs(row)
+    if not unknown:
+        return None
+    tier, hours = _runway_tier(row)
+    if tier == 0:
+        return dict(ids, unknown_inputs=unknown, hours_upper_bound=hours,
+                    why="ranked by its known inputs, but the line stops when "
+                        "%s empties, and that runway is unknown -- "
+                        "hours_upper_bound is the most it can have"
+                        % " or ".join(unknown))
+    return dict(ids, unknown_inputs=unknown,
+                why="no input of this line has a computable runway")
+
+
 def derive_production_demand(records, *, domain_status, domain_checks, accepted_stale):
     """③a-extended + ③b + BUG-026. Returns ONE section dict, always.
 
@@ -1110,7 +1199,7 @@ def derive_production_demand(records, *, domain_status, domain_checks, accepted_
                               "definition this placeable uses, so no rate and no "
                               "hours-to-empty are emitted for this input. "
                               "Picking one would produce a plausible number that "
-                              "could be wrong by the full spread (BUG-026)."
+                              "could be wrong by the full spread."
                               % (pid, len(rates),
                                  ", ".join("%g" % v for v in distinct)),
                 })
@@ -1199,7 +1288,7 @@ def derive_production_demand(records, *, domain_status, domain_checks, accepted_
                         "manager cannot see this input's stock. This is NOT a "
                         "report that the stock is zero, and the input is NOT "
                         "dropped -- an invisible input renders as a production "
-                        "with nothing wrong (DEC-001)."
+                        "with nothing wrong (the absence rule: an absent value must never be read as data)."
                         % (placeable_id, fill_type),
                 })
                 tally["input_rows_stock_absent"] += 1
@@ -1274,11 +1363,33 @@ def derive_production_demand(records, *, domain_status, domain_checks, accepted_
             entry["hours_to_empty"] = _round(level / combined, 2)
             tally["input_rows_with_hours_to_empty"] += 1
 
+    # ⛔ DEC-181 CALL d. Rows were appended in source order and never sorted, so
+    # only the first five reached the reader inline and a line about to run dry
+    # at row 30 was invisible. Most urgent first; the sort is stable, so the
+    # unknown and never-dry tiers keep source order.
+    data.sort(key=_runway_tier)
+    unknown_runway = [line for line in map(_unknown_runway_line, data) if line]
+
     body = {
         "status": "ok",
         "shape": "input_demand",
         "count": len(data),
         "data": data,
+        "data_order": (
+            "MOST URGENT FIRST. Rows with a computed hours_to_empty come first, "
+            "ascending by their smallest; then rows whose runway is UNKNOWN "
+            "(unmatched line, ambiguous or unreadable rate, absent or unreadable "
+            "stock, or a tank shared with a line whose rate is unresolved), in "
+            "source order; then rows with nothing that can run dry (every input "
+            "a pass-through or a resolved zero burn). A line stops when ANY "
+            "input empties, so a row ranked by a known input that ALSO has an "
+            "input with an unknown runway is ranked by an UPPER BOUND: its real "
+            "runway may be shorter. An unknown runway may be the next to run "
+            "dry: unknown_runway_count says how many lines have one -- ranked "
+            "or not, wherever they sit in this list -- and unknown_runway_lines "
+            "names each with the input(s) whose runway is unknown."),
+        "unknown_runway_count": len(unknown_runway),
+        "unknown_runway_lines": unknown_runway,
         "identity_fields": ["placeable_id", "production_id", "fill_type"],
         "recipe_identity_fields": ["source_path", "production_id"],
         "tally": tally,
@@ -1322,6 +1433,167 @@ def derive_production_demand(records, *, domain_status, domain_checks, accepted_
     return _demand_envelope(body, domain_status, domain_checks, accepted_stale)
 
 
+# ---------------------------------------------------------------------------
+# DEC-181 CALL b -- the harvest picture on the player's own land, as of the
+# latest save.
+#
+# workflow-briefing.md's rule "never tell them to harvest a field that is
+# already cut" pointed at `harvest_ready_on_owned_land`, which only
+# farm_snapshot.py emits -- and the after-save re-read never runs it. After a
+# mid-session save that list is session start's, and it still names a field the
+# player has since cut. The fresh per-field `crop_state` was already in this
+# gate's verified cache, but only inside an elided list whose pointer was then a
+# cache location (it is a --list command since F10). This lifts the answer out, through the gate, on
+# every read -- session start's and every save's alike.
+# ---------------------------------------------------------------------------
+OWNED_CROP_SECTION = "owned_land_crop_state"
+OWNED_CROP_SOURCE_DOMAIN = "fields"
+
+
+def _stamp_one_source(body, domain, domain_status, domain_checks, accepted_stale):
+    """The one-source form of _demand_envelope's mark: the domain's rendered
+    verdict is carried ON the section, and anything short of a positive verdict
+    downgrades its status by the same ladder."""
+    statuses = domain_status if isinstance(domain_status, dict) else {}
+    checks = domain_checks if isinstance(domain_checks, dict) else {}
+    check = checks.get(domain)
+    check = check if isinstance(check, dict) else {}
+    rendered = _render_source_domain(statuses.get(domain),
+                                     check.get("freshness_check"))
+    body["source_domains"] = {domain: rendered}
+    body["accepted_stale"] = bool(accepted_stale)
+    if rendered not in POSITIVE_SOURCE_RENDERS and body.get("status") != "unavailable":
+        body["status_before_staleness_mark"] = body.get("status")
+        body["status"] = {"unavailable": "unavailable",
+                          "stale": "stale"}.get(rendered, "unverified")
+        body["staleness_warning"] = (
+            "the %s domain these field states come from rendered %r, not a "
+            "verified current read, so they describe the cache and NOT "
+            "necessarily the farm as it is now." % (domain, rendered))
+    return body
+
+
+def derive_owned_land_crop_state(records, *, domain_status, domain_checks,
+                                 accepted_stale):
+    """Returns ONE section dict, always -- never [], {} or None.
+
+    ⭐ THE RULE IS read_fields.py's OWN, not a second opinion: a field is the
+    player's when its `field_state` row says `owned` is True, and its readiness
+    is the `crop_state` read_fields.py classified from growthState. Nothing is
+    re-derived here.
+
+    ⛔ OWNERSHIP UNRESOLVED IS unknown_by_design, NEVER AN EMPTY LIST. When no
+    row carries a resolved `owned`, which fields are this farm's is unknown, and
+    `harvest_ready: []` would read as "nothing to harvest" (DEC-001).
+    """
+    rows, err = _section_rows(records, OWNED_CROP_SOURCE_DOMAIN, "field_state")
+    if err:
+        return _stamp_one_source(
+            {"status": "unavailable", "reason": err, "harvest_ready": None,
+             "growing": None, "harvested": None, "no_crop": None,
+             "crop_state_unknown": None},
+            OWNED_CROP_SOURCE_DOMAIN, domain_status, domain_checks, accepted_stale)
+    if not any(isinstance(row.get("owned"), bool) for row in rows):
+        return _stamp_one_source(
+            {"status": "unknown_by_design", "harvest_ready": None,
+             "growing": None, "harvested": None, "no_crop": None,
+             "crop_state_unknown": None,
+             "reason": "no field_state row carries a resolved `owned`, so which "
+                       "fields are this farm's is UNKNOWN. This is NOT 'nothing "
+                       "to harvest'."},
+            OWNED_CROP_SOURCE_DOMAIN, domain_status, domain_checks, accepted_stale)
+
+    owned = [row for row in rows if row.get("owned") is True]
+
+    def pick(state):
+        return [{"id": row.get("id"), "fruit_type": row.get("fruit_type"),
+                 "growth_state": row.get("growth_state")}
+                for row in owned if row.get("crop_state") == state]
+
+    # ⛔ F10 / BUG-033 (B). Bare ground -- fruit UNKNOWN at growth 0, the
+    # engine's no-crop default -- is a KNOWN state. read_fields.classify_field
+    # returns None for it, and bucketing it as "crop_state unknown" told Cyrus
+    # a field had an unknown crop when it has none.
+    def is_no_crop(row):
+        return (row.get("crop_state") is None and row.get("fruit_type") == "UNKNOWN"
+                and str(row.get("growth_state")) == "0")
+
+    no_crop = [{"id": row.get("id"), "fruit_type": row.get("fruit_type"),
+                "growth_state": row.get("growth_state")}
+               for row in owned if is_no_crop(row)]
+    unknown = [{"id": row.get("id"), "fruit_type": row.get("fruit_type"),
+                "growth_state": row.get("growth_state"),
+                "why": row.get("crop_state_reason")}
+               for row in owned if row.get("crop_state") is None and not is_no_crop(row)]
+    ownership_unknown = [row.get("id") for row in rows if row.get("owned") is None]
+    body = {
+        "status": "partial" if unknown or ownership_unknown else "ok",
+        "owned_field_count": len(owned),
+        "harvest_ready": pick("ready"),
+        # ⛔ F10 / BUG-033 (B): the bucket that was missing. Without it the
+        # buckets summed to 21 of 44 and the 23 growing fields were in no list.
+        "growing": pick("growing"),
+        "harvested": pick("harvested"),
+        "dead": pick("dead"),
+        "no_crop": no_crop,
+        "crop_state_unknown": unknown,
+        "ownership_unknown_field_ids": ownership_unknown,
+        "reason": ("%d owned field(s) have an UNKNOWN crop state and %d field(s) "
+                   "an unknown owner -- name every field listed; where a list "
+                   "arrives as an envelope, report its `item_count` and say the "
+                   "rest were not read."
+                   % (len(unknown), len(ownership_unknown))
+                   if unknown or ownership_unknown else None),
+        "derivation": "fields.field_state rows with owned == true, bucketed by "
+                      "the crop_state read_fields.py classified. Re-derived on "
+                      "every read of this gate, so after a save it is the save's.",
+    }
+    return _stamp_one_source(body, OWNED_CROP_SOURCE_DOMAIN, domain_status,
+                             domain_checks, accepted_stale)
+
+
+def _print_list(list_path, records, sections, derived, accept_stale,
+                freshness_check, cache_root):
+    """F10 / BUG-033. Print one whole list, AFTER every gate has run. Never
+    [] for a path that does not resolve: that is a refusal (DEC-001)."""
+    parts = list_path.split(".")
+    if len(parts) < 3:
+        _fail("LIST PATH UNRESOLVED: %r is not DOMAIN.SECTION.KEY" % list_path,
+              argv_error=True)
+    domain, key = parts[0], parts[-1]
+    section_name = ".".join(parts[1:-1])
+    if domain == "derived":
+        section = derived.get(section_name)
+        status = (section or {}).get("status") if isinstance(section, dict) else None
+        reason = (section or {}).get("reason") if isinstance(section, dict) else None
+    else:
+        record = records.get(domain)
+        if record is None:
+            _fail("LIST PATH UNRESOLVED: no cached domain %r (have: %s)"
+                  % (domain, ", ".join(sorted(records))), cache_root=cache_root)
+        section = ((record.get("envelope") or {}).get("sections") or {}).get(section_name)
+        status = sections[domain]["status"]
+        reason = sections[domain]["reason"]
+    value = section.get(key) if isinstance(section, dict) else None
+    if not isinstance(value, list):
+        _fail("LIST PATH UNRESOLVED: %r does not resolve to a list in the "
+              "verified %s view (found %s). Nothing is printed rather than an "
+              "empty list that would read as 'the farm has none'."
+              % (list_path, domain, type(value).__name__ if section is not None
+                 else "no such section"), cache_root=cache_root)
+    print(json.dumps({
+        "reader": READER,
+        "list": list_path,
+        "domain": domain,
+        "domain_status": status,
+        "domain_reason": reason,
+        "accepted_stale": accept_stale,
+        "freshness_check": freshness_check,
+        "item_count": len(value),
+        "items": value,
+    }, indent=2))
+
+
 def main():
     argv = sys.argv[1:]
     config_path = None
@@ -1329,6 +1601,7 @@ def main():
     mode = provenance.FULL
     render_only = False
     emit_claims = None
+    list_path = None
     while argv:
         arg = argv.pop(0)
         if arg == "--config":
@@ -1345,6 +1618,10 @@ def main():
             if not argv:
                 _fail("--emit-claims given with no path", argv_error=True)
             emit_claims = argv.pop(0)
+        elif arg == "--list":
+            if not argv:
+                _fail("--list given with no DOMAIN.SECTION.KEY", argv_error=True)
+            list_path = argv.pop(0)
         else:
             _fail("unexpected argument %r. Supported: %s"
                   % (arg, ", ".join(SUPPORTED_FLAGS)), argv_error=True)
@@ -1509,8 +1786,13 @@ def main():
     # The aggregate and its claims manifest (item 9). Built in-process, NEVER
     # persisted, and VALIDATED BEFORE A SINGLE LINE IS EMITTED -- a figure
     # validated after printing is a figure that was already believed.
+    # F10 / BUG-033: every elided list points at the command that prints it.
+    list_command = "python3 %s --config %s%s --list" % (
+        shlex.quote(os.path.abspath(__file__)),
+        shlex.quote(os.path.abspath(config_path)),
+        " --accept-stale" if accept_stale else "")
     aggregate, claims, render_err = aggregate_render.render(
-        sections, records, config, farm_id, cache_root)
+        sections, records, config, farm_id, cache_root, list_command=list_command)
     if render_err:
         _fail(render_err, cache_root=cache_root)
 
@@ -1519,7 +1801,7 @@ def main():
         _fail(claim_err, cache_root=cache_root,
               note="No view was emitted. A rendered figure that does not match "
                    "its own source is the aggregator destroying the evidence "
-                   "its components produced (RSK-007).")
+                   "its components produced.")
 
     if emit_claims:
         # The DUMP is the optional part; the check above never is (sec. 9.3).
@@ -1547,7 +1829,15 @@ def main():
     # `verified_current` on no evidence at all.
     derived = {DEMAND_SECTION: derive_production_demand(
         records, domain_status=domain_status, domain_checks=domain_checks,
+        accepted_stale=accept_stale),
+               OWNED_CROP_SECTION: derive_owned_land_crop_state(
+        records, domain_status=domain_status, domain_checks=domain_checks,
         accepted_stale=accept_stale)}
+
+    if list_path is not None:
+        _print_list(list_path, records, sections, derived, accept_stale,
+                    freshness_check, cache_root)
+        return
 
     if render_only:
         # ⛔ WAVE 3B / FINDING 2(c). `accepted_stale` was absent from this

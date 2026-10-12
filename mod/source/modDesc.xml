@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="107">
     <author>Parzival</author>
-    <version>3.0.0.0</version>
+    <version>3.1.9.0</version>
 
     <title>
         <en>AI Farm Manager 25</en>
@@ -18,11 +18,11 @@ Nothing else is touched: no gameplay system is modified and the game's save file
 
 The panel has two modes, toggled with Ctrl+Period (rebindable in Controls as "AIFM: toggle panel"). ON, the default, keeps the panel on screen: header, cards and reply bar stay up and cards wait until you answer or dismiss them. OFF turns it back into a transient notifier where each card fades out on its own. Unanswered cards are kept either way - they return when the panel comes back on, even after a restart.
 
-Cards that offer actions show clickable buttons (acknowledge, yes/no, dismiss). Bring up the mouse cursor with Ctrl+Comma (rebindable in Controls as "AIFM: toggle cursor") - this works on foot or in a vehicle - then click, drag or scroll the panel. On foot, raising the cursor this way also holds the camera steady, so the mouse moves over the panel instead of turning your view; press again to lower the cursor and walk. (If the cursor is already up another way, for example AutoDrive's middle mouse button or Courseplay's right mouse button, that works too.) The reply bar at the panel's bottom opens a text box for a free-text message. Your answers are written to modSettings/FS25_AIFarmManager25/replies.xml for the Farm Manager process to read. Without a cursor on screen the mod is a passive notifier.
+Cards that offer actions show clickable buttons (acknowledge, yes/no, dismiss). Bring up the mouse cursor with Ctrl+Comma (rebindable in Controls as "AIFM: toggle cursor") - this works on foot or in a vehicle - then click, drag or scroll the panel. Press again to lower the cursor. On foot the mouse wheel may also zoom the camera while the cursor is over the panel; dragging the scrollbar scrolls with no camera movement. (If the cursor is already up another way, for example AutoDrive's middle mouse button or Courseplay's right mouse button, that works too.) The reply bar at the panel's bottom opens a text box for a free-text message. Your answers are written to replies.xml in this savegame's own folder, modSettings/FS25_AIFarmManager25/<savegame>/, for the Farm Manager process to read. Without a cursor on screen the mod is a passive notifier.
 
-A settings page opens with Ctrl+Alt+Period (rebindable in Controls as "AIFM: settings"), on foot or in a vehicle: it toggles the panel on or off, changes its size, resets its position, and sets how long messages linger in OFF mode.
+Ctrl+Alt+Period (rebindable in Controls as "AIFM: settings") opens the game menu, on foot or in a vehicle, and tries to select the Farm Manager page; if the menu opens on another page, click the Farm Manager tab. The page has Farm, Fields, Productions, Messages and Settings tabs. The Settings tab holds the panel options (the panel on or off, its size, width, text size and card background, how long messages linger, the longest a card may live, how many messages are kept, the lowest severity shown, and a reset for the panel's position).
 
-The bridge is modSettings/FS25_AIFarmManager25/notify.xml. Optional: modSettings/FS25_AIFarmManager25/settings.xml overrides the panel's position, width, text size and background opacity.]]></en>
+The bridge is notify.xml in this savegame's folder, modSettings/FS25_AIFarmManager25/<savegame>/ (each savegame has its own bridge, cards and replies). Optional: modSettings/FS25_AIFarmManager25/settings.xml seeds the panel's position, width, text size and background opacity; the panel's own saved state (state.xml, same folder) takes precedence once it exists.]]></en>
     </description>
 
     <iconFilename>icon_FarmManager25.dds</iconFilename>
@@ -35,12 +35,13 @@ The bridge is modSettings/FS25_AIFarmManager25/notify.xml. Optional: modSettings
              the renderer extends it). -->
         <sourceFile filename="FarmManagerTheme.lua" />
         <sourceFile filename="FarmManager25.lua" />
-        <!-- The g_gui settings dialog (S158). Loads after the renderer; it is
-             engine-only and self-guards (headless / no DialogElement -> no-op),
-             and its GUI XML profiles under gui/ are loaded at runtime via
-             g_gui:loadProfiles/loadGui, not declared here. -->
-        <sourceFile filename="FarmManagerSettingsGui.lua" />
     </extraSourceFiles>
+    <!-- The retired FarmManagerSettingsGui modal's sourceFile entry was removed
+         here (Stage 1 in-game menu page). Its settings are now rendered inside
+         gui/InGameMenuFarmManager25.lua, loaded via source() from
+         FarmManager25.lua rather than declared as an extraSourceFile: the
+         same loading path FS25_FarmOperationsDashboard uses for its own
+         gui/*.lua controller. -->
 
     <!-- Two GLOBAL keybinds, both rebindable in Controls.
 
@@ -90,15 +91,21 @@ The bridge is modSettings/FS25_AIFarmManager25/notify.xml. Optional: modSettings
             <binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_period" />
         </actionBinding>
     </inputBinding>
-    <l10n>
-        <text name="input_FM25_TOGGLE_OVERLAY">
-            <en>AIFM: toggle panel</en>
-        </text>
-        <text name="input_FM25_TOGGLE_CURSOR">
-            <en>AIFM: toggle cursor</en>
-        </text>
-        <text name="input_FM25_TOGGLE_SETTINGS">
-            <en>AIFM: settings</en>
-        </text>
-    </l10n>
+    <!-- filenamePrefix ADDED for the Stage 1 in-game menu page: it declares the
+         five l10n/translation_{en,de,fr,pl,es}.xml files (en authoritative,
+         the rest seeded-English; see their own header comments) that back
+         every $l10n_fm25_* reference in gui/InGameMenuFarmManager25.xml AND
+         the three input_FM25_* keybind-rebind labels below (moved into the
+         external files 2026-09-01; this element used to also carry them
+         inline, which made it the only hybrid filenamePrefix declaration in
+         the workspace — see dual review finding). Declared the same way
+         FS25_FarmOperationsDashboard, FS25_FieldsOfStories and
+         FS25_NXProductions do: filenamePrefix self-closed, zero inline
+         <text> children.
+         WARNING: ASSUMPTION, NOT VERIFIED AGAINST THE FS25-LOOKUP CORPUS.
+         This is a modDesc.xml schema question (XML packaging format), not a
+         Lua API/class question, and the corpus documents the latter, not the
+         former; a search returned no page (expected: not a corpus gap, a
+         different kind of question). Unverified until live-tested. -->
+    <l10n filenamePrefix="l10n/translation" />
 </modDesc>

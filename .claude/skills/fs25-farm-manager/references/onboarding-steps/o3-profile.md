@@ -31,6 +31,19 @@ nextStepFile: './o4-bridge-check.md'
   day/season/difficulty, which it can), so it's a real judgment question, not a decode target.
   Record the answer in `decision-making.md`'s **Self-imposed constraints** (and, if it's a firm rule,
   in `config.json`'s `house_rules`). "Open career, no special goal" is a complete answer.
+- **Merged fields** — ask outright, every onboarding: *"Do you work any fields as one merged
+  field — several map parcels farmed as one? Or plan to?"* The save cannot say (a merge is not
+  derivable from farmland ownership), and until this is answered the FIELDS tab is
+  **never published**. Record the answer with the script — never hand-write the dossier line:
+  ```bash
+  python3 ".claude/skills/fs25-farm-manager/scripts/record_field_merges.py" sanctum/state/field-dossiers --none
+  python3 ".claude/skills/fs25-farm-manager/scripts/record_field_merges.py" sanctum/state/field-dossiers --config sanctum/config.json --merge <CANONICAL> <OTHER_ID> [...] --planned <CANONICAL> <OTHER_ID> [...]
+  ```
+  Each list is the id the merged field reports as, then its other parcels, exactly as the game
+  numbers them — every id is checked against the save. `--merge` is done in game; `--planned` is
+  intended. A field that already has a dossier keeps it: only its size line changes, and the old
+  line goes into its History. On `{"error": ...}` nothing is kept — relay the error's remedy,
+  never hand-edit the dossier.
 
 ## ⛔ Never ask for anything the save already told you
 

@@ -7,12 +7,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An AI farm manager for **one** Farming Simulator 25 savegame. It reads your save, remembers
-your farm across sessions, and — with the mod installed — becomes an always-on companion
-(it introduces itself as **Cyrus**) that puts messages on your screen while you play **and
-reads your answers back**: a card can carry a yes/no, a choice, or a reply box, and your
-click comes straight back to the manager.
+your farm across sessions, and talks to you in Claude Code as **Cyrus**. With the mod
+installed it also puts messages on your screen while you play, reads your answers back, and
+adds a Farm Manager page to the game menu.
 
 It is **read-only against your game**. It never writes to your savegame — not once, not ever.
+
+![The Farm Manager page in the game menu, Farm tab](docs/images/menu-farm-tab.png)
 
 ```
 ┌──────┬──────────────────────────────┐
@@ -24,159 +25,71 @@ It is **read-only against your game**. It never writes to your savegame — not 
 └──────┴──────────────────────────────┘
 ```
 
-## What's in the box
+## What you get
 
-```
-fs25-farm-manager/
-├── README.md                     this file
-├── .claude/skills/
-│   ├── fs25-farm-manager/        the manager — your AI's farm knowledge
-│   │   ├── SKILL.md                what it does and when
-│   │   ├── scripts/                readers for your save, the notifier, the reply reader
-│   │   │                             and the event watcher
-│   │   ├── references/             crop timing, time mechanics, workflows
-│   │   └── templates/              used once, to set up your farm's memory
-│   ├── farm-briefing/            /farm-briefing — start a session
-│   ├── farm-closeout/            /farm-closeout — end one
-│   └── farm-status/              /farm-status   — a quick look, writes nothing
-└── mod/
-    ├── FS25_AIFarmManager25.zip  the on-screen notification + reply mod
-    └── source/                     the mod's source, if you want to read it
-```
+- **Briefings**: what changed since last time, and what is worth doing today.
+- **Advice with its reasons**: what each field needs, which production is running dry, what
+  to buy and when, with real prices.
+- **A page in the game menu** with five tabs: Farm, Fields, Productions, Messages, Settings.
+- **Cards on screen you can answer** with a click or a typed reply.
+- **A memory that is yours**: plain text files in a folder on your PC.
 
-The three small skills are shortcuts into the manager; it does the work.
+## New in 3.1.9.0
 
-## Install
+The first release since 3.0.0.0. The full list is in the [changelog](CHANGELOG.md).
 
-**You need:** [Claude Code](https://claude.com/claude-code), Python 3, and FS25.
-No Python packages to install — the skill uses only the standard library.
+- **The Farm Manager page in the game menu**, with five tabs. The Settings tab replaces the old
+  settings window.
+- **Figures say where they came from**: LIVE, or "as of" the time the manager read your save.
+- **A crop plan and notes for each field**, shown on the Fields tab, and the crop plan is kept
+  current as a standing duty.
+- **How full each building is** when you ask the manager, and **each building's own capacity** on the Productions tab.
+- **Planting windows and ready / dead dates** for each field, with the assumptions stated. On a save where crops do not grow by season, it says so.
+- **Fuel alerts and the Low fuel count now agree**, and Machines, Pallets and Bales owned are
+  separate lines.
+- **Cards and replies are kept per savegame**, so each save shows only its own.
+- **Fixed**: accepting a field contract no longer breaks it until you reload the save.
 
-### 1. The skill
+## What you need
 
-Copy the `.claude` folder into the project folder you want to run Claude Code from:
+- Farming Simulator 25 on PC.
+- [Claude Code](https://claude.com/claude-code), and Python 3. No Python packages to install.
+- **Windows with WSL.** macOS is untested.
 
-```
-your-farm-folder/
-└── .claude/skills/
-    ├── fs25-farm-manager/
-    ├── farm-briefing/
-    ├── farm-closeout/
-    └── farm-status/
-```
+## Quick start
 
-If you already have a `.claude` folder, copy the four folders inside `skills/` into your
-`.claude/skills/`. To use it from any folder instead, copy them to `~/.claude/skills/`.
+1. **Install** the manager into a folder for your farm, and the mod into your FS25 `mods`
+   folder. → [Install](docs/how-to/install.md)
+2. **Set up your farm**: start Claude Code in that folder and say "set up my farm manager".
+   → [Set up your farm](docs/how-to/set-up-your-farm.md)
+3. **Play**: say "briefing" when you start and "close out" when you stop.
+   → [Daily use](docs/how-to/daily-use.md)
 
-### 2. The mod (optional — only for on-screen notifications)
+The mod zip is also on [KingMods](https://www.kingmods.net/en/fs25/mods/79933/ai-farm-manager)
+and on the [GitHub releases page](https://github.com/Hidden-History/FS25-AI-Farm-Manager/releases).
+Use the mod and the manager from the same release.
 
-Copy `mod/FS25_AIFarmManager25.zip` into your FS25 mods folder:
+## Documentation
 
-| | |
+| How to | |
 |---|---|
-| Windows | `Documents\My Games\FarmingSimulator2025\mods\` |
-| macOS | `~/Library/Application Support/FarmingSimulator2025/mods/` |
+| [Install](docs/how-to/install.md) | Both halves, first time |
+| [Set up your farm](docs/how-to/set-up-your-farm.md) | What setup asks and what it creates |
+| [Update](docs/how-to/update.md) | Move to a newer version |
+| [Daily use](docs/how-to/daily-use.md) | What to say, and what you get |
+| [The in-game menu](docs/how-to/in-game-menu.md) | The five tabs and where their numbers come from |
+| [Reading the numbers](docs/how-to/reading-the-numbers.md) | What "unknown", "capacity refused" and "2+" mean |
+| [Cards and replies](docs/how-to/cards-and-replies.md) | Answer a card; the three keys |
+| [Run a second savegame](docs/how-to/second-savegame.md) | One farm folder per savegame |
+| [Troubleshooting](docs/how-to/troubleshooting.md) | When what you see does not match |
+| [Uninstall](docs/how-to/uninstall.md) | Remove it cleanly |
 
-Start FS25 and tick **AI Farm Manager 25** in the mod list.
-
-The mod is client-side only and safe in multiplayer. It works inside one folder,
-`modSettings/FS25_AIFarmManager25/`: it reads `notify.xml` (the card to show), appends your
-answers to `replies.xml`, and keeps the on-screen stack in `state.xml` so cards survive a
-restart. It touches nothing else — never your savegame.
-
-### 3. Set up your farm
-
-Start Claude Code in your farm folder and say **"set up my farm manager"** — or type
-`/fs25-farm-manager`:
-
-It will ask your name and what language to speak first, then find your savegame and ask a
-handful more questions about how you want to play, and write your farm's memory into a
-`sanctum/` folder. That takes a few minutes and happens once.
-
-## Use
-
-Just talk to it — or use a slash command.
-
-| Say | Or type | You get |
-|---|---|---|
-| "set up / start my farm manager" | `/fs25-farm-manager` | Onboards a new farm, or resumes managing an existing one |
-| "briefing" | `/farm-briefing` | What changed since last time, and what's worth doing today |
-| "what does my field need?" | | Field by field, the operation its state calls for — ploughing, liming, weeding, and more — with the reading behind it |
-| "what's running low?" | | Which production lines are close to empty and how many hours you have, checked against each line's own stock |
-| "status" | `/farm-status` | A quick look at the save. Writes nothing |
-| "close out" | `/farm-closeout` | Writes up and saves the session so the next one starts informed |
-| "what should I buy?" | | Seed/fertilizer timing, gear you don't own, the used market — with prices |
-| "what's oat worth?" | | Prices, and when they peak |
-
-Everything else is a conversation. Ask it anything about your farm.
-
-## Your farm's memory
-
-Setup creates a `sanctum/` folder next to your `.claude` folder. That's your farm's memory —
-its decisions, its history, its house rules. It's plain Markdown; read it, edit it, keep it in
-git if you like.
-
-**It's yours and it stays local.** Nothing here sends your save anywhere.
-
-## On-screen notifications
-
-Once the mod is installed, your AI can put a card on your screen while you play:
-
-```bash
-python3 .claude/skills/fs25-farm-manager/scripts/notify_farm_manager.py \
-    -s warn -t "Silo Alert" -i silo "Corn silo 2 is 92% full"
-```
-
-`-s` sets the colour: `ok` green · `info` blue · `warn` amber · `critical` red.
-`-i` picks the glyph — `--help` lists them all (briefing, contract, silo, fleet, finances,
-crop, weather, harvest, field, report, equipment, fuel, building, supply, schedule, profit,
-worker, dealer, soil, season, plus generic leaf/alert/check, and the interaction glyphs the
-mod draws on actionable cards).
-
-Recent cards stack, so a new one arrives with its context rather than replacing it. Times are
-**farm time**, not your PC's clock.
-
-**Exit codes matter:** `0` the mod showed it · `2` nothing read it (mod not installed or game
-not running) · `1` couldn't work out where to write. A `2` is never a success.
-
-### Asking a question, not just telling you something
-
-A card can also ask. Give it a stable `--id` and one or more affordances, and the manager
-gets your answer back:
-
-```bash
-python3 .claude/skills/fs25-farm-manager/scripts/notify_farm_manager.py \
-    --id ctr-field18-0812 -s info -t "Contract Ready" \
-    --action yesno "Field 18 harvest — $24,650. Take it?"
-```
-
-`--action yesno` draws 👍/👎, `--action ack` a single check, `--action text` a reply box, and
-`--choice value:Label` (repeatable) a set of options. Every actionable card also carries a
-**✕** to dismiss. You answer with the mouse whenever the game's shared cursor is up (raised by
-AutoDrive's middle-mouse, Courseplay's right-mouse, or any cursor mod — this mod reads that
-shared cursor, it doesn't own one). Your click is appended to
-`modSettings/FS25_AIFarmManager25/replies.xml`, and the manager reads it back, deduped so a
-double-click can't double-count.
-
-You don't watch for that reply by hand. The manager runs an **event-driven** loop: at the
-start of a session it arms a watcher that sits idle at ~zero cost and wakes only when the game
-writes a reply or writes your save; at closeout it stands the watcher down. (It **polls** the
-files — inotify can't see Windows-side writes from WSL — and never touches your save.)
-
-**Ctrl+Period** toggles the overlay between a persistent always-on panel (the default — cards
-stay up until you dismiss or answer them, and survive a restart via `state.xml`) and the
-classic transient pop-up where each card fades after its time. If the interactive layer ever
-fails, the mod falls back to a plain one-way card, and then to the game's own notification —
-**interactive → one-way → native**, each less capable but still delivering the message.
-
-Move or restyle the panel without reinstalling — create
-`modSettings/FS25_AIFarmManager25/settings.xml`:
-
-```xml
-<farmManager25>
-    <hud anchorX="0.985" anchorY="0.86" widthPx="330" textSizePx="13" bgAlpha="0.92" />
-    <timing minMs="8000" maxMs="60000" msPerChar="70" />
-</farmManager25>
-```
+| Reference | |
+|---|---|
+| [Files on disk](docs/reference/files-on-disk.md) | Everything it writes, and where |
+| [The notifier command](docs/reference/notify-cli.md) | Send a card yourself |
+| [How it works](docs/reference/how-it-works.md) | The two halves and the loop between them |
+| [Privacy and feedback](docs/reference/privacy-and-feedback.md) | What stays local; how to report a problem |
 
 ## How it behaves, and why
 
@@ -184,22 +97,15 @@ This exists because a farm manager that invents numbers is worse than none.
 
 - **It reads, it doesn't guess.** Cash, land, fleet, prices, crop states, contracts — all
   come from your save. When something genuinely isn't on disk, it says so and asks.
-- **It never writes to your savegame.** All its own notes go in `sanctum/`.
+- **It never writes to your savegame.** Its notes go in `sanctum/`; the mod's files go in
+  the game's `modSettings` folder.
 - **An empty answer is never reported as a fact.** "No land found" and "you own no land" are
-  different claims, and the scripts keep them different — a bug that once had it confidently
-  report a farm owned nothing when it owned 18 parcels.
+  different claims, and the scripts keep them different.
+- **A "no" has to be earned.** If a check has not confirmed something is absent, it says it
+  does not know.
 - **It tells you when it was wrong.** If a plan didn't work, it says so.
 
-## Troubleshooting
+## Links
 
-**"It can't find my savegame."** Tell it the path. On WSL, use the `/mnt/c/...` form.
-
-**Notifications return exit 2.** The mod isn't installed, isn't enabled, or the game isn't
-running. The script prints what it actually checked — read that rather than guessing.
-
-**The notification is a plain grey box.** The panel failed to draw and fell back to the
-game's own notification, so you still got the message. Check `log.txt` for
-`FarmManager25` — it will say exactly why.
-
-**Everything looks wrong after a game update.** Ask it to re-verify. The scripts report their
-own trust status at runtime; that's the signal to read.
+[Changelog](CHANGELOG.md) · [Issues](https://github.com/Hidden-History/FS25-AI-Farm-Manager/issues) ·
+[KingMods](https://www.kingmods.net/en/fs25/mods/79933/ai-farm-manager) · [License](LICENSE)

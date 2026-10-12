@@ -68,7 +68,7 @@ message; the script waits for that and reports honestly. `2` means nothing read 
 mod isn't installed, or isn't enabled, or the game is closed. **Do not report a `2` as
 sent.** And do not guess which cause it was; the script prints what it observed, so pass
 that on. The v1.0 sender guessed "game may not be running" for every failure and was wrong
-every time — see FRICTION-LOG F-029.
+every time.
 
 **Delivered ≠ seen.** Exit `0` proves the mod read the bytes. Nothing on disk can prove the
 player looked at the screen. Never tell them "I notified you" as though it were received.
@@ -87,10 +87,19 @@ assuming the version named here is the one running.
 
 That took four real-game runs, and every failure was invisible to a passing test suite:
 protocol 1 could never have worked at all (FS25 sandboxes `io` to write-only — 60 tests
-green, F-035); `deleteFile` was refused from a mod's own environment (450 log errors, F-036);
+green); `deleteFile` was refused from a mod's own environment (450 log errors);
 and the bridge folder must be `modSettings/<mod name>/`, which the game itself spelled out
 in an `Info:` line next to the error. **Tested logic is not a working feature** — this bridge
 is the standing proof. If the mod changes, it is unverified again until a game says otherwise.
+
+**The bridge is scoped per savegame**: `modSettings/<mod name>/<savegame folder name>/notify.xml`,
+with `replies.xml` beside it. One mod install serves every savegame, so an unscoped file showed
+save A's cards in save B; one manager install serves ONE savegame, so the sender writes only into
+its own save's folder. Both halves key on the savegame DIRECTORY'S OWN NAME — the mod from
+`basename(missionInfo.savegameDirectory)`, the sender from `basename(paths.savegame_dir)` — never
+on `save_slot`. ⛔ The sender **refuses** to fall back to the old unscoped path and names the key
+it resolved: a card written where nobody watches would otherwise report success. A push made while
+the player is in a different savegame correctly does not appear.
 
 ## The return half — ingesting the player's replies
 
@@ -109,7 +118,11 @@ automatically** — you do not poll by hand.
   (`references/workflow-briefing.md`), it idles at ~zero token cost and emits one line when the
   game writes `replies.xml`; on that event you run `read_replies.py`, reconcile the new entries
   against what you asked, and respond — often a follow-up card back through this same notifier.
-  It is disarmed and verified off at closeout (`references/workflow-closeout.md`).
+  **This reply half is the one that still needs you.** The watcher's other channel does not: when
+  the game writes the savegame it runs `refresh_state.py auto` on its own and reports the result
+  on a `REFRESH` line, so a card you send after a save is written against state that was
+  regenerated without a turn being spent on it. It is disarmed and verified off at closeout
+  (`references/workflow-closeout.md`).
 
 So a notification is not a one-way announcement: send an actionable card, and be ready to read
 and answer what comes back — the same under-send discipline applies to the follow-up.

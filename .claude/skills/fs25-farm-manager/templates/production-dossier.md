@@ -25,7 +25,7 @@ Running/idle status does not: `farm_snapshot.py` carries no production-line sect
 `read_productions.py` on its own for that half. All of it changes between sessions and is
 answered authoritatively every session. This file does **not** carry those numbers: a cached
 copy goes stale the moment it's written and reads as
-current when it isn't (friction-log F-117, F-106). A "current state" figure written here is an
+current when it isn't. A "current state" figure written here is an
 error in the file, not this session's answer.
 
 ## Durable facts (the reason this file exists)

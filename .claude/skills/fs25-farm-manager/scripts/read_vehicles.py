@@ -271,6 +271,16 @@ def extract_specializations(v_elem):
     return sorted(set(c.tag for c in v_elem))
 
 
+def count_carried_bales(v_elem):
+    """Bales this vehicle carries as <bale> children, and NOWHERE ELSE in the save's
+    bale record: BaleLoader.lua:905-906 writes `<baleLoader><bale/>...` and
+    BaleWrapper.lua:861 writes `<baleWrapper><bale/>` (verified in gameSource.zip
+    2026-09-24). A baler's own bales are `numBales` (read_bales_pallets.py b25) and a
+    round baler's forming bale is a fill level, not a bale (Baler.lua:794)."""
+    return (len(v_elem.findall("baleLoader/bale"))
+            + len(v_elem.findall("baleWrapper/bale")))
+
+
 def main():
     savegame_dir = arg_or_exit("read_vehicles.py <savegame_dir> [--farm-id N]")
     farm_id, arg_err = parse_farm_id_arg(sys.argv)
@@ -335,6 +345,8 @@ def main():
             "fill_units_note": fill_units_note,
             "property_state": a.get("propertyState"),
             "specializations": extract_specializations(v),
+            # D-3 (DEC-222): FARM's "Bales owned" needs bales carried on a loader/wrapper.
+            "carried_bales": count_carried_bales(v),
         })
 
     if farm_id not in seen_farm_ids:

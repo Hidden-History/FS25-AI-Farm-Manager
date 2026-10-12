@@ -101,12 +101,20 @@ PARSER_TIMEOUT_SECONDS = 900
 # ⛔ AND THE OBVIOUS FIX -- forward `--config` to every parser -- IS WRONG, and
 # wrong in the direction that makes things worse. BUG-024's own suggested
 # direction says "parsers that do not take it already ignore unknown args".
-# MEASURED, ALL FIVE, at this argv shape: read_bales_pallets, read_farm_ledger,
-# read_fleet, read_livestock and read_productions each exit 1 with
-# "unrecognised argument '--config' -- refusing to ignore it". Unconditional
-# forwarding therefore turns a ONE-domain failure into a SIX-domain failure.
-# Those parsers are also right: silently ignoring an argument you do not
-# understand is how a caller's intent gets lost.
+# MEASURED, ALL FOUR, at this argv shape: read_bales_pallets, read_farm_ledger,
+# read_fleet and read_livestock each exit 1 with "unrecognised argument
+# '--config' -- refusing to ignore it". Unconditional forwarding therefore
+# turns a ONE-domain failure into a FIVE-domain failure. Those parsers are
+# also right: silently ignoring an argument you do not understand is how a
+# caller's intent gets lost.
+#
+# ⚠ read_productions WAS in this "refuses --config" set until PLAN-UI-FIXES-
+# 2026-09-15 item 11 (D4): resolving a mod's real store name needs the SAME
+# install_dir/mods_dir join read_production_defs already uses, so it grew the
+# identical --config/--install-dir/--mods-dir surface and moved to
+# CONFIG_AWARE_DOMAINS below. It is BEST-EFFORT there, unlike the three
+# above -- a farm with no configured paths still gets a full report, just one
+# where every point falls back to "<unnamed>" with a stated reason.
 #
 # So the set is DECLARED here, never sniffed -- and
 # tests/test_datalayer_wave3_config_forwarding.py re-measures the declaration
@@ -115,6 +123,7 @@ PARSER_TIMEOUT_SECONDS = 900
 CONFIG_AWARE_DOMAINS = (
     "fields",
     "production_defs",
+    "productions",
     "weather",
 )
 

@@ -1,0 +1,1102 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<!-- InGameMenuFarmManager25.xml: Stage 1 in-game menu page.
+
+     Adapted from FS25_FarmOperationsDashboard's
+     gui/InGameMenuFarmOperationsDashboard.xml (read-only reference, verified
+     shipping):
+       - the menu-container/header/sub-tab-strip shell (:1-21), NUM_TABS
+         dropped from 9 to 2 (MESSAGES/SETTINGS).
+       - the SmoothList + ListItem + slider block (:33-44) for MESSAGES,
+         columns re-proportioned: MESSAGE and SAID/ANSWERED need more room
+         than the reference's priority/area did (WHEN 150 / FROM 200 /
+         MESSAGE 620 / ANSWERED 340, vs. its 130/210/260/650 for a
+         differently-shaped row).
+       - SmoothList is NOT documented in the fs25-lookup corpus (checked
+         2026-09-01: no page carries the term). Community usage, already
+         shipping in the reference mod; this comment is the verification
+         record for this call site.
+
+     SETTINGS is new, not adapted from FOD (it has no equivalent tab): a
+     plain BoxLayout (settingsBox) that InGameMenuFarmManager25.lua fills at
+     runtime by cloning stepperRowTemplate / actionRowTemplate once per
+     FarmManager25.SETTINGS_ROWS entry. No static row list here; the page
+     carries no hardcoded settings content. The stepper row reuses the exact
+     fs25_multiTextOptionContainer / fs25_settingsMultiTextOption idiom the
+     retired modal used (gui/FarmManagerSettingsGui.xml:28-53), via the
+     existing fm25_settingsRow / fm25_settingButton profiles (guiProfiles.xml,
+     unchanged from the modal).
+
+     Every user-visible string on this page is a $l10n_ reference; the five
+     translation_*.xml files under l10n/ own the English text (authoritative)
+     and its four seeded-untranslated siblings. -->
+<GUI name="ingameMenuFarmManager25">
+    <GuiElement profile="fs25_menuContainer">
+        <!-- Header chrome mirrored from FOD's InGameMenuFarmOperationsDashboard.xml:4-13
+             (read-only reference, verified shipping): the icon-in-its-background
+             on the left, the title, and the balance chip on the right. Every
+             profile here is stock fs25_* EXCEPT fm25_menuHeaderIcon, which is
+             ours only because the slice id has to be named somewhere. The chip's
+             VALUE is set at runtime by InGameMenuFarmManager25:updateBalance();
+             it carries no text here, so an unpopulated chip renders empty rather
+             than showing a stale or invented number. -->
+        <GuiElement profile="fs25_menuHeaderPanel">
+            <Bitmap profile="fm25_headerPlate">
+                <Bitmap profile="fm25_menuHeaderIconCentered"/>
+            </Bitmap>
+            <Text profile="fs25_menuHeaderTitle" id="categoryHeaderText" text="$l10n_fm25_menu_title"/>
+            <RoundCorner profile="fm25_headerChip" id="shopMoneyBoxBg"/>
+            <BoxLayout profile="fs25_shopMoneyBox" id="shopMoneyBox">
+                <Text profile="fs25_shopBalance" text="$l10n_fm25_balance:"/>
+                <Text profile="fs25_shopMoney" id="currentBalanceText"/>
+            </BoxLayout>
+        </GuiElement>
+
+        <BoxLayout profile="fs25_subCategorySelectorTabbedBox" id="subCategoryBox"/>
+        <ThreePartBitmap profile="fm25_ruleHi" position="0px -57px"/>
+        <MultiTextOption profile="fs25_subCategorySelectorTabbed" id="subCategoryPaging" position="0px -10px" onClick="onClickTab"/>
+        <Button profile="fs25_subCategorySelectorTabbedTab" id="selectorPrefab">
+            <ThreePartBitmap profile="fs25_subCategorySelectorTabbedTabBg" name="background"/>
+        </Button>
+
+        <!-- TAB 1: MESSAGES -->
+        <GuiElement profile="fm25_tabContainer" id="tabContainer1" visible="true">
+            <GuiElement profile="fm25_panel" position="0px -10px" size="1500px 760px">
+                <!-- F3: the page background. FIRST child, so everything paints over it.
+                     780px on every tab, 20px TALLER than the 760px panel
+                     (review M-2): the TOTAL footers end at 776 (MESSAGES) and
+                     770 (FIELDS, PRODUCTIONS). The panel keeps 760 so no child
+                     anchored to it moves; only this top-left paint grows down. -->
+                <Bitmap profile="fm25_pageBg" position="0px 0px" size="1500px 780px" name="pageBg"/>
+                <Text profile="fm25_sectionTitle" position="28px -24px" text="$l10n_fm25_tab_messages"/>
+
+                <!-- FILTER ROW (chosen.html MESSAGES). Five Buttons; the
+                     active one is tinted in Lua, and every button is re-tinted
+                     on each change so two cannot look active at once. Each
+                     carries its own count, taken from the UNFILTERED rows —
+                     counting the filtered set would make every button read 0
+                     except the active one, which is the only thing the counts
+                     are for. Labels reuse fm25_severity_*; only ALL is new. -->
+                <GuiElement profile="fm25_headerBox" id="msgFilterBox" position="28px -70px" size="1320px 32px">
+                    <Bitmap profile="fm25_pillBg"   id="mfAllBg"   position="5px 0px"  size="140px 32px"/>
+                    <Bitmap profile="fm25_cardFill" id="mfAllFill" position="7px -2px" size="136px 28px" visible="false"/>
+                    <Button profile="fm25_filterBtn" id="mfAll"      position="0px 0px"   size="150px 32px" handleFocus="false" onClick="onClickFilterAll"/>
+                    <Bitmap profile="fm25_pillBg"   id="mfCriticalBg"   position="155px 0px"  size="160px 32px"/>
+                    <Bitmap profile="fm25_cardFill" id="mfCriticalFill" position="157px -2px" size="156px 28px" visible="false"/>
+                    <Button profile="fm25_filterBtn" id="mfCritical" position="150px 0px" size="170px 32px" handleFocus="false" onClick="onClickFilterCritical"/>
+                    <Bitmap profile="fm25_pillBg"   id="mfWarnBg"   position="325px 0px"  size="140px 32px"/>
+                    <Bitmap profile="fm25_cardFill" id="mfWarnFill" position="327px -2px" size="136px 28px" visible="false"/>
+                    <Button profile="fm25_filterBtn" id="mfWarn"     position="320px 0px" size="150px 32px" handleFocus="false" onClick="onClickFilterWarn"/>
+                    <Bitmap profile="fm25_pillBg"   id="mfInfoBg"   position="475px 0px"  size="140px 32px"/>
+                    <Bitmap profile="fm25_cardFill" id="mfInfoFill" position="477px -2px" size="136px 28px" visible="false"/>
+                    <Button profile="fm25_filterBtn" id="mfInfo"     position="470px 0px" size="150px 32px" handleFocus="false" onClick="onClickFilterInfo"/>
+                    <Bitmap profile="fm25_pillBg"   id="mfOkBg"   position="625px 0px"  size="140px 32px"/>
+                    <Bitmap profile="fm25_cardFill" id="mfOkFill" position="627px -2px" size="136px 28px" visible="false"/>
+                    <Button profile="fm25_filterBtn" id="mfOk"       position="620px 0px" size="150px 32px" handleFocus="false" onClick="onClickFilterOk"/>
+                </GuiElement>
+
+                <!-- SORTABLE COLUMN HEADERS. Widths match the row below
+                     EXACTLY: the row's 6px severity bar and 34px glyph have no
+                     header, so the first header starts 40px in.
+                     6 + 34 + 90 + 190 + 786 + 190 = 1296. -->
+                <GuiElement profile="fm25_headerBox" id="msgHeaderBox" position="28px -110px" size="1320px 32px">
+                    <Button profile="fm25_columnHeaderBtn" id="mhWhen" position="40px 0px" size="90px 32px"
+                            text="$l10n_fm25_header_when" handleFocus="false" onClick="onClickSortMsgWhen">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="72px 0px" id="mhWhenAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="72px 0px" id="mhWhenDesc" visible="false"/>
+                    </Button>
+                    <Button profile="fm25_columnHeaderBtn" id="mhFrom" position="130px 0px" size="190px 32px"
+                            text="$l10n_fm25_header_from" handleFocus="false" onClick="onClickSortMsgFrom">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="172px 0px" id="mhFromAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="172px 0px" id="mhFromDesc" visible="false"/>
+                    </Button>
+                    <Text profile="fm25_columnHeader" position="320px 0px" size="786px 32px" text="$l10n_fm25_header_message"/>
+                    <Button profile="fm25_columnHeaderBtn" id="mhStatus" position="1106px 0px" size="190px 32px"
+                            text="$l10n_fm25_header_status" handleFocus="false" onClick="onClickSortMsgStatus">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="172px 0px" id="mhStatusAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="172px 0px" id="mhStatusDesc" visible="false"/>
+                    </Button>
+                </GuiElement>
+                <Bitmap profile="fm25_rule" position="28px -142px" size="1320px 2px"/>
+
+                <!-- SmoothList: community idiom, not in the fs25-lookup corpus (see
+                     file header). Row shape copied from the reference mod. -->
+                <!-- listSectionHeader NAMES A ListItem BY ITS name= ATTRIBUTE.
+                     The engine reads this attribute at SmoothListElement.lua:197
+                     and looks the name up in the cell database it builds from
+                     the child ListItems (:359-373, keyed on element.name). If
+                     the name does not resolve it logs a warning and SILENTLY
+                     DROPS the header (:379-382): the day groups would just
+                     stop appearing, with the list still rendering. Adapted from
+                     FS25_Courseplay config/gui/pages/HelpFrame.xml:14,19-20,
+                     which is the same three parts in the same order; what
+                     changed is only the names and that our header spans the
+                     full 1320px table width instead of a sub-category column.
+                     ⛔ The inner Text MUST be name="title": the engine calls
+                     element:getAttribute("title") and only then uses
+                     getTitleForSectionHeader (:911-914). Any other name and the
+                     heading draws empty, with no error. -->
+                <SmoothList profile="fm25_messageList" id="messageTable" position="28px -150px" size="1320px 410px"
+                            listSectionHeader="messageDayHeader">
+                    <!-- M4 SECTIONS-3, from chosen.html's rendered CSS, not read by eye:
+                         `.sec{height:40px;gap:10px;padding-left:4px;color:-secT}`,
+                         `.sec .acc{width:6px;height:26px}`, glyph 22x22 accent.
+                         So: bar at x 4, glyph at 4+6+10 = 20, text at 20+22+10 = 52,
+                         each centred in the 40px row. -->
+                    <ListItem profile="fs25_subCategoryListSectionHeader" name="messageDayHeader" size="1320px 40px">
+                        <Bitmap profile="fm25_sectionBar" position="4px -7px" size="6px 26px" name="sectionBar"/>
+                        <Bitmap profile="fm25_menuHeaderIcon" position="20px -9px" size="22px 22px" name="secGlyph"/>
+                        <Text profile="fm25_sectionHeaderTitle" name="title" position="52px 0px" size="1268px 40px"/>
+                    </ListItem>
+                    <!-- 6 + 34 + 90 + 190 + 786 + 190 = 1296 EXACTLY
+                         (chosen.html MESSAGES). Message is the flexible column
+                         and takes the remainder; it is ONE line, the full text
+                         goes to the strip below.
+                         ⛔ The severity bar and the sender glyph are tinted per
+                         row in the populator, from THEME.cards[severity] and
+                         the sender map. A row whose severity is unrecognised
+                         gets the info colour and the report glyph rather than
+                         no bar, because a missing bar reads as a missing row. -->
+                    <ListItem profile="fm25_messageListItem" name="messageRow">
+                        <!-- M4 selected-row ring. This row declares no size, so the
+                             fill WIDTH is from the owner's messages4.png, where the
+                             highlighted row spans x 324-1643 (1320 wide). ⚠ Measured,
+                             not declared - if the list width changes, this does not
+                             follow it. HEIGHT: F4 / D-7 - the row is 38px now
+                             (fm25_messageListItem; it was a forced 42), so 38-4 = 34. -->
+                        <Bitmap profile="fm25_rowSelFill" position="2px -2px" size="1316px 34px" name="selFill"/>
+                        <Bitmap profile="fm25_barFill"  position="0px 0px"    size="6px 38px"   name="sevBar"/>
+                        <!-- ⛔ BUG-031: the glyph spanned x 6..40 and whenText starts at
+                             40, so the bitmap's right edge WAS the text's left edge and
+                             "06:40" was partly covered. Same shape as R4 but between a
+                             BITMAP and text, which R4's text inset does not govern.
+                             ⛔ The column budget is not touched: chosen.html tiles this
+                             row exactly (6+34+90+190+786+190 = 1296), so the gutter is
+                             taken by insetting the glyph INSIDE its own 34px cell
+                             (28px square, 3px clear each side) rather than by moving any
+                             text, which would break that sum and tests/test_tiles.py.
+                             28px square in a 38px row: (38-28)/2 = 5. -->
+                        <Bitmap profile="fm25_menuHeaderIcon" position="9px -5px" size="28px 28px" name="senderGlyph"/>
+                        <Text profile="fm25_cellLeft"   position="40px 0px"   size="90px 38px"  name="whenText"/>
+                        <Text profile="fm25_cellLeft"   position="130px 0px"  size="190px 38px" name="fromText"/>
+                        <Text profile="fm25_cellDetail" position="320px 0px"  size="786px 38px" name="messageText"/>
+                        <!-- C1: the chip sits BEHIND statusText (children paint
+                             in document order). 150x26 inside the 190px column
+                             leaves the text its own inset and keeps the row's
+                             1296px budget untouched - the chip is a
+                             BACKGROUND, not a new column. -->
+                        <Bitmap profile="fm25_statusChip" position="1106px -6px" size="150px 26px" name="statusChip"/>
+                        <Bitmap profile="fm25_statusChipFill" position="1108px -8px" size="146px 22px" name="statusChipFill"/>
+                        <Text profile="fm25_chipText" position="1106px 0px" size="190px 38px" name="statusText"/>
+                    </ListItem>
+                </SmoothList>
+
+                <!-- FULL-TEXT STRIP (chosen.html: "Text with textMaxNumLines
+                     above 1, which wraps"). The row above shows ONE line; this
+                     shows the selected message whole. Blank when nothing is
+                     selected — never the previous row's text. -->
+                <!-- M4 `.strip2{background:-tile;box-shadow:inset 0 0 0 2px -tileB;
+                     border-radius:8px;padding:18px 22px}`: the full-text strip is a
+                     CARD, the same ring as the tiles, not a rule over bare text. -->
+                <!-- M4 `.strip2` header (`.mhd`): the sender's glyph and name (`.bt`,
+                     flex 1), then `.when` and the `.chipS` status at the right edge,
+                     over the `.body.sm` text. The table gave up 60px (470 -> 410)
+                     to make room; the card grew 84 -> 140. Filled by
+                     selectMessage from the row's own severity lookup. -->
+                <Bitmap profile="fm25_cardBorder" position="28px -566px" size="1320px 140px" name="stripBorder"/>
+                <Bitmap profile="fm25_cardFill"   position="30px -568px" size="1316px 136px" name="stripFill"/>
+                <Bitmap profile="fm25_menuHeaderIcon" id="messageStripGlyph" position="50px -586px" size="30px 30px"/>
+                <Text profile="fm25_stripFrom" id="messageStripFrom" position="92px -583px" size="924px 36px"/>
+                <Text profile="fm25_stripWhen" id="messageStripWhen" position="1036px -583px" size="120px 36px"/>
+                <Bitmap profile="fm25_statusChip" id="messageStripChip" position="1176px -588px" size="150px 26px"/>
+                <Bitmap profile="fm25_statusChipFill" position="1178px -590px" size="146px 22px"/>
+                <Text profile="fm25_chipText" id="messageStripStatus" position="1176px -582px" size="150px 38px"/>
+                <Text profile="fm25_stripBody" id="messageStripText" position="50px -628px" size="1276px 66px"
+                      textMaxNumLines="3"/>
+
+                <!-- LEGEND (chosen.html: "4 Bitmaps tinted cards.*.accent +
+                     Text"). Tinted in Lua from the same THEME.cards entries the
+                     row bars use, so the legend cannot teach a colour the rows
+                     do not draw. -->
+                <GuiElement profile="fm25_headerBox" id="msgLegendBox" position="28px -712px" size="1320px 26px">
+                    <Bitmap profile="fm25_barFill" position="0px -6px"   size="14px 14px" name="lgOk"/>
+                    <Text profile="fm25_legendLabel" position="20px 0px"   size="140px 26px" text="$l10n_fm25_severity_ok"/>
+                    <Bitmap profile="fm25_barFill" position="170px -6px" size="14px 14px" name="lgInfo"/>
+                    <Text profile="fm25_legendLabel" position="190px 0px"  size="140px 26px" text="$l10n_fm25_severity_info"/>
+                    <Bitmap profile="fm25_barFill" position="340px -6px" size="14px 14px" name="lgWarn"/>
+                    <Text profile="fm25_legendLabel" position="360px 0px"  size="140px 26px" text="$l10n_fm25_severity_warn"/>
+                    <Bitmap profile="fm25_barFill" position="510px -6px" size="14px 14px" name="lgCritical"/>
+                    <Text profile="fm25_legendLabel" position="530px 0px"  size="140px 26px" text="$l10n_fm25_severity_critical"/>
+                </GuiElement>
+
+                <ThreePartBitmap profile="fm25_listSliderBox" position="1372px -150px" size="24px 410px">
+                    <Slider profile="fm25_listSlider" dataElementId="messageTable" />
+                </ThreePartBitmap>
+
+                <!-- Empty state (owner ruling 2026-09-03). Four column headers
+                     drawn over nothing at all read as a broken page, not as an
+                     empty log. updateMessages() shows this line when the log
+                     has no rows and hides it as soon as it has any, so it can
+                     never sit over real content.
+                     The text is a static $l10n_ reference rather than a
+                     getText() call from Lua on purpose: the l10n parity gate
+                     scans this file for $l10n_ keys and checks them against all
+                     five translations, so writing it here puts the key under
+                     that gate. A key set from Lua is not covered by it. -->
+                <Bitmap profile="fm25_rule" position="28px -742px" size="1320px 2px"/>
+                <!-- FOOTER-2 (.fo): TOTAL in its own dim label, the figures after it. -->
+                <Text profile="fm25_footerLabel" id="messagesFooterLabel" position="28px -748px" size="1320px 28px"/>
+                <Text profile="fm25_footerText" id="messagesFooterText" position="28px -748px" size="1320px 28px"/>
+
+                <!-- EMPTY-3 (the owner's pick, [[DEC-194]]). The plain line is
+                     wrapped in an info card: background Bitmap + 2px border +
+                     the report glyph, tinted from THEME.cards.info.
+                     ⛔ THE TEXT ELEMENT AND ITS id ARE UNCHANGED, and that is
+                     deliberate: it keeps its static $l10n_ reference, so the
+                     l10n parity gate that scans this file still covers it. The
+                     CARD is what gets shown and hidden; the Text inside stays
+                     visible and is hidden by its parent.
+                     ⛔ NO NEW TEXT. chosen.html says so, and the wording of
+                     these lines was itself an owner ruling (DEC-194: the empty
+                     state names OUR gap or says the player owns none, and the
+                     two are different sentences). Restyling must not become an
+                     excuse to rewrite them. -->
+                <GuiElement profile="fm25_farmBox" id="messagesEmptyCard" visible="false"
+                            position="28px -130px" size="1320px 96px">
+                    <Bitmap profile="fm25_infoCardBorder" position="0px 0px" size="1320px 96px" name="ecBorder"/>
+                    <Bitmap profile="fm25_infoCardFill"   position="2px -2px" size="1316px 92px" name="ecFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="20px -20px" size="34px 34px" name="emptyGlyph"/>
+                    <Text profile="fm25_emptyText" id="messagesEmptyText"
+                          position="68px -20px" size="1224px 56px" text="$l10n_fm25_messages_empty"/>
+                </GuiElement>
+            </GuiElement>
+        </GuiElement>
+
+        <!-- TAB 2: SETTINGS -->
+        <GuiElement profile="fm25_tabContainer" id="tabContainer2" visible="false">
+            <GuiElement profile="fm25_panel" position="0px -10px" size="1500px 760px">
+                <!-- F3: the page background. FIRST child, so everything paints over it. -->
+                <Bitmap profile="fm25_pageBg" position="0px 0px" size="1500px 780px" name="pageBg"/>
+                <Text profile="fm25_sectionTitle" position="28px -24px" text="$l10n_fm25_tab_settings"/>
+
+                <!-- MASTER-DETAIL (chosen.html SETTINGS). 560 | 20 | 740
+                     across the same content width the other tabs use:
+                     28 + 560 + 20 + 740 = 1348.
+
+                     ⛔ THE ONLY OTHER SECTIONED LIST ON THE PAGE. Its three
+                     group headings come from getTitleForSectionHeader, and
+                     listSectionHeader below MUST name the ListItem whose
+                     name= matches, or the engine logs a warning and DROPS
+                     the headers silently (SmoothListElement.lua:379-382) —
+                     the settings would still list, just ungrouped. The inner
+                     Text MUST be name="title": the engine reads that
+                     attribute and only then calls back for the string
+                     (:911-914). tests/test_gui_xml_wiring.py gates both. -->
+                <GuiElement profile="fm25_prodListBlock" id="settingsListBlock" position="28px -78px" size="560px 660px">
+                    <SmoothList profile="fm25_messageList" id="settingsList" position="0px 0px" size="560px 660px"
+                                listSectionHeader="settingsGroupHeader"
+                                focusChangeTop="nil" focusChangeBottom="nil">
+                        <ListItem profile="fs25_subCategoryListSectionHeader" name="settingsGroupHeader" size="536px 40px">
+                            <Bitmap profile="fm25_sectionBar" position="4px -7px" size="6px 26px" name="sectionBar"/>
+                            <Bitmap profile="fm25_menuHeaderIcon" position="20px -9px" size="22px 22px" name="secGlyph"/>
+                            <Text profile="fm25_sectionHeaderTitle" name="title" position="52px 0px" size="484px 40px"/>
+                        </ListItem>
+                        <ListItem profile="fm25_settingsListItem" name="settingsRow" size="536px 40px">
+                            <Bitmap profile="fm25_rowSelFill" position="2px -2px" size="532px 36px" name="selFill"/>
+                            <Text profile="fm25_cellLeft"       position="0px 0px"   size="330px 40px" name="stName"/>
+                            <Text profile="fm25_cellLeftBright" position="330px 0px" size="206px 40px" name="stValue"/>
+                        </ListItem>
+                    </SmoothList>
+                    <ThreePartBitmap profile="fm25_listSliderBoxInline" position="0px 0px" size="24px 660px" with="anchorTopRight">
+                        <Slider profile="fm25_listSlider" dataElementId="settingsList"/>
+                    </ThreePartBitmap>
+                </GuiElement>
+
+                <!-- ⛔ CORRECTED (review M4): no bar. chosen.html SETTINGS "Detail
+                     (740 px): title Text + rule" - `.st2` then `.rule`. The rule
+                     below was ALREADY here; an earlier edit in this round claimed
+                     it was missing (it had checked the wrong lines) and added a
+                     duplicate on top of it, since removed. -->
+                <Text profile="fm25_sectionTitle" id="settingsDetailTitle" position="608px -78px" size="740px 32px"/>
+                <Bitmap profile="fm25_rule" position="608px -112px" size="740px 2px"/>
+                <Text profile="fm25_cellWrap" id="settingsHelpText" position="608px -196px" size="740px 66px"/>
+
+                <!-- C1 / chosen.html SETTINGS: "ALLOWED VALUES" + one chip per
+                     preset (row.texts). Below the help line, which is 66px
+                     tall from -196 (F1: moved from -170/84px, which sat 10px
+                     inside the stepper row at -124/56px once re-anchored). -->
+                <Text profile="fm25_columnHeader" id="settingsAllowedLabel" position="608px -266px"
+                      size="740px 24px" text="$l10n_fm25_settings_allowed"/>
+                <BoxLayout profile="fm25_allowedBox" id="settingsAllowedBox" position="608px -296px" size="740px 30px"/>
+
+                <!-- Template only, unlinked in initialize() and cloned once per
+                     allowed value. Same idiom as the two row templates below. -->
+                <GuiElement profile="fm25_farmBox" id="allowedChipTemplate" visible="false" size="104px 28px">
+                    <Bitmap profile="fm25_valueChip" position="0px 0px" size="104px 28px" name="chipBg"/>
+                    <Text profile="fm25_cellLeft" position="10px 0px" size="84px 28px" name="chipText"/>
+                </GuiElement>
+
+                <!-- The stepper for the SELECTED row lives here, in the detail
+                     pane, rather than one per list row (chosen.html SETTINGS).
+                     settingsBox is kept as its host so the existing
+                     buildSettingsRows / wireSettingsRow machinery still has
+                     somewhere to clone into while the detail pane is wired. -->
+                <BoxLayout profile="fm25_settingsBox" id="settingsBox" position="608px -124px" size="740px 56px"/>
+
+                <!-- Templates only. Unlinked in initialize() and cloned once per
+                     FarmManager25.SETTINGS_ROWS entry; never rendered as-is. -->
+                <!-- C1 / chosen.html STRIP-4: "a glyph in every tab". The stock
+                     tab prefab is the BASE GAME's and we cannot add a child to
+                     its XML, so one is cloned in at runtime instead.
+                     GuiElement:clone(parent) calls parent:addElement(ret)
+                     (fs25-lookup corpus 24afb18e, docs/script/GUI/GuiElement.md),
+                     which is the same template-clone idiom the SETTINGS rows
+                     below already use - not a new mechanism. -->
+                <!-- ⛔ H2 (review 2026-09-17): WAS 24px at 10,10 - ON TOP OF THE LABEL.
+                     chosen.html settles this and it was never open: `.tab{padding:
+                     0 20px;gap:8px}` with a 22x22 glyph INLINE BEFORE the label.
+                     So: 22px, 20px in, vertically centred in the 50px tab
+                     ((50-22)/2 = 14), and the LABEL moves right to clear it -
+                     see initialize(). The glyph never moves onto the text.
+                     ⚠ A Button draws its CHILDREN FIRST and its own label LAST
+                     (gameSource ButtonElement:draw, unless drawChildrenLast), so
+                     an overlap here is the label painting over the glyph, and
+                     the only fix is to move the label. -->
+                <Bitmap profile="fm25_menuHeaderIcon" id="tabGlyphTemplate" visible="false"
+                        position="20px -14px" size="22px 22px"/>
+                <!-- M4: the ACTIVE tab's 2px border. chosen.html `.tab.on{
+                     background:-tabOn; box-shadow:inset 0 0 0 2px -tabOnB}`.
+                     The stock background is tinted to the BORDER colour and this
+                     fill, inset 2px, is laid over it: what shows is a 2px ring.
+                     Resized per tab at runtime because tab widths differ. It is
+                     cloned BEFORE the glyph so the glyph paints over it, and the
+                     Button's own label paints last of all. -->
+                <Bitmap profile="fm25_cardFill" id="tabFillTemplate" visible="false"
+                        position="2px -2px" size="10px 10px"/>
+
+                <Bitmap profile="fm25_settingsRow" id="stepperRowTemplate" visible="false">
+                    <MultiTextOption profile="fm25_settingsStepper" name="stepperOption">
+                        <Text profile="fs25_multiTextOptionTooltip" name="stepperTooltip"/>
+                    </MultiTextOption>
+                    <Text profile="fm25_settingsLabel" name="stepperTitle"/>
+                </Bitmap>
+                <Button profile="fm25_settingButton" id="actionRowTemplate" visible="false"/>
+            </GuiElement>
+        </GuiElement>
+
+        <!-- TAB 3: FARM.
+             ⛔ SUPERSEDED 2026-09-03 by a later owner ruling. This block used to
+             read: "TAB 3: FARM and TAB 4: FIELDS are EMPTY SHELLS, deliberately.
+             Owner's option (a) ... No panel, no section title, no placeholder
+             row: anything drawn here would be content nobody specified, and a
+             placeholder that ships is a placeholder that gets believed."
+             That was true when written and is kept here as the record.
+             Two later rulings from the same owner retired it: FARM was given
+             real content (plan item 11), and on 2026-09-03 he asked for an
+             empty-state line on FIELDS and MESSAGES ("field and messages").
+             ⭐ The original reasoning still binds where it still applies: what
+             ships below is ONE honest line per empty tab, not invented content.
+             A placeholder that ships is still a placeholder that gets believed,
+             which is why the FIELDS line names our missing feature rather than
+             describing the player's farm.
+             They reuse fm25_tabContainer unchanged. switchTab() sets visibility
+             on both by id. -->
+        <GuiElement profile="fm25_tabContainer" id="tabContainer3" visible="false">
+            <GuiElement profile="fm25_panel" position="0px -10px" size="1500px 760px">
+                <!-- F3: the page background. FIRST child, so everything paints over it. -->
+                <Bitmap profile="fm25_pageBg" position="0px 0px" size="1500px 780px" name="pageBg"/>
+                <Text profile="fm25_sectionTitle" position="28px -24px" text="$l10n_fm25_tab_farm"/>
+                <!-- GUARD 7: the as-of stamp, stated ONCE here rather than
+                     repeated down 14 rows. Every row still carries its own
+                     LIVE / AS-OF word. -->
+                <Text profile="fm25_stampText" id="farmAsOfText" position="728px -24px" size="620px 32px"/>
+                <Bitmap profile="fm25_rule" position="28px -70px" size="1320px 2px"/>
+
+                <!-- THE FOUR HEADLINE TILES (chosen.html FARM-L2-B across the
+                     top of FARM-L3-B). Width is DERIVED, not chosen:
+                     (1320 content - 3 gaps x 20px) / 4 = 315px exactly.
+                     x = 28, 363, 698, 1033; each ends 315 later, the last at
+                     1348, which is the same right edge every other tab uses.
+                     Values come from the rows already fetched, never a second
+                     getFarmRows() call (chosen.html says so explicitly). -->
+                <GuiElement profile="fm25_farmBox" id="farmTile1" position="28px -84px"   size="315px 112px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="315px 112px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="311px 108px" name="tFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="16px -16px" size="34px 34px" name="tGlyph"/>
+                    <Text   profile="fm25_tileLabel"   position="60px -16px" size="239px 24px" name="tLabel"/>
+                    <Text   profile="fm25_tileValue" position="16px -54px" size="283px 38px" name="tValue"/>
+                    <Text   profile="fm25_freshFloat"     position="16px -92px" size="283px 18px" name="tFresh"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="farmTile2" position="363px -84px"  size="315px 112px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="315px 112px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="311px 108px" name="tFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="16px -16px" size="34px 34px" name="tGlyph"/>
+                    <Text   profile="fm25_tileLabel"   position="60px -16px" size="239px 24px" name="tLabel"/>
+                    <Text   profile="fm25_tileValue" position="16px -54px" size="283px 38px" name="tValue"/>
+                    <Text   profile="fm25_freshFloat"     position="16px -92px" size="283px 18px" name="tFresh"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="farmTile3" position="698px -84px"  size="315px 112px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="315px 112px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="311px 108px" name="tFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="16px -16px" size="34px 34px" name="tGlyph"/>
+                    <Text   profile="fm25_tileLabel"   position="60px -16px" size="239px 24px" name="tLabel"/>
+                    <Text   profile="fm25_tileValue" position="16px -54px" size="283px 38px" name="tValue"/>
+                    <Text   profile="fm25_freshFloat"     position="16px -92px" size="283px 18px" name="tFresh"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="farmTile4" position="1033px -84px" size="315px 112px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="315px 112px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="311px 108px" name="tFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="16px -16px" size="34px 34px" name="tGlyph"/>
+                    <Text   profile="fm25_tileLabel"   position="60px -16px" size="239px 24px" name="tLabel"/>
+                    <Text   profile="fm25_tileValue" position="16px -54px" size="283px 38px" name="tValue"/>
+                    <Text   profile="fm25_freshFloat"     position="16px -92px" size="283px 18px" name="tFresh"/>
+                </GuiElement>
+
+                <!-- MASTER-DETAIL, replacing the two static 650px columns
+                     farmBoxLeft / farmBoxRight (chosen.html FARM). Same
+                     370 | 20 | 930 geometry FIELDS and PRODUCTIONS already
+                     use, so all three master-detail tabs line up:
+                     28 + 370 + 20 + 930 = 1348.
+
+                     The four headline tiles sit above the split, which is why
+                     the list starts lower here than on FIELDS.
+
+                     ⛔ NO onSelectionChanged ATTRIBUTE. The engine never reads
+                     one; selection arrives only as
+                     delegate:onListSelectionChanged
+                     (SmoothListElement.lua:1937-1938), wired in Lua. See the
+                     longer note on fieldList. -->
+                <GuiElement profile="fm25_prodListBlock" id="farmMasterBlock" position="28px -212px" size="370px 522px">
+                    <SmoothList profile="fm25_messageList" id="farmMasterList" position="0px 0px" size="370px 522px"
+                                focusChangeTop="nil" focusChangeBottom="nil">
+                        <ListItem profile="fm25_farmListItem" size="346px 56px">
+                            <Bitmap profile="fm25_rowSelFill" position="2px -2px" size="342px 52px" name="selFill"/>
+                            <!-- ⛔ BUG-031: WAS size="34px 56px" - THE FULL ROW HEIGHT.
+                                 Every other row glyph on this page is square (MESSAGES
+                                 34x34, FIELDS and PRODUCTIONS 28x28); this one was drawn
+                                 to the row's full 56px, so it touched both row edges and
+                                 visually bridged the 2px listItemSpacing into its
+                                 neighbours. chosen.html FARM reads "glyph 34", which is
+                                 the COLUMN width, not the bitmap height.
+                                 34px square, centred in the 56px row: (56-34)/2 = 11. -->
+                            <Bitmap profile="fm25_menuHeaderIcon" position="0px -11px" size="34px 34px"  name="fmGlyph"/>
+                            <Text   profile="fm25_cellLeft"       position="34px 0px"  size="136px 56px" name="fmGroup"/>
+                            <Text   profile="fm25_cellRight"      position="170px 0px" size="176px 56px" name="fmHeadline"/>
+                        </ListItem>
+                    </SmoothList>
+                    <ThreePartBitmap profile="fm25_listSliderBoxInline" position="0px 0px" size="24px 522px" with="anchorTopRight">
+                        <Slider profile="fm25_listSlider" dataElementId="farmMasterList"/>
+                    </ThreePartBitmap>
+                </GuiElement>
+
+                <!-- M4: chosen.html FARM "Detail heading: SECTIONS-3 (6 px Bitmap
+                     tinted THEME.bar.fill + glyph + Text in cards.ok.accent)". The
+                     glyph is the SELECTED GROUP's (MONEY draws the finances glyph:
+                     its mask is byte-identical to the FARM tab's). Kept in the
+                     existing 34px band above the rule at -246, not chosen.html's
+                     40px, so the detail rows below do not move. -->
+                <Bitmap profile="fm25_sectionBar" position="422px -216px" size="6px 26px" name="farmDetailTitleBar"/>
+                <Bitmap profile="fm25_menuHeaderIcon" id="farmDetailGlyph" position="438px -218px" size="22px 22px"/>
+                <Text profile="fm25_secTitle" id="farmDetailTitle" position="470px -212px" size="878px 32px"/>
+                <Bitmap profile="fm25_rule" position="418px -246px" size="930px 2px"/>
+                <BoxLayout profile="fm25_farmBox" id="farmDetailBox" position="418px -256px" size="930px 478px"/>
+
+                <!-- Templates only. Unlinked in initialize() and cloned once per
+                     FarmManager25:getFarmRows() entry; never rendered as-is.
+                     Same unlink-then-clone mechanism as the SETTINGS rows.
+
+                     ⛔ BOTH TEMPLATES MUST DECLARE AN EXPLICIT WIDTH, and the row
+                     one did NOT until 2026-09-03. That omission is the whole of
+                     the "FARM page looks terrible" defect, and the mechanism is
+                     worth stating because it is invisible in this file alone:
+
+                       fm25_messageListItem carries `with="anchorTopStretchingX"`
+                       and NO width of its own (guiProfiles.xml: it sets <height>
+                       only). It was written for the MESSAGES tab, where the item
+                       is born inside the 1320px SmoothList it renders in, so
+                       stretching X gives the right answer for free.
+
+                       Here the template is born as a child of fm25_panel, which
+                       is 1500px wide (:139), and is then cloned into a 650px
+                       fm25_farmBox column. A BoxLayout NEVER RESIZES ITS
+                       CHILDREN — BoxLayoutElement:applyCellPositions calls
+                       setAnchor(0,0), setPivot(0,0) and setPosition() and reads
+                       cell.absSize without ever assigning it
+                       (gameSource.zip dataS/scripts/gui/elements/
+                       BoxLayoutElement.lua:407-429). It collapses the stretch
+                       anchor and positions what it is given.
+
+                       So each cloned row kept the PANEL's 1500px width inside a
+                       650px column: the left column drew to x=1528 and the right
+                       column, at x=698, drew to x=2198 — off the right edge of
+                       the screen, exactly as reported. The grey is this
+                       profile's own $preset_fs25_colorGrey background, and the
+                       "orphaned blocks" beside the 2nd and 3rd group headings
+                       are the gaps those 32px header rows leave in an otherwise
+                       continuous 1500px-wide grey slab.
+
+                     650px matches the column box (:151-152) AND the cells below
+                     (0+300, 300+200, 500+150 = 650). The header template already
+                     declared its own width and was never affected.
+                     ⚠ An explicit px size is also the fix that does NOT depend on
+                     the anchor internals: setAnchor/updateAnchorDeltas are C++
+                     natives with no readable body, so a width inherited from a
+                     trait cannot be reasoned about from source. A declared one
+                     can.
+
+                     ⛔ THE GENERAL RULE, CORRECTED 2026-09-03: it is NOT "a
+                     template that declares no width of its own is unsafe to
+                     clone." That is too narrow, and the SETTINGS tab proves it
+                     false — fm25_settingsRow/fm25_settingButton (guiProfiles.xml)
+                     DID declare a width, "100%", and still shipped rows 180px
+                     too wide (1500px resolved, cloned into settingsBox's 1320px).
+                     The actual mechanism: an element's size — explicit px, a bare
+                     %, or a stretch trait — is resolved EXACTLY ONCE, against
+                     whichever parent it has when GuiElement:resolveSizeString
+                     runs (called only from the two load paths, :307/:382 —
+                     never on clone or reparent). clone() then has addElement()
+                     put the new element under its target parent BEFORE
+                     copyAttributes() overwrites size/absSize/anchors with the
+                     template's already-resolved values (:476-480, :515, :555):
+                     nothing re-resolves against the new parent. A bare % is
+                     therefore equivalent to declaring none — both are frozen at
+                     first resolution. So ANY template declared under one
+                     container and cloned into a different one must declare an
+                     explicit px size matching the container it actually renders
+                     in; % and stretch traits are only safe for an element that
+                     is never reparented. fm25_settingsRow/fm25_settingButton
+                     declare an explicit px size for exactly this reason.
+                     ⚠ THE NUMBER IS 740px, NOT 1320px, AND IT MOVES WITH
+                     settingsBox (:252). It was 1320px until settingsBox was
+                     shrunk to 740px and the two templates were left behind;
+                     this sentence named the stale figure for three days. If
+                     settingsBox is resized again, both profiles follow it. -->
+                <Text profile="fm25_columnHeader" id="farmHeaderTemplate" visible="false" size="620px 32px"/>
+                <Bitmap profile="fm25_farmDetailRow" id="farmRowTemplate" visible="false" size="650px 42px">
+                    <Text profile="fm25_cellLeft"       position="0px 0px"   size="300px 42px" name="labelText"/>
+                    <Text profile="fm25_cellLeftBright" position="300px 0px" size="200px 42px" name="valueText"/>
+                    <Text profile="fm25_cellFresh"      position="500px 0px" size="150px 42px" name="freshText"/>
+                </Bitmap>
+            </GuiElement>
+        </GuiElement>
+        <!-- TAB 4: FIELDS. One line, deliberately: there is no core row spec
+             for fields, so there is nothing honest to render yet. Building
+             field content is Stage 4 and a real feature, not this change.
+             ⚠ The line names OUR missing feature, never the player's farm. It
+             does not say "no fields" because the player almost certainly HAS
+             fields; reporting our gap as their empty farm would be absence
+             dressed as data. See translation_en.xml beside fm25_fields_empty. -->
+        <!-- TAB 4: FIELDS (item C1/C2/C3/C5).
+             Geometry 370 | 20 | 930 across the same 1320px content width every
+             other tab uses: 28 + 370 + 20 + 930 = 1348.
+
+             ⛔ THE SLIDER GOES INSIDE THE LIST BLOCK, against our own MESSAGES
+             precedent. That list is 1320px at x=28 with its slider at x=1372,
+             i.e. 28 + 1320 + 24; copying the idiom for a 370px master list puts
+             the slider at x=398 — INSIDE the 20px gutter, which it overruns.
+             The fix is Distribution_Redux's own in-block idiom
+             (DistributionProductionsPage.xml:43-45). Cost, stated: usable master
+             row width is 346px, not 370, and every column below is measured
+             against 346. 96 + 86 + 64 + 100 = 346.
+
+             ⛔ NEITHER PANEL IS EVER RESIZED. The obvious master-detail — shrink
+             the list, reveal a pane — is ruled out: a SmoothList's cell template
+             and cloned cells freeze their geometry at load width, so row text
+             truncates to nothing while the row still paints. Both panels are
+             sized here, at authoring time.
+
+             ⛔ THE EMPTY-STATE LINE THAT WAS ALREADY HERE IS NOT DEAD CODE AND IS
+             NOT DELETED — it is the `unavailable` render, and it is kept. Its
+             wording deliberately does not say "no fields", because it names OUR
+             gap and never the player's farm. `fm25_fields_none` is the OTHER
+             case and is a new, separate line: a farm that genuinely owns none.
+             A single unlabelled empty array would have the honest gap line
+             render over a farm that owns 26 fields.
+
+             ⛔ FRESHNESS IS PER CELL, NOT PER ROW. A row carries four columns on
+             TWO transports — name/area/owned are FILE/AS-OF, the contract column
+             is LIVE — so a row-level badge would be a false claim about three of
+             its four cells. The three as-of columns sit under one stamp printed
+             once in the header; the contract cell carries LIVE in-cell. That
+             costs one label, not 104.
+
+             The detail panel is a BoxLayout of cloned rows, not a second
+             SmoothList: it is a short fixed list rebuilt per selection, which is
+             exactly the FARM tab's shape. ⛔ Its template declares an explicit
+             930px because it is authored under a 1500px panel and cloned into a
+             930px box — a size is resolved EXACTLY ONCE, against whichever
+             parent the element had at load, and clone() never re-resolves it. -->
+        <GuiElement profile="fm25_tabContainer" id="tabContainer4" visible="false">
+            <GuiElement profile="fm25_panel" position="0px -10px" size="1500px 760px">
+                <!-- F3: the page background. FIRST child, so everything paints over it. -->
+                <Bitmap profile="fm25_pageBg" position="0px 0px" size="1500px 780px" name="pageBg"/>
+                <Text profile="fm25_sectionTitle" position="28px -24px" text="$l10n_fm25_tab_fields"/>
+                <Text profile="fm25_stampText" id="fieldAsOfText" position="628px -24px" size="720px 32px"/>
+                <Bitmap profile="fm25_rule" position="28px -70px" size="1320px 2px"/>
+
+                <!-- SORT-2 clickable headers. Adapted from
+                     FS25_ProductionAdvisor/gui/ProductionAdvisorFrame.xml:56-68
+                     (a mod that ships and works, so the two sort-arrow
+                     profiles are evidence that those stock names resolve,
+                     not inference).
+                     ⛔ ONE HANDLER PER COLUMN, exactly as the reference does.
+                     `sendAction`, which dispatches a Button's onClick, is
+                     CALLED but never DEFINED in the 951-file gameSource subset,
+                     so what arguments reach the handler cannot be established
+                     from that corpus and a partial corpus's silence is not
+                     evidence. Rather than assume the element is passed and
+                     dispatch on identity the way the LISTS do, each column gets
+                     a thin named handler that calls the one shared
+                     onClickSortHeader(table, column). Six three-line functions
+                     against an unverifiable assumption is the right trade.
+                     ⛔ handleFocus="false" is copied deliberately: without it
+                     the headers join the focus ring and a controller user tabs
+                     through six labels to reach the list.
+                     The two arrow Bitmaps sit at the SAME position and are
+                     toggled by visibility; only one is ever shown, and neither
+                     is shown on a column that is not the active sort. -->
+                <GuiElement profile="fm25_headerBox" id="fieldsHeaderBox" position="28px -84px" size="370px 32px">
+                    <Button profile="fm25_columnHeaderSm"  id="fhName"  position="28px 0px"  size="80px 32px"
+                            text="$l10n_fm25_field_h_name" handleFocus="false" onClick="onClickSortFieldName">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="78px 0px" id="fhNameAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="78px 0px" id="fhNameDesc" visible="false"/>
+                    </Button>
+                    <Button profile="fm25_columnHeaderSmR" id="fhArea"  position="108px 0px" size="80px 32px"
+                            text="$l10n_fm25_field_h_area_short" handleFocus="false" onClick="onClickSortFieldArea">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="68px 0px" id="fhAreaAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="68px 0px" id="fhAreaDesc" visible="false"/>
+                    </Button>
+                    <Button profile="fm25_columnHeaderSm"  id="fhOwned" position="188px 0px" size="64px 32px"
+                            text="$l10n_fm25_field_h_owned" handleFocus="false" onClick="onClickSortFieldOwned">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="46px 0px" id="fhOwnedAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="46px 0px" id="fhOwnedDesc" visible="false"/>
+                    </Button>
+                    <Button profile="fm25_columnHeaderSm"  id="fhContract" position="252px 0px" size="94px 32px"
+                            text="$l10n_fm25_field_h_contract" handleFocus="false" onClick="onClickSortFieldContract">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="78px 0px" id="fhContractAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="78px 0px" id="fhContractDesc" visible="false"/>
+                    </Button>
+                </GuiElement>
+                <!-- ⛔ NO onSelectionChanged ATTRIBUTE HERE, AND NONE ON prodPointList.
+                     The engine never reads one: SmoothListElement:loadFromXML
+                     registers exactly #onScroll, #onDoubleClick, #onClick and
+                     #onPressed (gameSource.zip :137-140), and the string
+                     `onSelectionChanged` is in ZERO of the 951 engine Lua files.
+                     Selection reaches us ONLY as delegate:onListSelectionChanged
+                     (SmoothListElement.lua:1937-1938), wired in Lua by
+                     onGuiSetupFinished's setDelegate(self). An attribute here
+                     reads as the wiring and is not; that is exactly the bug
+                     that shipped a panel headed FIELD 6 beside a selected Field 35. -->
+                <GuiElement profile="fm25_prodListBlock" position="28px -124px" size="370px 610px">
+                    <SmoothList profile="fm25_messageList" id="fieldList" position="0px 0px" size="370px 610px"
+                                focusChangeTop="nil" focusChangeBottom="nil">
+                        <!-- glyph 28 | Field 80 | Area 80 | Owned 64 | Contract 94
+                             = 346, the usable master width. chosen.html
+                             rebalanced these from 80/74/60/104 precisely
+                             because the glyph column takes 28px. -->
+                        <ListItem profile="fm25_fieldListItem" size="346px 38px">
+                            <Bitmap profile="fm25_rowSelFill" position="2px -2px" size="342px 34px" name="selFill"/>
+                            <Bitmap profile="fm25_menuHeaderIcon" position="0px -5px" size="28px 28px" name="fGlyph"/>
+                            <Text profile="fm25_cellLeft"  position="28px 0px"  size="80px 38px"  name="fName"/>
+                            <Text profile="fm25_cellRight" position="108px 0px" size="80px 38px"  name="fArea"/>
+                            <Text profile="fm25_cellLeft"  position="188px 0px" size="64px 38px"  name="fOwned"/>
+                            <Text profile="fm25_cellLeftBright" position="252px 0px" size="94px 38px" name="fContract"/>
+                        </ListItem>
+                    </SmoothList>
+                    <ThreePartBitmap profile="fm25_listSliderBoxInline" position="0px 0px" size="24px 610px" with="anchorTopRight">
+                        <Slider profile="fm25_listSlider" dataElementId="fieldList"/>
+                    </ThreePartBitmap>
+                </GuiElement>
+
+                <!-- FOOTER-2. One line under the master list. The TEXT is
+                     assembled in Lua from the counts buildFieldsFooter
+                     returns; no count is written into the XML, and none is
+                     baked into an l10n string either. -->
+                <Bitmap profile="fm25_rule" position="28px -736px" size="370px 2px"/>
+                <!-- FOOTER-2 (.fo): TOTAL in its own dim label, the figures after it. -->
+                <Text profile="fm25_footerLabel" id="fieldsFooterLabel" position="28px -742px" size="370px 28px"/>
+                <Text profile="fm25_footerText" id="fieldsFooterText" position="28px -742px" size="370px 28px"/>
+
+                <!-- ⛔ CORRECTED (review M4): round 2 gave this heading a SECTIONS-3 bar.
+                     chosen.html FIELDS says "Detail title: atlas glyph + Text
+                     (fm25_sectionTitle metrics, larger) + crop name" - `.bt2`: the
+                     crop's own picture, then the title. No bar. -->
+                <!-- `.bt2`: 28px title. The picture is 32px, not chosen.html's 44px:
+                     the title band above the tiles is 34px tall (the rule sits at
+                     -118px), and a 44px picture would paint across the rule. -->
+                <Bitmap profile="fm25_menuHeaderIcon" id="fieldDetailGlyph" position="418px -84px" size="32px 32px"/>
+                <Text profile="fm25_detailTitleLarge" id="fieldDetailTitle" position="464px -84px" size="884px 32px"/>
+                <!-- DEC-214: the crop subtitle. Its x is set at runtime from the
+                     name's measured width (14px gap, chosen.html .bt2). -->
+                <Text profile="fm25_detailSubtitle" id="fieldDetailCrop" position="464px -84px" size="600px 32px"/>
+                <Bitmap profile="fm25_rule" position="418px -118px" size="930px 2px"/>
+                <!-- THE SIX FIELD TILES. chosen.html lays these out as
+                     `grid-template-columns: repeat(3, 1fr); gap: 12px`, i.e.
+                     TWO ROWS OF THREE — not one row of six. Width derived:
+                     (930 pane - 2 gaps x 12px) / 3 = 906 / 3 = 302px exactly.
+                     x = 418, 732, 1046. Rows at -128 and -232.
+                     ⚠ A single row of six would NOT divide: (930 - 5x20)/6 =
+                     138.33. That is where the "930 does not divide evenly"
+                     reading came from; against the grid the authority actually
+                     specifies there is no remainder and no choice to make.
+                     All six take the TALLER height so both rows are regular;
+                     the hint line is simply empty on the four without one. -->
+                <!-- DEC-215: all six figures use fm25_fieldTileValue (anchorTopLeft,
+                     chosen.html .tv2 28px). The one-tile R6 experiment is retired;
+                     read that profile's comment in guiProfiles.xml. -->
+                <GuiElement profile="fm25_farmBox" id="fieldTile1" position="418px -128px"  size="302px 96px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="302px 96px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="298px 92px" name="tFill"/>
+                    <Text profile="fm25_tileLabel"   position="14px -12px" size="274px 22px" name="tLabel"/>
+                    <Text profile="fm25_fieldTileValue" position="14px -38px" size="274px 36px" name="tValue"/>
+                    <Text profile="fm25_freshFloat"     position="14px -74px" size="274px 18px" name="tHint"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="fieldTile2" position="732px -128px"  size="302px 96px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="302px 96px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="298px 92px" name="tFill"/>
+                    <Text profile="fm25_tileLabel"   position="14px -12px" size="274px 22px" name="tLabel"/>
+                    <Text profile="fm25_fieldTileValue"  position="14px -38px" size="274px 36px" name="tValue"/>
+                    <Text profile="fm25_freshFloat"     position="14px -74px" size="274px 18px" name="tHint"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="fieldTile3" position="1046px -128px" size="302px 96px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="302px 96px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="298px 92px" name="tFill"/>
+                    <Text profile="fm25_tileLabel"   position="14px -12px" size="274px 22px" name="tLabel"/>
+                    <Text profile="fm25_fieldTileValue"  position="14px -38px" size="274px 36px" name="tValue"/>
+                    <Text profile="fm25_freshFloat"     position="14px -74px" size="274px 18px" name="tHint"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="fieldTile4" position="418px -232px"  size="302px 96px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="302px 96px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="298px 92px" name="tFill"/>
+                    <Text profile="fm25_tileLabel"   position="14px -12px" size="274px 22px" name="tLabel"/>
+                    <Text profile="fm25_fieldTileValue"  position="14px -38px" size="274px 36px" name="tValue"/>
+                    <Text profile="fm25_freshFloat"     position="14px -74px" size="274px 18px" name="tHint"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="fieldTile5" position="732px -232px"  size="302px 96px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="302px 96px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="298px 92px" name="tFill"/>
+                    <Text profile="fm25_tileLabel"   position="14px -12px" size="274px 22px" name="tLabel"/>
+                    <Text profile="fm25_fieldTileValue"  position="14px -38px" size="274px 36px" name="tValue"/>
+                    <Text profile="fm25_freshFloat"     position="14px -74px" size="274px 18px" name="tHint"/>
+                </GuiElement>
+                <GuiElement profile="fm25_farmBox" id="fieldTile6" position="1046px -232px" size="302px 96px">
+                    <Bitmap profile="fm25_cardBorder" position="0px 0px" size="302px 96px" name="tBorder"/>
+                    <Bitmap profile="fm25_cardFill"   position="2px -2px" size="298px 92px" name="tFill"/>
+                    <Text profile="fm25_tileLabel"   position="14px -12px" size="274px 22px" name="tLabel"/>
+                    <Text profile="fm25_fieldTileValue"  position="14px -38px" size="274px 36px" name="tValue"/>
+                    <Text profile="fm25_freshFloat"     position="14px -74px" size="274px 18px" name="tHint"/>
+                </GuiElement>
+
+                <!-- M4 `.ctr`: the contract BOX (-rowB), between the tiles and the
+                     rows - contract glyph (cards.info.accent), CONTRACT, the
+                     contract, LIVE. It was the last detail line. The rows below
+                     moved down 64px to make room (388 -> 324 tall). -->
+                <Bitmap profile="fm25_contractBox" id="fieldContractBox" position="418px -340px" size="930px 54px"/>
+                <Bitmap profile="fm25_menuHeaderIcon" id="fieldContractGlyph" position="434px -354px" size="26px 26px"/>
+                <Text profile="fm25_ctrLabel" id="fieldContractLabel" position="472px -340px" size="120px 54px"
+                      text="$l10n_fm25_field_h_contract"/>
+                <Text profile="fm25_ctrText" id="fieldContractText" position="592px -340px" size="620px 54px"/>
+                <Text profile="fm25_freshFloat" id="fieldContractFresh" position="1220px -340px" size="120px 54px"
+                      text="$l10n_fm25_farm_live"/>
+
+                <BoxLayout profile="fm25_farmBox" id="fieldDetailBox" position="418px -404px" size="930px 324px"/>
+
+                <Bitmap profile="fm25_fieldDetailRow" id="fieldDetailRowTemplate" visible="false" size="930px 40px">
+                    <Text profile="fm25_cellLeft"       position="0px 0px"   size="260px 40px" name="dLabel"/>
+                    <Text profile="fm25_cellLeftBright" position="260px 0px" size="670px 40px" name="dValue"/>
+                </Bitmap>
+
+                <!-- EMPTY-3 (the owner's pick, [[DEC-194]]). The plain line is
+                     wrapped in an info card: background Bitmap + 2px border +
+                     the report glyph, tinted from THEME.cards.info.
+                     ⛔ THE TEXT ELEMENT AND ITS id ARE UNCHANGED, and that is
+                     deliberate: it keeps its static $l10n_ reference, so the
+                     l10n parity gate that scans this file still covers it. The
+                     CARD is what gets shown and hidden; the Text inside stays
+                     visible and is hidden by its parent.
+                     ⛔ NO NEW TEXT. chosen.html says so, and the wording of
+                     these lines was itself an owner ruling (DEC-194: the empty
+                     state names OUR gap or says the player owns none, and the
+                     two are different sentences). Restyling must not become an
+                     excuse to rewrite them. -->
+                <GuiElement profile="fm25_farmBox" id="fieldsNoneCard" visible="false"
+                            position="28px -136px" size="1320px 96px">
+                    <Bitmap profile="fm25_infoCardBorder" position="0px 0px" size="1320px 96px" name="ecBorder"/>
+                    <Bitmap profile="fm25_infoCardFill"   position="2px -2px" size="1316px 92px" name="ecFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="20px -20px" size="34px 34px" name="emptyGlyph"/>
+                    <Text profile="fm25_emptyText" id="fieldsNoneText"
+                          position="68px -20px" size="1224px 56px" text="$l10n_fm25_fields_none"/>
+                </GuiElement>
+                <!-- EMPTY-3 (the owner's pick, [[DEC-194]]). The plain line is
+                     wrapped in an info card: background Bitmap + 2px border +
+                     the report glyph, tinted from THEME.cards.info.
+                     ⛔ THE TEXT ELEMENT AND ITS id ARE UNCHANGED, and that is
+                     deliberate: it keeps its static $l10n_ reference, so the
+                     l10n parity gate that scans this file still covers it. The
+                     CARD is what gets shown and hidden; the Text inside stays
+                     visible and is hidden by its parent.
+                     ⛔ NO NEW TEXT. chosen.html says so, and the wording of
+                     these lines was itself an owner ruling (DEC-194: the empty
+                     state names OUR gap or says the player owns none, and the
+                     two are different sentences). Restyling must not become an
+                     excuse to rewrite them. -->
+                <GuiElement profile="fm25_farmBox" id="fieldsEmptyCard" visible="false"
+                            position="28px -136px" size="1320px 96px">
+                    <Bitmap profile="fm25_infoCardBorder" position="0px 0px" size="1320px 96px" name="ecBorder"/>
+                    <Bitmap profile="fm25_infoCardFill"   position="2px -2px" size="1316px 92px" name="ecFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="20px -20px" size="34px 34px" name="emptyGlyph"/>
+                    <Text profile="fm25_emptyText" id="fieldsEmptyText"
+                          position="68px -20px" size="1224px 56px" text="$l10n_fm25_fields_empty"/>
+                </GuiElement>
+            </GuiElement>
+        </GuiElement>
+        <!-- TAB 5: PRODUCTIONS (SPEC Block D, D2/D3).
+             Two-panel master-detail, 370 | 20 | 930 across the same 1320px
+             content width every other tab uses (28 + 370 + 20 + 930 = 1348).
+             The sliders sit INSIDE their list blocks, so usable row widths are
+             346 (master) and 906 (detail).
+
+             ⛔ ADAPTED FROM FS25_Distribution_Redux gui/DistributionProductionsPage.xml
+             (read-only reference, verified shipping): the four-region
+             master-detail body — a 370px master beside three stacked detail
+             sections, each with its own header row and in-block slider
+             (:24-46, :49-67, :72-96). Widths rescaled 370/1090 -> 370/930 for
+             our 1320px budget.
+             ⛔ ITS TAB MECHANISM IS REFUSED. It is a standalone full-screen menu
+             with its own <Paging> holding six <FrameReference> children
+             (DistributionMenu.xml:5-12) — the two-registry split that froze our
+             load at 57%. Ours is spliced. PAGE BODY ONLY.
+             ⭐ ITS IN-BLOCK SLIDER IDIOM IS ADOPTED IN PLACE OF OUR OWN: the
+             MESSAGES slider sits OUTSIDE the list at x=1372, which cannot work
+             beside a 370px master list. It costs ~24px of row width.
+
+             ⛔ FIVE OF ITS TWELVE COLUMNS ARE NOT AVAILABLE TO US AND THE REASON
+             IS STRUCTURAL. Every /mo figure — RECEIVED, DISTR, STORED, SOLD —
+             comes from Distribution Redux's own persisted rolling 24-cycle ring
+             buffer, filled by its own hourly pass. We own no such history and
+             building one is a new persistent accumulator inside the game loop
+             with a save state of its own. Those four columns are DEFERRED and
+             named as deferred, never silently dropped. What replaces them is
+             RUNWAY — how long until this chain starves — which we already
+             compute and which is the figure this farm's manager thinks in.
+             OUTPUT METHOD is not here either: `delivery_modes` reads
+             status unknown_by_design, count 0 (this farm configures no direct
+             sale), so the column would read the same word on every row of every
+             point, and a column that cannot differ between rows is decoration.
+
+             ⛔ NO LIST ON THIS PAGE IS EVER RESIZED AT RUNTIME. A SmoothList's
+             cell template and its cloned cells freeze their geometry at load
+             width, so a resized list truncates its row text to nothing while the
+             bars still fill ([ModMixer] SwitchboardFrame.xml:101-106). Every
+             width below is authored, and every ListItem declares an explicit px
+             size rather than inheriting a % or a stretch trait — both are
+             resolved exactly once, against whichever parent the element had when
+             the GUI loaded, and are frozen through clone(). -->
+        <GuiElement profile="fm25_tabContainer" id="tabContainer5" visible="false">
+            <GuiElement profile="fm25_panel" position="0px -10px" size="1500px 760px">
+                <!-- F3: the page background. FIRST child, so everything paints over it. -->
+                <Bitmap profile="fm25_pageBg" position="0px 0px" size="1500px 780px" name="pageBg"/>
+                <Text profile="fm25_sectionTitle" position="28px -24px" text="$l10n_fm25_tab_productions"/>
+                <!-- ⛔ TWO STAMPS, NOT ONE. generatedAt covers every
+                     savegame-derived figure and defsAsOf every
+                     definition-derived one; they can differ by WEEKS. Rendering
+                     one would let month-old definition data borrow the
+                     freshness of a savegame read seconds ago. Set at runtime by
+                     refreshProductionData(); empty here so an unpopulated page
+                     shows no stamp rather than an invented one. -->
+                <Text profile="fm25_stampText" id="prodAsOfText" position="628px -24px" size="720px 32px"/>
+                <Bitmap profile="fm25_rule" position="28px -70px" size="1320px 2px"/>
+
+                <!-- ===== MASTER: one row per production POINT ===============
+                     ⛔ BUILT FROM production_points, NEVER FROM production_lines.
+                     A point with no configured line emits no line row and would
+                     VANISH: the farm owns 27 points and 4 of them carry no line
+                     (measured on the live save), one a base-game placeable
+                     reached by ordinary play. 246 + 100 = 346. -->
+                <GuiElement profile="fm25_headerBox" id="prodHeaderBox" position="28px -84px" size="370px 32px">
+                    <Button profile="fm25_columnHeaderSm"  id="phName"   position="0px 0px"   size="226px 32px"
+                            text="$l10n_fm25_prod_header_point" handleFocus="false" onClick="onClickSortProdName">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="208px 0px" id="phNameAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="208px 0px" id="phNameDesc" visible="false"/>
+                    </Button>
+                    <Button profile="fm25_columnHeaderSmR" id="phRunway" position="226px 0px" size="120px 32px"
+                            text="$l10n_fm25_prod_header_runway" handleFocus="false" onClick="onClickSortProdRunway">
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortAscending"  position="102px 0px" id="phRunwayAsc"  visible="false"/>
+                        <Bitmap profile="fs25_vehiclesHeaderIconSortDescending" position="102px 0px" id="phRunwayDesc" visible="false"/>
+                    </Button>
+                </GuiElement>
+                <GuiElement profile="fm25_prodListBlock" position="28px -124px" size="370px 610px">
+                    <SmoothList profile="fm25_messageList" id="prodPointList" position="0px 0px" size="370px 610px"
+                                focusChangeTop="nil" focusChangeBottom="nil">
+                        <!-- Production 226 | Runway 120 = 346. chosen.html
+                             rebalanced these from 246 / 100 so the sort arrow
+                             and the RUNWAY (H) header fit one column together;
+                             at 100px the arrow is the part that disappears. -->
+                        <ListItem profile="fm25_prodListItem" size="346px 38px">
+                            <Bitmap profile="fm25_rowSelFill" position="2px -2px" size="342px 34px" name="selFill"/>
+                            <Text profile="fm25_cellLeft"  position="0px 0px"   size="226px 38px" name="pointName"/>
+                            <Text profile="fm25_cellRight" position="226px 0px" size="120px 38px" name="pointRunway"/>
+                        </ListItem>
+                    </SmoothList>
+                    <ThreePartBitmap profile="fm25_listSliderBoxInline" position="0px 0px" size="24px 610px" with="anchorTopRight">
+                        <Slider profile="fm25_listSlider" dataElementId="prodPointList"/>
+                    </ThreePartBitmap>
+                </GuiElement>
+
+                <!-- ===== DETAIL 1: INPUTS. One row per fill type this point
+                     consumes. 240 + 160 + 130 + 130 + 246 = 906.
+                     ⛔ 26 of 56 input rows on the live save carry rate_status
+                     "ambiguous": one production_id resolves to several placeable
+                     definitions with different per-cycle amounts (furniturePlanks
+                     / PLANKS: 5 definitions, {14.0, 140.0} L/h, a 10x spread).
+                     Both are plausible burn rates, so a pick-one implementation
+                     ships a confidently wrong number no gate catches. BURN and
+                     RUNWAY render `unknown` there and NO BAR IS DRAWN. -->
+                <!-- ===== DETAIL 1: THE MERGED IN/OUT FILL-TYPE LIST.
+                     chosen.html PRODUCTIONS: "Inputs and outputs in ONE list
+                     (replaces prodInputList + prodOutputList): IN rows first,
+                     then OUT; new IN/OUT tag element".
+                     Columns sum to the usable 906px master width:
+                     28 + 212 + 80 + 150 + 140 + 140 + 156 = 906.
+
+                     ⛔ THE TAG COLUMN IS LOAD-BEARING, NOT DECORATION. Three
+                     columns carry two meanings each once the halves share a
+                     list: `rate` is burn L/h for an IN row and tank capacity
+                     for an OUT row, and `trail` is hours-left against
+                     percent-full. A reader who cannot tell the kinds apart is
+                     reading numbers whose units he cannot know. Do not remove
+                     it as redundant with the ordering: the list scrolls and the
+                     IN/OUT boundary leaves the screen.
+
+                     ⛔ THE TWO BAR RATIOS ARE NOT THE SAME QUANTITY. An input
+                     bar at 50% means half a week of stock; an output bar at 50%
+                     means the tank is half full. They share a column only
+                     because the tag disambiguates them.
+
+                     ⛔ AN UNKNOWN VALUE DRAWS NO TRACK AT ALL, and a measured
+                     zero draws an empty fill inside a visible one. A 0-width
+                     bar and an absent bar look identical, so they are separated
+                     in the data before they reach pixels. -->
+                <Bitmap profile="fm25_rule" position="28px -736px" size="370px 2px"/>
+                <!-- FOOTER-2 (.fo): TOTAL in its own dim label, the figures after it. -->
+                <Text profile="fm25_footerLabel" id="prodFooterLabel" position="28px -742px" size="370px 28px"/>
+                <Text profile="fm25_footerText" id="prodFooterText" position="28px -742px" size="370px 28px"/>
+
+                <!-- ⛔ P-8 / A-8: WHICH POINT THESE FIGURES BELONG TO. FARM and
+                     FIELDS both name their selection (farmDetailTitle,
+                     fieldDetailTitle); PRODUCTIONS showed a fill-type table and
+                     a lines table with nothing saying whose they were, so the
+                     pane read as the farm's totals rather than one building's.
+                     The whole detail column moved down 44px to open this band:
+                     the lists end at -718 inside a 760px panel, so the shift
+                     costs no list rows. -->
+                <!-- ⛔ CORRECTED (review M4): no bar. chosen.html PRODUCTIONS "Detail
+                     title: fm25_sectionTitle + fs25_lineSeparatorBottom". -->
+                <Text profile="fm25_sectionTitle" id="prodDetailTitle" position="418px -84px" size="930px 32px"/>
+                <Bitmap profile="fm25_rule" position="418px -118px" size="930px 2px"/>
+                <Text profile="fm25_columnHeader"  position="446px -128px" size="212px 32px" text="$l10n_fm25_prod_h_filltype"/>
+                <Text profile="fm25_columnHeaderR" position="738px -128px" size="150px 32px" text="$l10n_fm25_prod_header_held"/>
+                <Text profile="fm25_columnHeaderR" position="888px -128px" size="140px 32px" text="$l10n_fm25_prod_h_rate"/>
+                <Text profile="fm25_columnHeaderR" position="1028px -128px" size="140px 32px" text="$l10n_fm25_prod_h_trail"/>
+                <GuiElement profile="fm25_prodListBlock" position="418px -168px" size="930px 300px">
+                    <SmoothList profile="fm25_messageList" id="prodFillList" position="0px 0px" size="930px 300px"
+                                focusChangeTop="nil" focusChangeBottom="nil">
+                        <ListItem profile="fm25_prodFillListItem" size="906px 40px">
+                            <Bitmap profile="fm25_rowSelFill" position="2px -2px" size="902px 36px" name="selFill"/>
+                            <Bitmap profile="fm25_menuHeaderIcon" position="0px -6px"   size="28px 28px"  name="ftGlyph"/>
+                            <Text   profile="fm25_cellLeft"       position="28px 0px"   size="212px 40px" name="ftLabel"/>
+                            <Bitmap profile="fm25_tagPill"        position="236px -10px" size="52px 20px" name="ftTagBg"/>
+                            <Text   profile="fm25_tagText"        position="240px 0px"  size="80px 40px"  name="ftTag"/>
+                            <Text   profile="fm25_cellRight"      position="320px 0px"  size="150px 40px" name="ftHeld"/>
+                            <Text   profile="fm25_cellRight"      position="470px 0px"  size="140px 40px" name="ftRate"/>
+                            <Text   profile="fm25_cellRight"      position="610px 0px"  size="140px 40px" name="ftTrail"/>
+                            <ThreePartBitmap profile="fm25_barTrack" position="750px -13px" size="156px 14px" name="barTrack">
+                                <ThreePartBitmap profile="fm25_barFill" name="barFill"/>
+                            </ThreePartBitmap>
+                        </ListItem>
+                    </SmoothList>
+                    <ThreePartBitmap profile="fm25_listSliderBoxInline" position="0px 0px" size="24px 300px" with="anchorTopRight">
+                        <Slider profile="fm25_listSlider" dataElementId="prodFillList"/>
+                    </ThreePartBitmap>
+                </GuiElement>
+
+                <!-- ===== DETAIL 2: PRODUCTION LINES. 380 + 90 + 140 + 296 = 906.
+                     ⛔ ENABLED RENDERS On / Off, NEVER Running / Idle. `enabled`
+                     is read from placeables.xml and means "is this line switched
+                     on". Running/Idle means "is it producing right now", a
+                     DIFFERENT fact, and killed by owner ruling. -->
+                <Text profile="fm25_columnHeader"  position="418px -488px" size="380px 32px" text="$l10n_fm25_prod_header_lines"/>
+                <Text profile="fm25_columnHeader"  position="798px -488px" size="90px 32px"  text="$l10n_fm25_prod_header_enabled"/>
+                <Text profile="fm25_columnHeaderR" position="888px -488px" size="140px 32px" text="$l10n_fm25_prod_header_output"/>
+                <Text profile="fm25_columnHeader"  position="1052px -488px" size="296px 32px" text="$l10n_fm25_prod_header_limiting"/>
+                <GuiElement profile="fm25_prodListBlock" position="418px -528px" size="930px 190px">
+                    <SmoothList profile="fm25_messageList" id="prodLineList" position="0px 0px" size="930px 190px"
+                                focusChangeTop="nil" focusChangeBottom="nil">
+                        <ListItem profile="fm25_prodLineListItem" size="906px 38px">
+                            <Bitmap profile="fm25_rowSelFill" position="2px -2px" size="902px 34px" name="selFill"/>
+                            <Text profile="fm25_cellLeft"  position="0px 0px"   size="380px 38px" name="lnName"/>
+                            <Text profile="fm25_cellLeft"  position="380px 0px" size="90px 38px"  name="lnEnabled"/>
+                            <Text profile="fm25_cellRight" position="470px 0px" size="140px 38px" name="lnOutput"/>
+                            <Text profile="fm25_cellLeft"  position="610px 0px" size="296px 38px" name="lnLimiting"/>
+                        </ListItem>
+                    </SmoothList>
+                    <ThreePartBitmap profile="fm25_listSliderBoxInline" position="0px 0px" size="24px 190px" with="anchorTopRight">
+                        <Slider profile="fm25_listSlider" dataElementId="prodLineList"/>
+                    </ThreePartBitmap>
+                </GuiElement>
+                <!-- ⛔ TWO EMPTY STATES, NOT ONE, AND THEY ARE DIFFERENT FACTS.
+                     `fm25_productions_none` is a statement about the PLAYER'S
+                     FARM — he owns no production buildings, a real answer.
+                     `fm25_productions_unavailable` names OUR GAP — the document
+                     was never published, could not be read, or belongs to
+                     another savegame. Collapsing them would render "we could not
+                     ask" as "you have none", which is DEC-001 in the direction
+                     fm25_fields_empty was written to prevent.
+                     Both are static $l10n_ references rather than getText()
+                     calls so the l10n parity gate, which scans this file, covers
+                     them. refreshProductionData() shows at most one. -->
+                <!-- EMPTY-3 (the owner's pick, [[DEC-194]]). The plain line is
+                     wrapped in an info card: background Bitmap + 2px border +
+                     the report glyph, tinted from THEME.cards.info.
+                     ⛔ THE TEXT ELEMENT AND ITS id ARE UNCHANGED, and that is
+                     deliberate: it keeps its static $l10n_ reference, so the
+                     l10n parity gate that scans this file still covers it. The
+                     CARD is what gets shown and hidden; the Text inside stays
+                     visible and is hidden by its parent.
+                     ⛔ NO NEW TEXT. chosen.html says so, and the wording of
+                     these lines was itself an owner ruling (DEC-194: the empty
+                     state names OUR gap or says the player owns none, and the
+                     two are different sentences). Restyling must not become an
+                     excuse to rewrite them. -->
+                <GuiElement profile="fm25_farmBox" id="prodNoneCard" visible="false"
+                            position="28px -136px" size="1320px 96px">
+                    <Bitmap profile="fm25_infoCardBorder" position="0px 0px" size="1320px 96px" name="ecBorder"/>
+                    <Bitmap profile="fm25_infoCardFill"   position="2px -2px" size="1316px 92px" name="ecFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="20px -20px" size="34px 34px" name="emptyGlyph"/>
+                    <Text profile="fm25_emptyText" id="prodNoneText"
+                          position="68px -20px" size="1224px 56px" text="$l10n_fm25_productions_none"/>
+                </GuiElement>
+                <!-- EMPTY-3 (the owner's pick, [[DEC-194]]). The plain line is
+                     wrapped in an info card: background Bitmap + 2px border +
+                     the report glyph, tinted from THEME.cards.info.
+                     ⛔ THE TEXT ELEMENT AND ITS id ARE UNCHANGED, and that is
+                     deliberate: it keeps its static $l10n_ reference, so the
+                     l10n parity gate that scans this file still covers it. The
+                     CARD is what gets shown and hidden; the Text inside stays
+                     visible and is hidden by its parent.
+                     ⛔ NO NEW TEXT. chosen.html says so, and the wording of
+                     these lines was itself an owner ruling (DEC-194: the empty
+                     state names OUR gap or says the player owns none, and the
+                     two are different sentences). Restyling must not become an
+                     excuse to rewrite them. -->
+                <GuiElement profile="fm25_farmBox" id="prodUnavailableCard" visible="false"
+                            position="28px -136px" size="1320px 96px">
+                    <Bitmap profile="fm25_infoCardBorder" position="0px 0px" size="1320px 96px" name="ecBorder"/>
+                    <Bitmap profile="fm25_infoCardFill"   position="2px -2px" size="1316px 92px" name="ecFill"/>
+                    <Bitmap profile="fm25_menuHeaderIcon" position="20px -20px" size="34px 34px" name="emptyGlyph"/>
+                    <Text profile="fm25_emptyText" id="prodUnavailableText"
+                          position="68px -20px" size="1224px 56px" text="$l10n_fm25_productions_unavailable"/>
+                </GuiElement>
+            </GuiElement>
+        </GuiElement>
+    </GuiElement>
+</GUI>

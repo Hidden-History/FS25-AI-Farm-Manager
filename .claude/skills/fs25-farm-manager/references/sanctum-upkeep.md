@@ -20,11 +20,15 @@ never happened, as far as the farm's memory is concerned.
 
 ## Keeping it bounded — the upkeep tool
 
-`scripts/sanctum_maintain.py` is the parity/upkeep tool, taking the sanctum directory as a
-positional argument:
+`scripts/sanctum_maintain.py` is the parity/upkeep tool. It has **four** subcommands, and the
+positional argument is **not the same for all of them** — `check` takes a sanctum file *or* the
+sanctum directory; `reconcile` and `migrate` take the sanctum directory; `rotate` takes **one
+governed file** (or the journal directory), with the sanctum root passed separately as
+`--sanctum-dir`, which it needs to resolve that file's `archive_target`:
 
 ```bash
 python3 ".claude/skills/fs25-farm-manager/scripts/sanctum_maintain.py" check "<sanctum_dir>"
+python3 ".claude/skills/fs25-farm-manager/scripts/sanctum_maintain.py" rotate "<governed_file>" --sanctum-dir "<sanctum_dir>"
 ```
 
 `check` reports each file FRESH / STALE / UNVERIFIABLE — a shipped `cap_lines`/`cap_kb` is a
@@ -36,9 +40,16 @@ suits this farm, raise its own number in `config.json`'s `"cap_overrides"` and t
 `rotate` handles the mechanical cases automatically (the ledger's segment-and-retain, the
 journal's rolling window, a dossier's on-cap `## History` relocation).
 
-⛔ **`reconcile` and `rotate` are DRY RUN without `--apply`** — they report the plan and write
-nothing. Run them plain first to see what would happen; **pass `--apply` to actually write it**.
-Running `reconcile`/`rotate` without `--apply`, then reporting the rotation as done, writes
+`migrate` is the **whole-sanctum, versioned** one, and is not a synonym for `reconcile`: it
+applies the pending *structural* migrations this build knows about, tracked by a
+`sanctum_schema_version` marker in `config.json` rather than per-file template shape. It is
+**forward-only** — a marker ahead of the newest migration this skill knows means the sanctum was
+written by a newer farm-manager, so it applies nothing, wipes nothing and says so. With nothing
+pending it reports `up_to_date` and is a safe no-op. Every write is backed up first.
+
+⛔ **`reconcile`, `rotate` and `migrate` are DRY RUN without `--apply`** — they report the plan
+and write nothing. Run them plain first to see what would happen; **pass `--apply` to actually
+write it**. Running one without `--apply`, then reporting the rotation as done, writes
 nothing — and `check` will keep reporting the same thing next time (STALE for a structural gap,
 the same `warning` for an over-cap file), which reads as "rotation is broken" when the real cause
 is that it was never told to apply.
@@ -55,20 +66,21 @@ the signal; the template tells you how.
 | File | When it changes |
 |---|---|
 | `history/closeout-latest.md` | **Every closeout** — overwritten with the new closeout. This is what next session reads. |
-| `history/friction-log.md` | **Every closeout — APPENDED, never overwritten.** Every issue, error, and friction: your own analysis errors, script bugs, silent wrong answers, missing tooling, portable docs asserting farm-specific facts, and anything the player had to tell you twice. See `templates/friction-log.md`. **This is not a duplicate of the closeout's "What didn't work"** — that section is per-session and gets overwritten; this is the standing defect list that accumulates until things are actually fixed. The skill cites friction IDs (`F-001`, `F-010`, `F-023`…) as load-bearing evidence; those citations are worthless if no log exists. |
+| `history/friction-log.md` | **Every closeout — APPENDED, never overwritten.** Every issue, error, and friction: your own analysis errors, script bugs, silent wrong answers, missing tooling, portable docs asserting farm-specific facts, and anything the player had to tell you twice. See `templates/friction-log.md`. **This is not a duplicate of the closeout's "What didn't work"** — that section is per-session and gets overwritten; this is the standing defect list that accumulates until things are actually fixed. The skill's rules rest on logged frictions as load-bearing evidence; that evidence is worthless if no log exists. |
 | `history/journal/{{date}}-session-{{n}}.md` | **Every closeout** — a new archive entry, same content as above. Archive is history; `history/closeout-latest.md` is the handoff. Writing only one of the two silently breaks one of them. |
 | `history/journal/INDEX.md` | **Every closeout — one row APPENDED**, never rewritten. Seeded empty by `init_sanctum.py` so the first closeout has an INDEX to append to. Mirrors `plans/INDEX.md`'s shape and cadence. |
 | `state/finances-ledger.md` | Row **appended at Session Start** (opening snapshot); closeout **completes that row's Notes**. **Never a second row** — see below. |
-| `state/field-dossiers/field-{id}.md` | Whenever a field's state materially changes or you learn something worth remembering. Create from `templates/field-dossier.md` if new. Verify at closeout. |
+| `state/field-dossiers/field-{id}.md` | Whenever a field's state materially changes or you learn something worth remembering. **A new dossier for an ordinary (unmerged) field is made by the script, never by hand:** run `python3 ".claude/skills/fs25-farm-manager/scripts/record_field_merges.py" sanctum/state/field-dossiers --config sanctum/config.json --single <id>` (it checks the id against the save, stamps the size line `Single field — not merged.`, and refuses until the merged-fields question has been answered); merged and planned fields are written only by `record_field_merges.py --merge/--planned`. Then write the note under `## Notes / quirks` — a dossier with no declared size line makes the FIELDS tab refuse to publish. Verify at closeout. |
 | `plans/PLAN.md` | Whenever the plan changes — the **Current focus** rewritten in place, or a **Standing directive** opened, touched, or closed (`templates/directive-entry.md` for a new entry). This is the farm's single living plan (it folds in what used to be `identity/directives.md`). Read at every briefing; updated and cross-verified against reality at every closeout (`closeout-steps/c3-close-plan.md`). |
 | `plans/sessions/{{date}}-session-{{n}}.md` | **Every closeout** — a new per-session plan record: what was decided, what changed in `plans/PLAN.md`, and the plan-vs-reality check. Created from `templates/plan-session.md`. |
 | `plans/INDEX.md` | **Every closeout — one row APPENDED**, never rewritten: date, session #, in-game season/day, the session-plan filename, and the session's headline decision. Mirrors `history/journal/INDEX.md`. |
+| `state/field-plan.md` | The next crop and plant window for each owned field. **Written only by `scripts/record_field_plan.py`** (never by hand), by duty D-02 each session and at onboarding; a changed crop or window resets the row to `Reviewed: no`, and the player's approval marks it `yes`. Format: `references/field-plan-format.md`. One row per canonical field id; current crop and harvest-by are not stored. |
 | `state/equipment-roster.md` | When equipment is bought, sold, repaired, or flagged for repair. Verify at closeout. |
 | `state/equipment-shopping-list.md` | When wanted iron changes, or you look up a price — **log the price** so the lookup is never repeated. |
 | `state/field-price-watchlist.md` | When a parcel becomes interesting, or you resolve its area/cost. |
 | `state/husbandry-roster.md` | When animals are added, sold, or moved, or a building's state materially changes. |
 | `state/production-roster.md` | When a chain is started, stopped, or its inputs/outputs change. |
-| `state/contracts.md` | **Only after a field-tied contract actually resolves** (F-025) — not a live offer board (`read_missions.py`/`farm_snapshot.py` answer that). A payout row lands once, on resolution; taken/skipped reasoning goes here too. Empty is correct for a farm with no resolved contract history. |
+| `state/contracts.md` | **Only after a field-tied contract actually resolves** — not a live offer board (`read_missions.py`/`farm_snapshot.py` answer that). A payout row lands once, on resolution; taken/skipped reasoning goes here too. Empty is correct for a farm with no resolved contract history. |
 | `state/storage-capability.md` | When a storage node is added/rebuilt, or a mod changes — durable structural fact (what a node can **accept**), not what it currently holds. Rows update in place. |
 | `state/crop-grace-periods.md` | Once per save, when the engine tick-timing and per-crop spoilage grace periods are actually resolved (read foliage XML, or an empirical one-day-advance test) — **not seeded with a guess**. Starts empty; `references/crop-calendar.md` flags this as an open question until resolved. ⛔ **This file gates fast-forward/spoilage advice** (`templates/crop-grace-periods.md`), and nothing currently prompts a session to populate it — an empty file reads as "never checked," and until a session deliberately resolves it, that's the honest state, not silence to work around. |
 | `state/husbandry-dossiers/{id}.md`, `state/production-dossiers/{id}.md` | Same rule as `field-dossiers/`: create on demand from `templates/husbandry-dossier.md` / `templates/production-dossier.md` the first time one is needed, one per building with animals/a running chain. Pre-created empty by `init_sanctum.py`; not seeded with per-entity files. |

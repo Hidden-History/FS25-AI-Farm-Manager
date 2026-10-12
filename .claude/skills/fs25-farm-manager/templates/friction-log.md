@@ -3,7 +3,7 @@ class: append-only-log
 load: B
 owns: "this farm's standing defect list — every analysis error, script bug, and friction, cumulative"
 # cap_lines/cap_kb: sized from ONE measured live session (494 ln / 38,152 B = 77.2 B/line,
-# Montana4X_Farm_Manager, session_count 1, 2026-08-15) -- growth rate across sessions is
+# the developer's own test farm, session_count 1, 2026-08-15) -- growth rate across sessions is
 # UNMEASURED, this is a judgement, not a derivation. cap_kb is set >= cap_lines x measured
 # B/line so the byte cap never silently binds ahead of the line cap.
 cap_lines: 1500

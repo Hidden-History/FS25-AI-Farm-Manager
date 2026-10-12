@@ -327,7 +327,7 @@ def main():
                 "120s while the game was running and saw NO write at all in that "
                 "window; separately, reads taken tens of minutes apart across the "
                 "same session showed money/playTime both advancing. CORRECTED "
-                "reading of that observation (FRICTION-LOG.md F-023): an earlier "
+                "reading of that observation: an earlier "
                 "version of this note took the 120s silence as evidence of a fixed "
                 "'autoSaveInterval cadence' governing when <settings> gets "
                 "rewritten. That's not how it works -- FS25 defers the save to the "
@@ -351,7 +351,7 @@ def main():
             "how often a save becomes DUE, not when it's written -- FS25 defers "
             "the actual write to the next time the player opens the map/menu, "
             "so a save can be arbitrarily older than the interval with nothing "
-            "wrong and nobody idle (confirmed 2026-07-16, FRICTION-LOG.md F-023, "
+            "wrong and nobody idle (confirmed 2026-07-16, "
             "after an earlier version of this note wrongly inferred 'the game is "
             "paused' from a long gap and stated it as fact -- don't repeat that: "
             "infer a cause for staleness only from independent evidence, never "
@@ -405,7 +405,7 @@ def main():
     else:
         output["_verbose_note"] = (
             "Full mod list (406 entries) and raw <settings> dump (51 keys) "
-            "omitted by default to keep output small (FRICTION-LOG.md F-006) "
+            "omitted by default to keep output small "
             "-- rerun with --verbose for both."
         )
 

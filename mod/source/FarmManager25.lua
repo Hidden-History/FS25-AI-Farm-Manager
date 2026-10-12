@@ -166,10 +166,39 @@ FarmManager25.SETTINGS_NAME   = "settings.xml"
 -- hand-edited power-user override that seeds defaults; state.xml is the live
 -- runtime store, so a user drag and a user file-edit never fight over one file.
 FarmManager25.STATE_NAME      = "state.xml"
+-- BUG: one install serves EVERY savegame, so a single card store showed save A's
+-- cards in save B (v3.0.0.0, found in a live test). The cards moved to a
+-- PER-SAVEGAME file; state.xml stayed exactly where it is and kept its <hud>
+-- element, because panel position/scale are a function of the MONITOR, not of a
+-- farm -- moving them would have made "drag the panel in one save, it resets in
+-- another" a new bug shipped by the fix. SPLIT, never moved: every existing
+-- player's panel settings survive the upgrade with no migration code.
+FarmManager25.CARDS_NAME      = "cards.xml"
 -- The reverse channel: an append log the skill reads + truncates on its next
 -- run. Many replies accrue between skill runs, so it is a log, not the
--- single-slot bridge notify.xml is.
+-- single-slot bridge notify.xml is. Per-savegame for the same reason the cards
+-- are: an ack for save A must not be ingested as save B's answer.
 FarmManager25.REPLIES_NAME    = "replies.xml"
+-- The FARM table Cyrus publishes for THIS savegame. ⛔ PERSISTENT: unlike
+-- notify.xml it is NEVER consumed-and-deleted -- see readFarmFile. Written by
+-- the Python half, read-only to Lua. Per-savegame for the same reason the
+-- cards are (BUG-027): money, land, contracts and fleet are properties of a
+-- SAVEGAME, not of the machine.
+FarmManager25.FARM_NAME       = "farm.xml"
+-- The document schema this reader understands. Must track SCHEMA_VERSION in
+-- emit_farm_xml.py; readFarmFile refuses a document stamped anything else
+-- rather than reading v2 semantics as though they were v1.
+FarmManager25.FARM_SCHEMA     = 1
+-- The LIVE contract rewards, written by THIS mod for the skill to read back
+-- (plan item 5a). It exists because the figure is absent from the savegame, not
+-- merely unparsed: AbstractMission:saveToXMLFile writes `.info#reward` from
+-- `self.reward`, which the game leaves at 0 while a field-tied contract is only
+-- OFFERED and computes at accept-time (FRICTION-LOG F-025). Same folder, same
+-- per-savegame reason (BUG-027) and the same direction of travel as replies.xml:
+-- Lua writes, Python reads. NEVER inside the savegame folder -- the published
+-- "100% read-only" promise holds by construction, because saveFolder is
+-- modSettings/<MOD>/<savegameKey>/ and nothing here composes any other path.
+FarmManager25.CONTRACTS_NAME  = "contracts.xml"
 FarmManager25.CHECK_INTERVAL_MS = 200      -- ~5x/sec: imperceptible, cheap
 FarmManager25.PROTOCOL          = 4
 FarmManager25.MAX_REPLIES       = 64       -- bound: a skill that never ingests must not grow the file forever
@@ -181,6 +210,44 @@ FarmManager25.MAX_ACTIONS       = 6        -- bound: <action> / <option> element
 -- rest), so this bounds MEMORY, not the screen -- and eviction is printed,
 -- because a silently vanished card is exactly the LT-5 failure.
 FarmManager25.MAX_STORE         = 16
+-- ⛔ RETENTION (TECH-DEBT-060). MAX_STORE bounds the LIVE stack; these bound the
+-- RETAINED TRANSCRIPT -- the cards that have LEFT the stack. This mod is the only
+-- component that ever holds a card's TEXT: writeReply records id/action/gameTime/
+-- realTime and nothing else, so before this the correlation id outlived the very
+-- question it referred to, and 49 live exchanges were unreconstructable
+-- afterwards. Retention is what makes an answered exchange readable later.
+--
+-- ⛔ THE SEPARATION THAT MATTERS: `retained` is a DIFFERENT TABLE from `stack`
+-- (see the declaration below). renderStack never reads it, so retaining 100
+-- cards puts ZERO extra cards on the player's HUD. That is the same distinction
+-- MAX_STORE's comment above already draws -- a store bound, not a screen bound --
+-- applied to history instead of to memory.
+FarmManager25.RETENTION_PRESETS = {0, 25, 50, 100, 200}
+FarmManager25.DEFAULT_RETENTION = 100
+-- Derived, never typed twice. storeBound() must cover the largest cap any
+-- stepper -- or a hand-edited settings.xml -- can select, and "two fields bearing
+-- one answer, only one of them checked" is this project's founding defect class.
+-- Computed from the presets, so it cannot disagree with them.
+FarmManager25.RETENTION_MAX = 0
+for _, v in ipairs(FarmManager25.RETENTION_PRESETS) do
+    if v > FarmManager25.RETENTION_MAX then
+        FarmManager25.RETENTION_MAX = v
+    end
+end
+-- The live cap (settings row 8). Clamped into [0, RETENTION_MAX] at every point
+-- it is set, which is what makes storeBound() a true upper bound on what
+-- saveCards can write.
+FarmManager25.retentionCap = FarmManager25.DEFAULT_RETENTION
+
+--- The ONE bound BOTH cards.xml paths use. saveCards writes at most MAX_STORE
+--  live + retentionCap (<= RETENTION_MAX) retained cards; loadCards reads at
+--  most this many back. ⛔ Deriving both ends from one function is what makes
+--  "the write cap and the read cap disagree, so cards vanish on restart"
+--  structurally impossible rather than merely tested for -- a defect that only
+--  appears after a reload is exactly the kind this project ships by accident.
+function FarmManager25.storeBound()
+    return FarmManager25.MAX_STORE + FarmManager25.RETENTION_MAX
+end
 FarmManager25.LINGER_MS         = 6000     -- a new card tops older ones up to at least this
 FarmManager25.MAX_LINES         = 6        -- bound: a panel must not swallow the screen
 FarmManager25.MAX_BODY_LINES    = 24       -- bound: how many <line> elements we will read
@@ -206,6 +273,16 @@ FarmManager25.DEFAULT_UI_SCALE  = 0.72
 -- (0.4-1.5); linger steps are the OFF-mode floor MIN_TTL_MS in ms.
 FarmManager25.SCALE_PRESETS     = {0.5, 0.6, 0.72, 0.85, 1.0, 1.25}
 FarmManager25.LINGER_PRESETS_MS = {10000, 15000, 30000, 60000}
+-- Steps for the four knobs loadSettings has ALWAYS honoured and no GUI ever
+-- exposed (hud#widthPx, hud#textSizePx, hud#bgAlpha -> cardAlpha, timing#maxMs).
+-- ⭐ ZERO NEW BEHAVIOUR: the code already reads all four -- players simply could
+-- not reach them without hand-editing settings.xml. Each list is centred on the
+-- live DESIGN default so the factory value is one of the steps and the stepper
+-- opens where the player already is.
+FarmManager25.WIDTH_PRESETS_PX    = {260, 300, 330, 380, 440, 520}
+FarmManager25.TEXTSIZE_PRESETS_PX = {11, 12, 13, 15, 17, 20}
+FarmManager25.ALPHA_PRESETS       = {0.5, 0.65, 0.8, 0.92, 1.0}
+FarmManager25.MAXTTL_PRESETS_MS   = {30000, 60000, 120000, 300000}
 
 -- Severity -> the NAME of the native constant to fall back to (names, not
 -- values: the constant is resolved at runtime so an engine that lacks WARNING
@@ -219,6 +296,28 @@ FarmManager25.SEVERITIES = {
     critical = { native = "CRITICAL", icon = "critical" },
 }
 FarmManager25.DEFAULT_SEVERITY = "info"
+-- Severity RANK (settings row 9, "minimum severity shown"). SEVERITIES above is a
+-- hash and therefore carries no order, so the ordering is stated once, here,
+-- beside it -- not re-derived at each call site. The two MUST cover the same
+-- keys; severityRank returns 0 for anything it does not know, and the render
+-- gate treats 0 as "always show" rather than "below the floor". A card we cannot
+-- rank must still be drawn, for the same reason buildNotification shows an
+-- unknown severity as info instead of swallowing the message.
+FarmManager25.SEVERITY_ORDER = {"ok", "info", "warn", "critical"}
+-- The live render floor. "ok" is rank 1, the bottom, so the factory default
+-- shows everything. ⛔ THIS GATES THE HUD ONLY -- getMessageLog returns every
+-- retained card regardless. A transcript that hides messages would rebuild the
+-- hole retention exists to fill.
+FarmManager25.minSeverity = "ok"
+
+function FarmManager25.severityRank(severity)
+    for i, key in ipairs(FarmManager25.SEVERITY_ORDER) do
+        if key == severity then
+            return i
+        end
+    end
+    return 0
+end
 
 -- Atlas regions, in atlas pixels. MIRRORS build_atlas.py -- change one, change
 -- both. The card is 3-sliced: caps keep their corner radius at any width, the
@@ -233,6 +332,12 @@ FarmManager25.DEFAULT_SEVERITY = "info"
 -- Non-square power-of-two is proven (Courseplay iconSprite.dds 256x512).
 FarmManager25.ATLAS_W    = 2048
 FarmManager25.ATLAS_H    = 1024
+-- The atlas file, mod-root-relative. ONE literal, because two would drift:
+-- the HUD resolves it at loadMap and setGlyph resolves it per glyph, and a
+-- rename that updated only one would leave the menu sampling a texture that
+-- no longer exists -- silently, because setImageFilename cannot report a
+-- missing file (GuiOverlay.createOverlay just leaves overlay.overlay unset).
+FarmManager25.ATLAS_FILE = "textures/fm25_atlas.dds"
 FarmManager25.CARD_PX    = 256
 FarmManager25.CARD_CAP   = 80
 FarmManager25.UV_CARD_L  = {0,   0, 80, 256}
@@ -348,14 +453,40 @@ FarmManager25.DESIGN = {
     uiScale        = FarmManager25.DEFAULT_UI_SCALE,
 }
 
+-- ⛔⛔ DEC-216 (owner ruling 2026-09-17, "Convert them to match"): timeColor,
+-- scrollTrackColor and scrollThumbColor are DISPLAY values and are converted
+-- like every THEME colour. (Review M2 had left them unconverted for want of
+-- provenance; the owner overruled that.)
+-- ⛔ CONVERTED AT THE POINT OF USE, NEVER AS A COPY OF DESIGN. The SETTINGS tab
+-- writes DESIGN at runtime; a converted snapshot would freeze the player's
+-- settings at load values. The blit() sink converts the dismiss glyph and the
+-- scrollbar; the two overflow lines are setTextColor calls, which bypass the
+-- sink, so each converts at its own call site.
+
 FarmManager25.filePath      = nil
 FarmManager25.timeSinceCheck = 0
 FarmManager25.queue         = {}
 FarmManager25.stack         = {}      -- live cards, OLDEST FIRST (top of screen)
+-- ⛔ THE TRANSCRIPT, and it is a DIFFERENT TABLE from `stack` ON PURPOSE
+-- (TECH-DEBT-060). Cards that LEAVE the stack -- evicted, OFF-mode expired,
+-- answered, dismissed, or wiped by the draw-failure latch -- land here instead
+-- of being destroyed. Also OLDEST FIRST, so its cap drops the oldest exactly the
+-- way MAX_STORE does.
+-- ⛔ renderStack NEVER reads this table, and that is the invariant to protect:
+-- retaining 100 cards must not put 100 cards on the player's HUD. If a future
+-- change makes renderStack walk `retained`, the separation is gone and history
+-- starts drawing itself onto the screen.
+FarmManager25.retained      = {}
 FarmManager25.overlaysOk    = false
 FarmManager25.useNativeOnly = false   -- set true and latched if drawing ever throws
 FarmManager25.atlasId       = nil
-FarmManager25.stateFolder   = nil     -- where state.xml lives; nil until loadMap
+FarmManager25.stateFolder   = nil     -- modSettings/<MOD>/ -- where state.xml (the HUD block) lives; nil until loadMap
+-- modSettings/<MOD>/<savegameKey>/ -- where THIS savegame's cards.xml,
+-- notify.xml and replies.xml live. nil when the savegame has no directory yet
+-- (a never-saved new game, or a multiplayer client on a remote host): that case
+-- SKIPS persistence entirely and must never fall back to stateFolder, which is
+-- exactly the shared file this scoping exists to eliminate.
+FarmManager25.saveFolder    = nil
 FarmManager25.headerRect    = nil     -- the drag handle's rect, recorded each drawn frame
 FarmManager25.dragOffset    = nil     -- nil = not dragging; else grab offset from the anchor
 -- The interactive layer (P2). affordanceRects mirrors headerRect's discipline:
@@ -371,7 +502,13 @@ FarmManager25.overlayOn         = true
 -- The reply bar's hit rect (LT-4). Same discipline as headerRect: recorded
 -- each drawn frame, nil on every path that does not draw.
 FarmManager25.inputBarRect      = nil
-FarmManager25.textReplySeq      = 0      -- uniquifies free-text reply ids within a session
+-- Uniquifies free-text reply ids within a session. ⛔ PERSISTED IN THE ROOT
+-- state.xml, NOT in the per-savegame file, and that is a CORRECTNESS rule, not
+-- a preference: the id is "text-<seq>" alone, so a counter that restarted per
+-- savegame would let two saves both emit "text-5" and the (id, action) dedup in
+-- writeReply would silently swallow the second message. Do not "tidy" this into
+-- cards.xml.
+FarmManager25.textReplySeq      = 0
 -- LT-8: the coalesced-persist flag. Any stack mutation (arrival, eviction,
 -- dismiss, answer, OFF-mode expiry) sets it; update() flushes state.xml once
 -- per tick, so state.xml always mirrors the live stack.
@@ -394,13 +531,10 @@ FarmManager25.scrollThumbRect   = nil
 FarmManager25.scrollDrag        = nil
 FarmManager25.scrollTravel      = 0
 FarmManager25.scrollRange       = 0
--- S158: the g_gui settings dialog. The controller instance is built once and
--- the XML registered in loadMap; settingsGuiLoaded latches true only when
--- g_gui:loadGui succeeded, so the settings keybind is a clean no-op when the
--- GUI framework is absent (a dedicated server, a headless test, or a failed
--- load) -- exactly the degrade discipline the rest of the mod uses.
-FarmManager25.settingsGui       = nil
-FarmManager25.settingsGuiLoaded = false
+-- (`settingsGui` and `settingsGuiLoaded` stood here. Both were the S158 modal's
+-- registration latch; deleting registerSettingsGui and repointing the keybind at
+-- the in-game menu orphaned them, so they went with it. The keybind no longer
+-- depends on anything having registered: the menu is the base game's own screen.)
 
 
 -- ---------------------------------------------------------------------------
@@ -582,6 +716,10 @@ function FarmManager25.buildNotification(severity, title, ttlRaw, bodyLines, ico
         -- Stamped on ARRIVAL, not on draw: the time the farm manager said it,
         -- which is what a transcript means. Nil if the clock is unreadable.
         stamp    = FarmManager25.gameClock(),
+        -- The DAY half of that same stamp, captured at the same moment so the
+        -- two can never disagree about when a card arrived. Nil when the day is
+        -- unreadable -- see gameDay(). MESSAGES groups on this.
+        day      = FarmManager25.gameDay(),
         lines    = nil,   -- wrapped lazily in draw, where getTextWidth is meaningful
         -- Protocol 4: drawCard renders an affordance row for these, and a
         -- click echoes the id into replies.xml (the correlation key).
@@ -719,6 +857,30 @@ function FarmManager25:loadSettings(folder)
         if minTtl  ~= nil then FarmManager25.MIN_TTL_MS  = minTtl end
         if maxTtl  ~= nil then FarmManager25.MAX_TTL_MS  = maxTtl end
         if perChar ~= nil then FarmManager25.MS_PER_CHAR = perChar end
+
+        -- TECH-DEBT-060: the transcript cap and the HUD severity floor are
+        -- seedable here like every other knob, so a power-user file keeps
+        -- working. The live store (state.xml, loaded AFTER this) still wins --
+        -- see loadState. Clamped into [0, RETENTION_MAX] so a hand-edited cap
+        -- can never exceed the bound loadCards reads back at.
+        local keep = getXMLFloat(xml, "farmManager25.messages#retain")
+        if keep ~= nil then
+            FarmManager25.retentionCap =
+                clamp(math.floor(keep), 0, FarmManager25.RETENTION_MAX)
+        end
+        local minSev = getXMLString(xml, "farmManager25.messages#minSeverity")
+        if minSev ~= nil then
+            if FarmManager25.severityRank(minSev) > 0 then
+                FarmManager25.minSeverity = minSev
+            else
+                -- Say so. An unrecognised severity NAME is a typo the player
+                -- would otherwise never find -- their filter would simply not
+                -- work, which reads as the mod ignoring them. Keeping the
+                -- default silently is how absence starts looking like data.
+                print("FarmManager25: settings.xml messages#minSeverity '"
+                    .. tostring(minSev) .. "' is not a known severity -- ignored")
+            end
+        end
         delete(xml)
     end)
     if not ok then
@@ -726,16 +888,21 @@ function FarmManager25:loadSettings(folder)
     end
 end
 
---- Load the mod-written client store. Runs AFTER loadSettings so the live
---  store (a position the player dragged to) wins over the hand-edited seed.
---  Same engine XML API and the same discipline as loadSettings: wrapped, and a
---  corrupt file costs the stored position/mode/cards, never the notifier.
+--- Load the mod-written client store -- the HUD block ONLY. Runs AFTER
+--  loadSettings so the live store (a position the player dragged to) wins over
+--  the hand-edited seed. Same engine XML API and the same discipline as
+--  loadSettings: wrapped, and a corrupt file costs the stored position/mode,
+--  never the notifier.
 --
---  S155 (LT-1/LT-8): the store also carries the overlay mode and EVERY
---  un-dismissed card (info AND action) -- an unanswered question, and now any
---  card the player has not cleared, must survive a relog. Counts are written
---  explicitly (#lineCount etc.) so an empty <line/> cannot silently truncate
---  the read (the pollBridge blank-line lesson, applied to our own file).
+--  `folder` is the ROOT modSettings/<MOD>/ folder, machine-global on purpose:
+--  panel position, scale and TTLs are a function of the monitor, not of a farm.
+--  The CARDS moved out to loadCards() and the per-savegame cards.xml.
+--
+--  The legacy <cards> element written by <= v3.0.0.0 lives in this same file and
+--  is now simply NEVER READ. That is the migration: those cards carry no
+--  savegame stamp, no map id and no farm id, so attributing them to whichever
+--  save loads first would stamp one farm's plans as another's -- a visible bug
+--  converted into an invisible one. They discard themselves.
 function FarmManager25:loadState(folder)
     local path = folder .. FarmManager25.STATE_NAME
     if not fileExists(path) then
@@ -771,9 +938,65 @@ function FarmManager25:loadState(folder)
         if minTtl ~= nil then FarmManager25.MIN_TTL_MS = minTtl end
         local maxTtl = getXMLFloat(xml, "farmManager25State.hud#maxTtlMs")
         if maxTtl ~= nil then FarmManager25.MAX_TTL_MS = maxTtl end
-        local count = getXMLFloat(xml, "farmManager25State.cards#count") or 0
-        for i = 0, math.min(count, FarmManager25.MAX_STORE) - 1 do
-            local key = string.format("farmManager25State.cards.card(%d)", i)
+        -- SETTINGS_ROWS 4/5/6: the three knobs loadSettings has always honoured
+        -- but no GUI could reach. Now that a menu row can change them they need
+        -- a LIVE store, exactly like uiScale above -- settings.xml stays the
+        -- hand-edited seed, state.xml (read after it) wins, so a menu change
+        -- survives a relog instead of being shadowed by the seed on next load.
+        local widthPx = getXMLFloat(xml, "farmManager25State.hud#widthPx")
+        if widthPx ~= nil then d.panelWidthPx = widthPx end
+        local textPx = getXMLFloat(xml, "farmManager25State.hud#textSizePx")
+        if textPx ~= nil then d.bodySizePx = textPx end
+        local alpha = getXMLFloat(xml, "farmManager25State.hud#cardAlpha")
+        if alpha ~= nil then d.cardAlpha = clamp(alpha, 0, 1) end
+        -- SETTINGS_ROWS 8/9. Clamped/validated on the way in for the same reason
+        -- loadSettings does it: state.xml is ours, but a corrupt one must not be
+        -- able to put retentionCap above the bound loadCards reads back at --
+        -- loadState runs BEFORE loadCards, so this value is already live there.
+        local keep = getXMLFloat(xml, "farmManager25State.messages#retain")
+        if keep ~= nil then
+            FarmManager25.retentionCap =
+                clamp(math.floor(keep), 0, FarmManager25.RETENTION_MAX)
+        end
+        local minSev = getXMLString(xml, "farmManager25State.messages#minSeverity")
+        if minSev ~= nil and FarmManager25.severityRank(minSev) > 0 then
+            FarmManager25.minSeverity = minSev
+        end
+        delete(xml)
+    end)
+    if not ok then
+        print("FarmManager25: state.xml unreadable, using defaults -- " .. tostring(err))
+    end
+end
+
+--- Load THIS SAVEGAME's un-dismissed cards. Split out of loadState so the card
+--  stack is per-savegame while the HUD block stays machine-global (see
+--  CARDS_NAME). `folder` is modSettings/<MOD>/<savegameKey>/ and is NEVER the
+--  root: the caller does not call this at all when the key is nil.
+--
+--  S155 (LT-1/LT-8): EVERY un-dismissed card (info AND action) survives a relog
+--  -- an unanswered question, and any card the player has not cleared. Counts
+--  are written explicitly (#lineCount etc.) so an empty <line/> cannot silently
+--  truncate the read (the pollBridge blank-line lesson, applied to our own file).
+--  Wrapped like loadState: a corrupt file costs the stored cards, never the
+--  notifier.
+function FarmManager25:loadCards(folder)
+    local path = folder .. FarmManager25.CARDS_NAME
+    if not fileExists(path) then
+        return
+    end
+    local ok, err = pcall(function()
+        local xml = loadXMLFile("FarmManager25Cards", path)
+        if xml == nil or xml == 0 then
+            return
+        end
+        local count = getXMLFloat(xml, "farmManager25Cards#count") or 0
+        -- ⛔ storeBound(), NOT MAX_STORE. Retention raised what saveCards writes;
+        -- a read cap left at MAX_STORE would silently truncate the transcript on
+        -- every restart -- a defect invisible until a reload. ONE function feeds
+        -- both ends so the two can never disagree (TECH-DEBT-060).
+        for i = 0, math.min(count, FarmManager25.storeBound()) - 1 do
+            local key = string.format("farmManager25Cards.card(%d)", i)
             local lines = {}
             for j = 0, (getXMLFloat(xml, key .. "#lineCount") or 0) - 1 do
                 table.insert(lines, getXMLString(xml, string.format("%s.line(%d)", key, j)) or "")
@@ -815,25 +1038,55 @@ function FarmManager25:loadState(folder)
                 if savedStamp ~= nil then
                     n.stamp = savedStamp
                 end
-                table.insert(self.stack, n)
+                -- Same rule as #stamp: the day the card was FIRST said wins
+                -- over the arrival re-stamp. Absent #day means the card was
+                -- written with a dead clock, or by a build older than this
+                -- field -- both restore as nil, which groups under EARLIER.
+                local savedDay = getXMLFloat(xml, key .. "#day")
+                if type(savedDay) == "number" then
+                    n.day = math.floor(savedDay)
+                else
+                    n.day = nil
+                end
+                -- TECH-DEBT-060: a card carries the status it LEFT the stack
+                -- with, and that status is what routes it on the way back in.
+                -- No #status at all means the card was live when it was written
+                -- -- which is also every card written by a pre-retention build,
+                -- so an old cards.xml restores exactly as it always did. The
+                -- transcript never reaches `stack`, so a restored log draws
+                -- nothing: the live/retained separation survives the round trip,
+                -- which is the half of the invariant a reload could break.
+                local status = getXMLString(xml, key .. "#status")
+                if status ~= nil and status ~= FarmManager25.STATUS_LIVE then
+                    n.status = status
+                    table.insert(self.retained, n)
+                else
+                    table.insert(self.stack, n)
+                end
             end
+        end
+        -- The cap can be LOWERED between sessions (settings row 8), so a file
+        -- written under a larger one is trimmed on the way IN, oldest first.
+        -- Trimming here rather than at the read bound above keeps that bound a
+        -- fixed structural constant no live setting can invalidate.
+        while #self.retained > FarmManager25.retentionCap do
+            table.remove(self.retained, 1)
         end
         delete(xml)
     end)
     if not ok then
-        print("FarmManager25: state.xml unreadable, using defaults -- " .. tostring(err))
+        print("FarmManager25: cards.xml unreadable, starting with no cards -- " .. tostring(err))
     end
 end
 
---- Write the client store. Called on drag-end, on mode toggle, on map exit,
---  and (LT-8) on any stack change via update()'s coalesced dirty-flush.
---  ContractBoost's modSettings write pattern: createXMLFile + setters +
---  saveXMLFile + delete (setXMLString on indexed paths: AutoDrive
---  RoutesManager.lua:220). Wrapped: a failed save costs persistence, nothing
---  else. EVERY card in the live stack is written (LT-8, supersedes O5's
---  action-only rule) -- state.xml mirrors the stack, so a dismissed/answered
---  card is gone and an un-dismissed info card survives a restart. Info cards
---  carry no id/actions: their minimal shape is severity/title/icon/stamp/lines.
+--- Write the client store -- the HUD block ONLY. Called on drag-end, on mode
+--  toggle and on map exit. ContractBoost's modSettings write pattern:
+--  createXMLFile + setters + saveXMLFile + delete. Wrapped: a failed save costs
+--  persistence, nothing else.
+--
+--  Writes to the ROOT modSettings/<MOD>/state.xml on every savegame, including
+--  the one with no savegame directory yet -- the panel position must not depend
+--  on which farm you happen to be in. The CARDS are in saveCards().
 function FarmManager25:saveState()
     if self.stateFolder == nil then
         return
@@ -855,50 +1108,223 @@ function FarmManager25:saveState()
         setXMLFloat(xml, "farmManager25State.hud#uiScale", d.uiScale)
         setXMLFloat(xml, "farmManager25State.hud#minTtlMs", FarmManager25.MIN_TTL_MS)
         setXMLFloat(xml, "farmManager25State.hud#maxTtlMs", FarmManager25.MAX_TTL_MS)
-        local i = 0
-        for _, n in ipairs(self.stack) do
-            local key = string.format("farmManager25State.cards.card(%d)", i)
-            setXMLString(xml, key .. "#severity", n.severity)
-            setXMLString(xml, key .. "#title", n.title)
-            setXMLString(xml, key .. "#icon", n.icon)
-            -- Info cards have no correlation id; write it only when present so
-            -- a restored info card round-trips as id=nil (a valid passive card).
-            if n.id ~= nil then
-                setXMLString(xml, key .. "#id", n.id)
-            end
-            if n.stamp ~= nil then
-                setXMLString(xml, key .. "#stamp", n.stamp)
-            end
-            local lines = FarmManager25.splitLines(n.body)
-            setXMLFloat(xml, key .. "#lineCount", #lines)
-            for j, line in ipairs(lines) do
-                setXMLString(xml, string.format("%s.line(%d)", key, j - 1), line)
-            end
-            setXMLFloat(xml, key .. "#actionCount", n.actions ~= nil and #n.actions or 0)
-            for k, action in ipairs(n.actions or {}) do
-                local akey = string.format("%s.action(%d)", key, k - 1)
-                setXMLString(xml, akey .. "#type", action.type)
-                local options = action.options or {}
-                setXMLFloat(xml, akey .. "#optionCount", #options)
-                for m, opt in ipairs(options) do
-                    local okey = string.format("%s.option(%d)", akey, m - 1)
-                    if opt.value ~= nil then
-                        setXMLString(xml, okey .. "#value", opt.value)
-                    end
-                    if opt.label ~= nil then
-                        setXMLString(xml, okey .. "#label", opt.label)
-                    end
-                end
-            end
-            i = i + 1
-        end
-        setXMLFloat(xml, "farmManager25State.cards#count", i)
+        -- SETTINGS_ROWS 4/5/6/8/9. Every settings row round-trips through this
+        -- file: a row the menu can change but the store does not carry would
+        -- revert on the next load, which is a defect that only shows up after a
+        -- restart -- the class this file already learned the hard way.
+        setXMLFloat(xml, "farmManager25State.hud#widthPx", d.panelWidthPx)
+        setXMLFloat(xml, "farmManager25State.hud#textSizePx", d.bodySizePx)
+        setXMLFloat(xml, "farmManager25State.hud#cardAlpha", d.cardAlpha)
+        setXMLFloat(xml, "farmManager25State.messages#retain",
+            FarmManager25.retentionCap)
+        setXMLString(xml, "farmManager25State.messages#minSeverity",
+            FarmManager25.minSeverity)
         saveXMLFile(xml)
         delete(xml)
     end)
     if not ok then
         print("FarmManager25: could not save state.xml -- " .. tostring(err))
     end
+end
+
+--- Write THIS SAVEGAME's card stack to modSettings/<MOD>/<savegameKey>/cards.xml.
+--  Called on map exit and (LT-8) on any stack change via update()'s coalesced
+--  dirty-flush. Same write idiom and the same pcall discipline as saveState.
+--
+--  EVERY card in the live stack is written (LT-8, supersedes O5's action-only
+--  rule) -- cards.xml mirrors the stack, so a dismissed/answered card is gone and
+--  an un-dismissed info card survives a restart. Info cards carry no id/actions:
+--  their minimal shape is severity/title/icon/stamp/lines.
+--
+--  ⛔ saveFolder nil (a never-saved new game, or a multiplayer client) means the
+--  savegame has no directory to scope to. We SKIP the write; we do NOT fall back
+--  to the root, because a shared card file is precisely the defect this split
+--  exists to remove. loadMap says so on the status line so the skip is visible.
+function FarmManager25:saveCards()
+    if self.saveFolder == nil then
+        return
+    end
+    local ok, err = pcall(function()
+        local xml = createXMLFile("FarmManager25Cards",
+            self.saveFolder .. FarmManager25.CARDS_NAME, "farmManager25Cards")
+        -- Live cards FIRST, then the transcript. ONE document, because they are
+        -- one savegame's history and a second file would be a second thing to
+        -- keep in sync; `#status` is what tells them apart again in loadCards.
+        -- Both tables are already bounded (MAX_STORE / retentionCap), so the
+        -- total can never exceed the storeBound() loadCards reads back.
+        local toWrite = {}
+        for _, n in ipairs(self.stack) do
+            toWrite[#toWrite + 1] = { card = n, status = FarmManager25.STATUS_LIVE }
+        end
+        for _, n in ipairs(self.retained) do
+            toWrite[#toWrite + 1] = { card = n, status = n.status }
+        end
+        local i = 0
+        for _, entry in ipairs(toWrite) do
+            local n = entry.card
+            -- The "no manager is set up for <save>" notice loadMap inserts is
+            -- recomputed every load, never stored: a self-restoring card is the
+            -- shape of the bug this file split exists to fix.
+            if not n.ephemeral then
+                local key = string.format("farmManager25Cards.card(%d)", i)
+                setXMLString(xml, key .. "#status", entry.status)
+                setXMLString(xml, key .. "#severity", n.severity)
+                setXMLString(xml, key .. "#title", n.title)
+                setXMLString(xml, key .. "#icon", n.icon)
+                -- Info cards have no correlation id; write it only when present so
+                -- a restored info card round-trips as id=nil (a valid passive card).
+                if n.id ~= nil then
+                    setXMLString(xml, key .. "#id", n.id)
+                end
+                if n.stamp ~= nil then
+                    setXMLString(xml, key .. "#stamp", n.stamp)
+                end
+                -- Written only when known, exactly like #stamp above. A card
+                -- saved with an unreadable day has no #day, and restores with
+                -- day = nil -- which the MESSAGES tab groups under EARLIER
+                -- rather than inventing one. Cards written by any build before
+                -- this field existed behave identically, so an old cards.xml
+                -- needs no migration.
+                if n.day ~= nil then
+                    setXMLFloat(xml, key .. "#day", n.day)
+                end
+                local lines = FarmManager25.splitLines(n.body)
+                setXMLFloat(xml, key .. "#lineCount", #lines)
+                for j, line in ipairs(lines) do
+                    setXMLString(xml, string.format("%s.line(%d)", key, j - 1), line)
+                end
+                setXMLFloat(xml, key .. "#actionCount", n.actions ~= nil and #n.actions or 0)
+                for k, action in ipairs(n.actions or {}) do
+                    local akey = string.format("%s.action(%d)", key, k - 1)
+                    setXMLString(xml, akey .. "#type", action.type)
+                    local options = action.options or {}
+                    setXMLFloat(xml, akey .. "#optionCount", #options)
+                    for m, opt in ipairs(options) do
+                        local okey = string.format("%s.option(%d)", akey, m - 1)
+                        if opt.value ~= nil then
+                            setXMLString(xml, okey .. "#value", opt.value)
+                        end
+                        if opt.label ~= nil then
+                            setXMLString(xml, okey .. "#label", opt.label)
+                        end
+                    end
+                end
+                i = i + 1
+            end
+        end
+        setXMLFloat(xml, "farmManager25Cards#count", i)
+        saveXMLFile(xml)
+        delete(xml)
+    end)
+    if not ok then
+        print("FarmManager25: could not save cards.xml -- " .. tostring(err))
+    end
+end
+
+
+--- Write the live contract rewards for THIS savegame. `rows` is an INPUT --
+--  FarmManager25.contractRows produced it -- so this whole function is headless
+--  and the engine stays on the other side of saveContracts below.
+--
+--  ⛔ THE GUARD IS THE SAME GUARD, AND IT IS DELIBERATE. saveFolder nil means a
+--  never-saved new game or a multiplayer client: there is no savegame directory
+--  to scope to, so we SKIP the write and do NOT fall back to the root. A shared
+--  contracts.xml would report one farm's payouts as another's -- the BUG-027
+--  class the card store was split to close.
+--
+--  Structure copied wholesale from saveCards (the guard, the pcall, the
+--  indexed-key setters, saveXMLFile/delete, and the error print that contains a
+--  failure instead of letting it reach the caller). A contracts write that threw
+--  out of a GUI-path callback would cost far more than a missing reward.
+function FarmManager25:writeContracts(rows)
+    if self.saveFolder == nil then
+        return false
+    end
+    local ok, err = pcall(function()
+        local xml = createXMLFile("FarmManager25Contracts",
+            self.saveFolder .. FarmManager25.CONTRACTS_NAME, "farmManager25Contracts")
+
+        -- Provenance, both halves of it. The savegame key is what lets the
+        -- reader REFUSE a file left behind by another save rather than merge it;
+        -- the stamp is how a reader can say how old the figure is instead of
+        -- implying it is current. getDate is wrapped exactly as writeReply
+        -- wraps it -- a missing clock costs the stamp, never the document.
+        local key = FarmManager25.savegameKey()
+        if key ~= nil then
+            setXMLString(xml, "farmManager25Contracts#savegame", key)
+        end
+        local okDate, stamp = pcall(function() return getDate("%Y-%m-%d %H:%M:%S") end)
+        if okDate and stamp ~= nil then
+            setXMLString(xml, "farmManager25Contracts#generatedAt", stamp)
+        end
+
+        local i = 0
+        for _, row in ipairs(rows or {}) do
+            if row.id ~= nil and row.reward ~= nil then
+                local k = string.format("farmManager25Contracts.contract(%d)", i)
+                setXMLString(xml, k .. "#uniqueId", row.id)
+                setXMLFloat(xml, k .. "#reward", row.reward)
+                i = i + 1
+            end
+        end
+        setXMLFloat(xml, "farmManager25Contracts#count", i)
+        saveXMLFile(xml)
+        delete(xml)
+    end)
+    if not ok then
+        print("FarmManager25: could not save contracts.xml -- " .. tostring(err))
+        return false
+    end
+    return true
+end
+
+
+--- THE ENGINE SEAM for the contract rewards, and the only part of item 5a a
+--  headless test cannot honestly gate.
+--
+--  ⛔ NOT STUBBED ANYWHERE. Acquiring the mission list is an engine call, so
+--  whether the figure it yields is the figure the player sees in the contract
+--  screen is settled by the owner's live test and by nothing in the suite. The
+--  two halves that CAN be gated -- the reduction (contractRows) and the write
+--  (writeContracts) -- are, and they are on the other side of this boundary.
+--
+--  ⚠ NOTHING IS WRITTEN WHEN THE ENGINE COULD NOT BE ASKED. `rows` stays nil on
+--  a missing global, a missing method or a throw, and a nil rows means no file
+--  -- never an empty document carrying a fresh timestamp, which would read as
+--  "asked, and there were none".
+function FarmManager25:saveContracts()
+    if self.saveFolder == nil then
+        return false
+    end
+
+    local rows = nil
+    local ok = pcall(function()
+        local farmId = nil
+        if g_currentMission ~= nil and g_currentMission.getFarmId ~= nil then
+            farmId = g_currentMission:getFarmId()
+        end
+        if farmId == nil or farmId == 0
+                or g_missionManager == nil
+                or g_missionManager.getMissionsByFarmId == nil then
+            return
+        end
+
+        local missions = g_missionManager:getMissionsByFarmId(farmId)
+        if type(missions) ~= "table" then
+            return
+        end
+        rows = FarmManager25.contractRows(missions)
+    end)
+
+    if not ok then
+        print("FarmManager25: a live contracts lookup failed -- no reward is "
+            .. "published this session, and the skill reports them as unknown")
+        return false
+    end
+    if rows == nil then
+        return false
+    end
+    return self:writeContracts(rows)
 end
 
 --- Append one reply to replies.xml. Returns true when the reply is recorded
@@ -914,10 +1340,13 @@ end
 --  only ever truncates-after-read, we only ever append -- a lost race
 --  re-reads a reply, and the (id, action) dedup keeps it from double-counting.
 function FarmManager25:writeReply(id, action, lines)
-    if self.stateFolder == nil then
+    -- saveFolder, not stateFolder: a reply belongs to ONE savegame. An unscoped
+    -- replies.xml was already leaking -- two un-ingested acks for one farm sat in
+    -- the root file waiting to be claimed as whichever farm ran the skill next.
+    if self.saveFolder == nil then
         return false
     end
-    local path = self.stateFolder .. FarmManager25.REPLIES_NAME
+    local path = self.saveFolder .. FarmManager25.REPLIES_NAME
     local ok, err = pcall(function()
         local entries = {}
         if fileExists(path) then
@@ -1130,9 +1559,11 @@ function FarmManager25:onToggleCursor()
 end
 
 -- ---------------------------------------------------------------------------
--- settings page (S158): the g_gui dialog's apply logic lives here as plain
--- methods on FarmManager25 so it is lupa-testable; the DialogElement
--- controller (FarmManagerSettingsGui.lua) is a thin shell that calls these.
+-- settings page: the apply logic lives here as plain methods on FarmManager25
+-- so it is lupa-testable, and SETTINGS_ROWS below publishes them as ordered data.
+-- The consumer is now the in-game menu page (gui/InGameMenuFarmManager25.lua);
+-- the S158 DialogElement controller that used to call these was retired in
+-- Stage 1 along with its modal.
 -- ---------------------------------------------------------------------------
 
 -- Index of the preset nearest to `current` (ties -> first). Backs the settings
@@ -1208,11 +1639,2239 @@ function FarmManager25:cfgResetPosition()
     self:saveState()
 end
 
---- Open the settings dialog (FM25_TOGGLE_SETTINGS, default Ctrl+Alt+Period).
---  Works on foot or in a vehicle -- no camera concern, it's a modal GUI. Same
---  guards as the other keys: nil-tolerant on g_gui, skipped while a menu
---  already owns the screen, and a clean no-op when the dialog never
---  registered (headless / load failure) so the key can never throw.
+--- Build a stepper's choice labels as L10N KEYS, one per preset.
+--
+--  ⛔ EVERY entry is a key -- never a display string, not even a bare numeral.
+--  An untranslated "ON"/"OFF" or a "60" that should read "60 s" in one language
+--  and "60 с" in another is the SAME defect as an untranslated row title, only
+--  smaller and easier to miss. "core hardcodes no user-visible text" has to
+--  cover choice labels or the invariant does not hold at all.
+--
+--  The key is DERIVED from the preset value (`prefix .. the number`), so the
+--  list and its keys cannot drift: add a preset and its key appears, with the
+--  translation files as the single place that then needs updating. `mul`
+--  converts the stored unit into the one the key is named for (ms -> s,
+--  0..1 -> percent), so the key reads as the player-facing quantity.
+local function stepKeys(prefix, list, mul)
+    local out = {}
+    for i, v in ipairs(list) do
+        out[i] = prefix .. string.format("%d", math.floor(v * (mul or 1) + 0.5))
+    end
+    return out
+end
+
+--- Severity stepper labels, DERIVED from SEVERITY_ORDER so the two can never
+--  fall out of step. Keys, not text -- the page resolves them.
+local function severityTexts()
+    local out = {}
+    for i, key in ipairs(FarmManager25.SEVERITY_ORDER) do
+        out[i] = "fm25_severity_" .. key
+    end
+    return out
+end
+
+--- Current index helpers for the knobs added here (the nearestIndex idiom the
+--  scale/linger steppers already use, so a hand-edited value that is not exactly
+--  a preset still opens the stepper somewhere sensible instead of at step 1).
+function FarmManager25:getWidthIndex()
+    return nearestIndex(FarmManager25.WIDTH_PRESETS_PX, FarmManager25.DESIGN.panelWidthPx)
+end
+
+function FarmManager25:getTextSizeIndex()
+    return nearestIndex(FarmManager25.TEXTSIZE_PRESETS_PX, FarmManager25.DESIGN.bodySizePx)
+end
+
+function FarmManager25:getAlphaIndex()
+    return nearestIndex(FarmManager25.ALPHA_PRESETS, FarmManager25.DESIGN.cardAlpha)
+end
+
+function FarmManager25:getMaxTtlIndex()
+    return nearestIndex(FarmManager25.MAXTTL_PRESETS_MS, FarmManager25.MAX_TTL_MS)
+end
+
+function FarmManager25:getRetentionIndex()
+    return nearestIndex(FarmManager25.RETENTION_PRESETS, FarmManager25.retentionCap)
+end
+
+--- The severity floor is an ORDERED enum, not a numeric preset, so its index IS
+--  its rank. An unknown stored value ranks 0; clamp to 1 ("show everything")
+--  rather than hand the stepper an out-of-range state.
+function FarmManager25:getMinSeverityIndex()
+    return math.max(1, FarmManager25.severityRank(FarmManager25.minSeverity))
+end
+
+--- Panel width and body text size are PRECOMPUTED in buildOverlays (the single
+--  px->normalized chokepoint), so changing either has no effect until geometry
+--  is rebuilt -- the same call cfgSetScaleIndex makes for exactly this reason.
+function FarmManager25:cfgSetWidthIndex(i)
+    local list = FarmManager25.WIDTH_PRESETS_PX
+    FarmManager25.DESIGN.panelWidthPx = list[wrapIndex(i, #list)]
+    self:buildOverlays()
+    self:saveState()
+end
+
+function FarmManager25:cfgSetTextSizeIndex(i)
+    local list = FarmManager25.TEXTSIZE_PRESETS_PX
+    FarmManager25.DESIGN.bodySizePx = list[wrapIndex(i, #list)]
+    self:buildOverlays()
+    self:saveState()
+end
+
+--- cardAlpha is multiplied in at DRAW time, not precomputed, so this one needs
+--  no geometry rebuild. ⚠ This is the knob whose settings.xml path once wrote to
+--  a `bgColor` key DESIGN never had (F-T101-1) -- indexing the nil threw inside
+--  loadSettings' pcall, so ANY settings.xml that set bgAlpha silently aborted the
+--  WHOLE settings load. Exposing it as a row retires the hand-edit that caused it.
+function FarmManager25:cfgSetAlphaIndex(i)
+    local list = FarmManager25.ALPHA_PRESETS
+    FarmManager25.DESIGN.cardAlpha = list[wrapIndex(i, #list)]
+    self:saveState()
+end
+
+--- The OFF-mode ceiling. Kept >= MIN_TTL_MS so buildNotification's clamp can
+--  never invert -- the mirror of cfgSetLingerIndex's guard on the floor.
+--  ⛔ timing#msPerChar is deliberately NOT a row: min and max already bound the
+--  duration meaningfully and a third interacting knob only confuses.
+function FarmManager25:cfgSetMaxTtlIndex(i)
+    local list = FarmManager25.MAXTTL_PRESETS_MS
+    FarmManager25.MAX_TTL_MS = list[wrapIndex(i, #list)]
+    if FarmManager25.MAX_TTL_MS < FarmManager25.MIN_TTL_MS then
+        FarmManager25.MAX_TTL_MS = FarmManager25.MIN_TTL_MS
+    end
+    self:saveState()
+end
+
+--- The transcript cap. Lowering it must take effect NOW, not at the next
+--  eviction: a player who cuts 200 to 25 has asked for the history to be that
+--  short. Trimmed oldest-first, then BOTH files are written -- state.xml carries
+--  the setting, cards.xml carries the transcript the setting just resized, and
+--  leaving the second unwritten would restore the trimmed cards on the next load.
+function FarmManager25:cfgSetRetentionIndex(i)
+    local list = FarmManager25.RETENTION_PRESETS
+    FarmManager25.retentionCap = list[wrapIndex(i, #list)]
+    while #self.retained > FarmManager25.retentionCap do
+        table.remove(self.retained, 1)
+    end
+    self:saveState()
+    self:saveCards()
+end
+
+--- The HUD severity floor. ⛔ RENDER ONLY -- nothing is deleted and nothing is
+--  hidden from getMessageLog. A card below the floor still arrives, still
+--  persists, still ages and still retains; alphaOf simply draws it at 0.
+function FarmManager25:cfgSetMinSeverityIndex(i)
+    local list = FarmManager25.SEVERITY_ORDER
+    FarmManager25.minSeverity = list[wrapIndex(i, #list)]
+    self:saveState()
+end
+
+--- ⛔ THE SETTINGS SEAM. Ten ordered rows, consumed by the in-game menu page.
+--  Shape: { key, kind = "stepper"|"action", l10nName, texts, getIndex, setIndex,
+--  invoke }. A stepper carries texts/getIndex/setIndex; an action carries invoke.
+--
+--  ⛔ NO USER-VISIBLE TEXT LIVES HERE, AND THERE IS NO EXCEPTION TO CHECK FOR.
+--  `l10nName` is an l10n key and EVERY entry of `texts` is an l10n key. The
+--  consumer resolves both the same way, unconditionally -- there is no "is this
+--  one already a display value?" branch, because a rule with an exception in it
+--  is a rule someone gets wrong. An earlier draft let numeric rows carry bare
+--  numerals; that made an untranslatable "60" indistinguishable from a
+--  translatable one, so it was retired.
+--
+--  Rows 1-3 and 10 are the three preferences and the Reset action the old modal
+--  dialog carried. Rows 4-7 are the knobs loadSettings ALREADY honours that no
+--  GUI has ever exposed -- zero new behaviour, only reachability. Rows 8-9 are
+--  what retention requires.
+--
+--  Every row round-trips: each setIndex/invoke ends in saveState (and saveCards
+--  where it changed the transcript), and loadState reads every one of them back.
+--- ⛔ `helpKey` IS A KEY, NOT PROSE. chosen.html SETTINGS asks for "a help
+--  text for each of the 10 settings"; the detail pane resolves this key and
+--  renders BLANK when a row has none. ⛔ It must never fall back to restating
+--  the title: a restated title reads as an explanation and teaches nothing,
+--  which is worse than an honest empty line.
+FarmManager25.SETTINGS_ROWS = {
+    { key = "overlay", kind = "stepper", l10nName = "fm25_setting_overlay", helpKey = "fm25_help_overlay",
+      texts = {"fm25_toggle_off", "fm25_toggle_on"},
+      getIndex = function(self) return FarmManager25.overlayOn and 2 or 1 end,
+      setIndex = function(self, i) self:setOverlayOn(wrapIndex(i, 2) == 2) end },
+
+    { key = "scale", kind = "stepper", l10nName = "fm25_setting_scale", helpKey = "fm25_help_scale",
+      texts = stepKeys("fm25_scale_", FarmManager25.SCALE_PRESETS, 100),
+      getIndex = function(self) return self:getScaleIndex() end,
+      setIndex = function(self, i) self:cfgSetScaleIndex(i) end },
+
+    { key = "width", kind = "stepper", l10nName = "fm25_setting_width", helpKey = "fm25_help_width",
+      texts = stepKeys("fm25_width_", FarmManager25.WIDTH_PRESETS_PX),
+      getIndex = function(self) return self:getWidthIndex() end,
+      setIndex = function(self, i) self:cfgSetWidthIndex(i) end },
+
+    { key = "textSize", kind = "stepper", l10nName = "fm25_setting_text_size", helpKey = "fm25_help_text_size",
+      texts = stepKeys("fm25_text_size_", FarmManager25.TEXTSIZE_PRESETS_PX),
+      getIndex = function(self) return self:getTextSizeIndex() end,
+      setIndex = function(self, i) self:cfgSetTextSizeIndex(i) end },
+
+    { key = "cardAlpha", kind = "stepper", l10nName = "fm25_setting_card_alpha", helpKey = "fm25_help_card_alpha",
+      texts = stepKeys("fm25_card_alpha_", FarmManager25.ALPHA_PRESETS, 100),
+      getIndex = function(self) return self:getAlphaIndex() end,
+      setIndex = function(self, i) self:cfgSetAlphaIndex(i) end },
+
+    { key = "linger", kind = "stepper", l10nName = "fm25_setting_linger", helpKey = "fm25_help_linger",
+      texts = stepKeys("fm25_linger_", FarmManager25.LINGER_PRESETS_MS, 0.001),
+      getIndex = function(self) return self:getLingerIndex() end,
+      setIndex = function(self, i) self:cfgSetLingerIndex(i) end },
+
+    { key = "maxTtl", kind = "stepper", l10nName = "fm25_setting_max_ttl", helpKey = "fm25_help_max_ttl",
+      texts = stepKeys("fm25_max_ttl_", FarmManager25.MAXTTL_PRESETS_MS, 0.001),
+      getIndex = function(self) return self:getMaxTtlIndex() end,
+      setIndex = function(self, i) self:cfgSetMaxTtlIndex(i) end },
+
+    { key = "retention", kind = "stepper", l10nName = "fm25_setting_retention", helpKey = "fm25_help_retention",
+      texts = stepKeys("fm25_retention_", FarmManager25.RETENTION_PRESETS),
+      getIndex = function(self) return self:getRetentionIndex() end,
+      setIndex = function(self, i) self:cfgSetRetentionIndex(i) end },
+
+    { key = "minSeverity", kind = "stepper", l10nName = "fm25_setting_min_severity", helpKey = "fm25_help_min_severity",
+      texts = severityTexts(),
+      getIndex = function(self) return self:getMinSeverityIndex() end,
+      setIndex = function(self, i) self:cfgSetMinSeverityIndex(i) end },
+
+    { key = "resetPosition", kind = "action", l10nName = "fm25_setting_reset_position", helpKey = "fm25_help_reset_position",
+      invoke = function(self) self:cfgResetPosition() end },
+}
+
+--- ⛔ THE MESSAGE LOG SEAM. Newest-first array of plain tables:
+--    { whenText, day, fromText, messageText, statusText, severity, answered }
+--
+--  ⛔ PLAIN DATA, ZERO ENGINE CALLS -- no g_i18n, no g_currentMission, no clock
+--  read. Safe to call from a page's onOpen at any time, including before loadMap
+--  has run. That is the contract, not an implementation detail: the consuming
+--  page is being built against it in parallel.
+--
+--  ⛔ `statusText` IS AN L10N KEY (the STATUS_* constants), not text -- the page
+--  resolves it. The rest is SENDER data and passes through raw: the card's own
+--  stamp, title and body, and the severity KEY. `whenText` is "" when the card
+--  was stamped with a dead clock -- an empty field the page can style, never a
+--  hardcoded English fallback sentence.
+--  ⛔ AND "THE PAGE CAN STYLE IT" IS AN OBLIGATION, NOT A PERMISSION. An empty
+--  whenText MUST render as the flagged unknown word, never as a blank cell: a
+--  blank reads as midnight, or as a column that failed to draw. The page shipped
+--  the blank until 2026-09-12; chosen.html:640 rules it and DEC-001 requires it.
+--  Regression test: tests/test_message_groups_seam.py.
+--  `day` follows the same rule in a different shape: nil, never 0.
+--
+--  LIVE CARDS ARE INCLUDED, tagged STATUS_LIVE: a log that omitted what is on
+--  screen would make the newest exchange the one you cannot read back.
+--  ⛔ NOTHING IS FILTERED BY minSeverity -- that is a HUD floor. A transcript
+--  that hid messages would rebuild the hole retention exists to fill.
+--
+--  ORDER, stated honestly: the live stack newest-first, THEN the transcript
+--  newest-first. It is NOT a strict global recency sort, and cannot be -- an
+--  action card never expires in OFF mode, so a newer info card can reach the
+--  transcript while an older question is still on screen. Live-then-history is
+--  the ordering; `stamp` is the field to sort on if a page wants otherwise.
+function FarmManager25:getMessageLog()
+    local log = {}
+    local function add(n, status)
+        log[#log + 1] = {
+            whenText    = n.stamp or "",
+            -- The DAY the card was said, or nil when it was never readable.
+            -- ⛔ NIL IS PUBLISHED AS NIL, never as 0 and never as "today": the
+            -- page has to be able to tell "I know the day" from "I cannot tell",
+            -- and a zero would be indistinguishable from a real day 0.
+            day         = n.day,
+            fromText    = n.title or "",
+            messageText = n.body or "",
+            statusText  = status,
+            severity    = n.severity,
+            -- Derived here, from the status, and NOWHERE else -- see retain().
+            answered    = (status == FarmManager25.STATUS_ANSWERED),
+        }
+    end
+    for i = #self.stack, 1, -1 do
+        add(self.stack[i], FarmManager25.STATUS_LIVE)
+    end
+    for i = #self.retained, 1, -1 do
+        add(self.retained[i], self.retained[i].status)
+    end
+    return log
+end
+
+-- ---------------------------------------------------------------------------
+-- THE FARM TABLE -- the FOURTH published seam (plan item 11).
+--
+-- Shape follows getMessageLog() above, deliberately: a METHOD that rebuilds its
+-- ordered array on every call, NOT a static table like SETTINGS_ROWS. That is
+-- not a style choice. Group A is LIVE money; a table built once at loadMap
+-- would freeze it and then label the stale figure "Live", which is exactly the
+-- guard-7 failure two frictions already caught (F-117, F-410).
+--
+-- ⛔ THE MENU MAKES NO ENGINE CALL FOR THIS. It calls getFarmRows() and renders
+-- what it gets (DEC-128 ②). Every engine read lives below, in core, where a
+-- failed lookup is CAUGHT and published as `unknown` rather than thrown from a
+-- GUI callback -- the position that produced the 57% load freeze.
+--
+-- ⛔ SPLIT ON PURPOSE: ASSEMBLY vs ACQUISITION.
+--   buildFarmRows()  -- PURE. Zero engine references. Takes a values table and
+--                       produces the ordered rows, applying guards 7 and 8.
+--                       This is what the headless lupa test drives, with no
+--                       g_* stub anywhere, and it is where a mutated ANSWER
+--                       must turn the suite red.
+--   readLiveValues() -- the engine boundary. Thin, total, guarded. Doctrine
+--                       says never stub the boundary under test, so this half
+--                       is gated by the OWNER'S LIVE TEST and by nothing else.
+-- Decision ②'s testability argument survives that split; stubbing g_* to fake
+-- a headless pass over the engine half would have destroyed it.
+-- ---------------------------------------------------------------------------
+
+--- Every FARM line, in render order. DATA, not code: `live` decides whether a
+--  row is read from the engine now or from farm.xml as-of the last skill run,
+--  so moving a whole group between transports is an edit to this table.
+--  Ids match the RESEARCH doc's A1..E4 so a row traces to its citation.
+--
+--  ⭐ TRANSPORT IS PER-GROUP, AND IT FOLLOWS THE EVIDENCE -- ruled 2026-09-02.
+--  A (money) and D (contracts) are LIVE; B, C and E cross in farm.xml.
+--  D is live because D is live-only: `read_missions.py` records that a
+--  field-tied contract's reward is "UNKNOWN, not zero -- computed by the game
+--  at accept-time and not written to the save while the contract is only
+--  offered" (FRICTION-LOG F-025, a defect we shipped once: reporting "$0"
+--  would talk the player out of the only work their fleet can do). There is no
+--  deadline field in the save either. Routing D through the file would have
+--  discarded the very real-body engine evidence that made it the strongest
+--  group and shipped it reading half `unknown`.
+FarmManager25.FARM_ROW_SPEC = {
+    { id = "a1", group = "a_money",       labelKey = "fm25_farm_a1_balance",     kind = "money", live = true  },
+    { id = "a2", group = "a_money",       labelKey = "fm25_farm_a2_loan",        kind = "money", live = true  },
+    { id = "a3", group = "a_money",       labelKey = "fm25_farm_a3_equity",      kind = "money", live = true  },
+    { id = "a4", group = "a_money",       labelKey = "fm25_farm_a4_interest",    kind = "money", live = true  },
+
+    { id = "b1", group = "b_land",        labelKey = "fm25_farm_b1_parcels",     kind = "count", live = false },
+    { id = "b2", group = "b_land",        labelKey = "fm25_farm_b2_area",        kind = "area",  live = false },
+    { id = "b3", group = "b_land",        labelKey = "fm25_farm_b3_value",       kind = "money", live = false },
+
+    { id = "c1", group = "c_productions", labelKey = "fm25_farm_c1_points",      kind = "count", live = false },
+    -- F7 (BUG-030 FARM): `refusal` is this row's STATIC refusal kind -- the key into the
+    -- menu's REFUSAL_TAG_KEYS. The producer's reason PROSE is never rendered; the row
+    -- publishes only WHICH kind of refusal explains its `unknown`, and only when the
+    -- document carried an <unknown> element for it. c2/c3 need a capacity the emitter
+    -- deliberately does not fetch; e4 needs a tank capacity the store-XML pass may not
+    -- resolve. Every one of them is a refused CAPACITY. Zero new strings ([[DEC-211]]).
+    { id = "c2", group = "c_productions", labelKey = "fm25_farm_c2_fill",        kind = "pct",   live = false, refusal = "capacity" },
+    { id = "c3", group = "c_productions", labelKey = "fm25_farm_c3_atcap",       kind = "count", live = false, refusal = "capacity" },
+
+    { id = "d1", group = "d_contracts",   labelKey = "fm25_farm_d1_active",      kind = "count", live = true  },
+    { id = "d2", group = "d_contracts",   labelKey = "fm25_farm_d2_reward",      kind = "money", live = true  },
+    { id = "d3", group = "d_contracts",   labelKey = "fm25_farm_d3_deadline",    kind = "mins",  live = true  },
+    { id = "d4", group = "d_contracts",   labelKey = "fm25_farm_d4_completion",  kind = "pct",   live = true  },
+
+    -- D-3 ([[DEC-222]]): "Vehicles owned" counted every pallet as a vehicle. THREE
+    -- rows, ONE value each (GUARD 9), in the order the owner named them. e1 keeps its id
+    -- and is now MACHINES; e5/e6 are new ids, placed here so the detail list reads
+    -- Machines, Pallets, Bales.
+    { id = "e1", group = "e_fleet",       labelKey = "fm25_farm_e1_vehicles",    kind = "count", live = false },
+    { id = "e5", group = "e_fleet",       labelKey = "fm25_farm_e5_pallets",     kind = "count", live = false },
+    { id = "e6", group = "e_fleet",       labelKey = "fm25_farm_e6_bales",       kind = "count", live = false },
+    { id = "e2", group = "e_fleet",       labelKey = "fm25_farm_e2_repair",      kind = "count", live = false },
+    { id = "e3", group = "e_fleet",       labelKey = "fm25_farm_e3_hours",       kind = "hours", live = false },
+    { id = "e4", group = "e_fleet",       labelKey = "fm25_farm_e4_fuel",        kind = "count", live = false, refusal = "capacity" },
+}
+
+FarmManager25.FARM_FRESH_LIVE = "live"
+FarmManager25.FARM_FRESH_ASOF = "asof"
+
+--- 1234567 -> "1,234,567". Written here rather than calling g_i18n:formatMoney
+--  because this half must run headlessly with no engine present, and because
+--  formatMoney is NOT in the fs25-lookup corpus (searched 2026-09-02) -- the
+--  menu already calls it guarded, on a shipped mod's evidence alone.
+--  ⚠ COST, stated not hidden: no locale currency symbol on FARM rows. That is
+--  a deliberate ship-then-polish trade; wiring formatMoney back in is a change
+--  to the menu's render, not to this contract.
+local function groupDigits(n)
+    local neg = n < 0
+    local s = string.format("%d", math.floor(math.abs(n) + 0.5))
+    local grouped = s:reverse():gsub("(%d%d%d)", "%1,")
+    local out = grouped:reverse()
+    if out:sub(1, 1) == "," then
+        out = out:sub(2)
+    end
+    return (neg and "-" or "") .. out
+end
+
+--- Minutes -> "3d 4h" / "5h 20m" / "45m". Whole units only; a deadline shown to
+--  the minute implies a precision the save file does not carry.
+local function formatMinutes(m)
+    m = math.floor(m + 0.5)
+    if m < 0 then m = 0 end
+    local d = math.floor(m / 1440)
+    local h = math.floor((m % 1440) / 60)
+    local mi = m % 60
+    if d > 0 then return string.format("%dd %dh", d, h) end
+    if h > 0 then return string.format("%dh %dm", h, mi) end
+    return string.format("%dm", mi)
+end
+
+--- Resolve one value into what the row publishes: (valueNumber, valueText).
+--
+--  ⭐ MONEY IS PUBLISHED AS A RAW NUMBER AND FORMATTED BY THE MENU. Ruled
+--  2026-09-02, and it is the same contract as labelKey: core publishes DATA,
+--  the menu owns PRESENTATION. The menu already formats money at
+--  InGameMenuFarmManager25.lua:503-506 -- `g_i18n:formatMoney(v, 0, true, true)`
+--  guarded, with a string.format fallback -- so reusing it costs no new code,
+--  keeps every engine call out of this assembler (which is what makes it
+--  stub-free and testable), and above all stops the header balance chip and the
+--  FARM money rows rendering the SAME figure in TWO different formats on one
+--  screen. That inconsistency class is exactly what this work removed elsewhere.
+--
+--  Non-money kinds are formatted here: they need no locale and no engine, so
+--  formatting them in core keeps the menu dumb and keeps the answer assertable.
+--
+--  ⛔ NEITHER RETURN IS EVER 0, "", or "-" FOR ABSENCE. 0 is a real balance a
+--  real farm can have; a real contract count can be 0 too. Absence returns
+--  (nil, nil) and the caller publishes `unknown`.
+local function resolveFarmValue(kind, v)
+    if type(v) ~= "number" then
+        return nil, nil
+    end
+    if v ~= v then          -- NaN never equals itself
+        return nil, nil
+    end
+    if kind == "money" then
+        return v, nil       -- the MENU formats this one
+    elseif kind == "count" or kind == "hours" then
+        return nil, groupDigits(v)
+    elseif kind == "area" then
+        return nil, string.format("%.1f", v)
+    elseif kind == "pct" then
+        return nil, string.format("%d%%", math.floor(v + 0.5))
+    elseif kind == "mins" then
+        return nil, formatMinutes(v)
+    end
+    return nil, nil
+end
+
+--- ⭐ THE PURE ASSEMBLER. No engine reference of any kind lives below this
+--  line and above its `end` -- that is what makes it lupa-testable without a
+--  single g_* stub, and it is deliberate.
+--
+--  GUARD 8: a value that is not a number publishes `unknown = true` and NO
+--  valueText. The menu renders the word. Never blank, never an em dash.
+--  GUARD 7: every row carries `freshness`, and an as-of row carries the stamp
+--  it is as of. A row can never be rendered without one.
+--  GUARD 9: this ALWAYS returns every row of FARM_ROW_SPEC (20 since D-3). A fresh farm
+--  with no data yet gets 20 honest `unknown`s, never a blank screen.
+--- ⛔ FRESHNESS MARKS RENDER A TIME ONLY -- owner ruling, 2026-09-06. Applied
+--  here rather than in the menu for the reason resolveFarmValue already gives
+--  one function up: money crosses the seam raw because it needs a LOCALE, and
+--  everything else is formatted in core because it needs neither a locale nor
+--  an engine. A stamp is the second kind, and formatting it here keeps the one
+--  answer a player reads about staleness inside the half a test can drive.
+--
+--  ⭐ ONE CALL, NO SECOND IMPLEMENTATION. stampText() is the same function the
+--  PRODUCTIONS tab uses; both consumers of this stamp (the FARM header and the
+--  header balance chip, which reads it off row a1) get it from the row, so
+--  neither menu site needed touching.
+--
+--  ⚠ `nowText` IS AN ARGUMENT, NOT A CLOCK READ. Reading the clock here would
+--  destroy the one property that makes this assembler gateable -- it is called
+--  with NO g_* stub anywhere. The engine read lives in getFarmRows(), the
+--  acquisition half, exactly as the split at the top of this section requires.
+--  nil is legitimate and means "this caller could not say what now is": the
+--  mark then carries the time alone and claims no age.
+--  ⭐ `values._partial` ({id = true}) is F8's LOWER-BOUND flag: the skill
+--  published a count of the KNOWN cases because some vehicles' tanks could not
+--  be measured (encrypted DLC), so the figure is "at least N". A count row
+--  renders "N+" -- a plain N would claim a completeness nobody measured. Zero
+--  new strings: "+" is a numeral suffix, not language. It rides INSIDE the
+--  values table, under a key no row id can equal, so readFarmFile's and this
+--  function's signatures -- and every caller of them -- are unchanged. Ignored
+--  for any kind but "count", and for an unknown row (no number to be a bound on).
+function FarmManager25.buildFarmRows(values, asOfText, nowText)
+    values = values or {}
+    local partials = type(values._partial) == "table" and values._partial or {}
+    local refused = type(values._refused) == "table" and values._refused or {}
+    local rows = {}
+    asOfText = FarmManager25.stampText(asOfText, nowText)
+
+    for i = 1, #FarmManager25.FARM_ROW_SPEC do
+        local spec = FarmManager25.FARM_ROW_SPEC[i]
+        local number, text = resolveFarmValue(spec.kind, values[spec.id])
+        if text ~= nil and spec.kind == "count" and partials[spec.id] then
+            text = text .. "+"
+        end
+
+        local unknownRow = (number == nil and text == nil)
+        rows[#rows + 1] = {
+            id        = spec.id,
+            group     = spec.group,
+            labelKey  = spec.labelKey,
+            kind      = spec.kind,
+            -- F7: WHICH refusal explains this unknown, or nil. Set only for an unknown row
+            -- whose <unknown> element the document carried (a refused figure); a row that
+            -- is unknown because the file never arrived keeps the plain word.
+            refusalKind = (unknownRow and refused[spec.id] == true) and spec.refusal or nil,
+            -- Exactly one of these is ever set. valueNumber means "money, and
+            -- the menu must format it"; valueText means "already presentable".
+            valueNumber = number,
+            valueText = text,
+            unknown   = unknownRow,
+            freshness = spec.live and FarmManager25.FARM_FRESH_LIVE
+                                   or FarmManager25.FARM_FRESH_ASOF,
+            -- Only an as-of row carries a stamp. A live row that carried one
+            -- would be claiming its figure is older than it is.
+            asOfText  = (not spec.live) and asOfText or nil,
+        }
+    end
+
+    return rows
+end
+
+--- Read the values Cyrus published for THIS savegame.
+--
+--  ⛔ THIS FILE IS PERSISTENT AND IS NEVER CONSUMED. notify.xml is a single-slot
+--  bridge that is consumed-and-deleted on read; farm.xml is NOT. If this ever
+--  called consumeBridge, the FARM tab would populate exactly once and then be
+--  empty forever -- and an empty FARM tab is indistinguishable from the fresh
+--  farm that guard 9 says is legitimate. That confusion is the whole reason
+--  this comment is here.
+--
+--  ⚠ A LIFETIME NOTHING ELSE IN THIS MOD HAS: written by the Python half,
+--  read-only to Lua, durable. cards.xml is Lua-to-Lua; notify.xml is transient.
+--
+--  Shape (schema 1):
+--    <farmManager25Farm generatedAt="..."><value id="b1" num="18"/>...</...>
+--  A value whose `num` is missing or not a number is simply absent from the
+--  returned table, which the assembler turns into `unknown`. Absence must not
+--  be mistakable for data, so nothing is defaulted to 0 here.
+--
+--  Returns (values, asOfText). `values._refused` is F7's {id = true} set of rows the document
+--  carried an <unknown> element for. `values._partial` is F8's {id = true} set of counts
+--  published as lower bounds (`partial="true"`). Both nil-safe: an absent or corrupt file yields
+--  an EMPTY table, never a partial-looking one, and the tab renders 20 unknowns.
+--- `expectedKey` is the savegame this session belongs to, or nil when the
+--  caller cannot say. See the provenance block inside for what each attribute
+--  is worth.
+function FarmManager25.readFarmFile(path, expectedKey)
+    local values = {}
+    local asOfText = nil
+    local rejected = nil
+
+    if path == nil or not fileExists(path) then
+        return values, nil
+    end
+
+    local xml = XMLFile.load("FarmManager25Farm", path)
+    if xml == nil then
+        print("FarmManager25: could not parse " .. tostring(path)
+            .. " as XML -- the FARM tab will show 'unknown' until it is rewritten")
+        return values, nil
+    end
+
+    -- Same finally-equivalent shape as loadReplies: free the handle whether the
+    -- body returns or throws, then re-raise. A throw between load and delete
+    -- must never leak the engine handle (the F-P1-3 class).
+    local okRead, errRead = pcall(function()
+        -- ⛔ PROVENANCE, CHECKED. Both attributes were WRITTEN AND NEVER READ:
+        -- the one field that could catch a wrong-savegame document was ignored.
+        -- An unread stamp is worse than no stamp, because it creates the
+        -- appearance of a check. Written-and-unread was the one indefensible
+        -- state, so each is now either honoured here or retired at the writer.
+        --
+        -- ⚠ A MISMATCH IS PROOF; ABSENCE IS NOT. An attribute that is present
+        -- and WRONG says this document is not ours. An attribute that is simply
+        -- missing says only that an older writer produced it -- refusing that
+        -- would break a working install on upgrade to buy nothing. So each
+        -- check fires on disagreement and stays silent on absence.
+        --
+        -- Refusing fails SAFE: no values, no as-of, and guard 8 renders
+        -- `unknown`. A wrong number is unacceptable; a missing one is not.
+        -- ⚠ ONE REFUSAL POINT, DELIBERATELY. These checks RECORD a rejection
+        -- and read on; the single gate at the end of this function is what
+        -- withholds the document. An earlier draft returned early from here,
+        -- and the mutation driver showed why that was wrong: with nothing yet
+        -- read at the point of return, NO mutation of the refusal could change
+        -- an answer -- corrupting it, deleting it, or making it hand back the
+        -- freshness stamp all left the suite green. The branch that mattered
+        -- most was the one branch no test could reach. Reading a document we
+        -- are about to discard costs a few attribute lookups and buys a gate
+        -- that can actually be proved.
+        local schema = xml:getString("farmManager25Farm#schema")
+        if schema ~= nil and schema ~= tostring(FarmManager25.FARM_SCHEMA) then
+            rejected = "schema " .. tostring(schema) .. ", but this build reads "
+                .. tostring(FarmManager25.FARM_SCHEMA)
+        end
+
+        -- The threat this one closes is REAL and this codebase has already been
+        -- bitten by its class: the pre-scoping replies.xml let acks earned on
+        -- one farm be claimed by whichever save ran the skill next (see
+        -- discardLegacyReplies). The path is per-savegame keyed, so this does
+        -- not guard against a wrong PATH -- it guards against a wrong FILE at
+        -- the right path: `emit_farm_xml.py --out` will publish any savegame's
+        -- figures anywhere it is pointed, and a copied modSettings folder does
+        -- the same by hand.
+        local stamped = xml:getString("farmManager25Farm#savegame")
+        if rejected == nil and stamped ~= nil and expectedKey ~= nil
+                and stamped ~= expectedKey then
+            rejected = "stamped for " .. tostring(stamped) .. ", but this is "
+                .. tostring(expectedKey)
+        end
+
+        asOfText = xml:getString("farmManager25Farm#generatedAt")
+
+        for i = 0, #FarmManager25.FARM_ROW_SPEC - 1 do
+            local key = string.format("farmManager25Farm.value(%d)", i)
+            if not xml:hasProperty(key) then
+                break
+            end
+            local id  = xml:getString(key .. "#id")
+            local num = tonumber(xml:getString(key .. "#num"))
+            if id ~= nil and num ~= nil and id ~= "_partial" and id ~= "_refused" then
+                values[id] = num
+                -- F8: a published count that is only a lower bound.
+                if xml:getString(key .. "#partial") == "true" then
+                    values._partial = values._partial or {}
+                    values._partial[id] = true
+                end
+            end
+        end
+
+        -- F7 (BUG-030 FARM, BUG-039 render half): the emitter has always written
+        -- <unknown id=".." reason=".."/> for a row it refuses to publish, and this reader
+        -- ignored it -- the reason died on the way to the screen. Only PRESENCE is read
+        -- here; the reason prose is English and open-ended and is never rendered. It rides
+        -- in the values table under a key no row id can equal, exactly as `_partial` does,
+        -- so no signature changes.
+        for i = 0, #FarmManager25.FARM_ROW_SPEC - 1 do
+            local key = string.format("farmManager25Farm.unknown(%d)", i)
+            if not xml:hasProperty(key) then
+                break
+            end
+            local id = xml:getString(key .. "#id")
+            if id ~= nil and id ~= "_partial" and id ~= "_refused" then
+                values._refused = values._refused or {}
+                values._refused[id] = true
+            end
+        end
+    end)
+
+    local okDel = pcall(function() xml:delete() end)
+
+    if not okRead then
+        print("FarmManager25: farm.xml read failed (" .. tostring(errRead)
+            .. ") -- the FARM tab will show 'unknown'")
+        return {}, nil
+    end
+    if not okDel then
+        print("FarmManager25: farm.xml handle could not be released")
+    end
+
+    if rejected ~= nil then
+        print("FarmManager25: refusing " .. tostring(path) .. " -- " .. rejected
+            .. " -- the FARM tab will show 'unknown' rather than another "
+            .. "savegame's figures")
+        return {}, nil
+    end
+
+    return values, asOfText
+end
+
+--- Calls ONE mission getter totally. nil means "this mission did not tell us",
+--  and absence, a throw and a non-number all collapse to exactly that. None of
+--  them may be mistaken for a figure (DEC-001).
+--
+--  ⚠ THE EXISTENCE PROBE THIS REPLACES COULD NOT SEE THE REAL FAILURE.
+--  `m.getReward ~= nil` passes, because the method is REAL -- it throws instead
+--  of returning. Probing for the method and then calling it outside a pcall
+--  checks the one thing that was never in doubt.
+function FarmManager25.askMission(m, name)
+    return tonumber(FarmManager25.askMissionRaw(m, name))
+end
+
+--- The RAW twin: the same total pcall body, returning the getter's value
+--  UNCOERCED. [[BUG-040]] ⛔ `tonumber(true)` is nil, so asking a BOOLEAN
+--  getter (`getIsRunning`) or a STRING one (`getTitle`) through askMission
+--  answers nil on every mission -- which is how the contract read was dead on
+--  every farm. Boolean and string getters go through HERE; figures go through
+--  askMission.
+function FarmManager25.askMissionRaw(m, name)
+    local ok, v = pcall(function()
+        local fn = m[name]
+        if fn == nil then
+            return nil
+        end
+        return fn(m)
+    end)
+    if not ok then
+        return nil
+    end
+    return v
+end
+
+
+--- The STRING twin of askMission, for the one identifier we need. Separate
+--  because askMission ends in `tonumber(v)`, which turns a mission id into nil
+--  -- the coercion that makes it safe for a figure destroys a key.
+--
+--  Grounded, not recalled (FS25-Community-LUADOC @ 24afb18e7cfb,
+--  Missions/AbstractMission.md): `getUniqueId()` is documented "Gets this
+--  mission's unique id" and its body is `return self.uniqueId` -- the SAME
+--  field `saveToXMLFile` writes to `key#uniqueId`, which is the `uniqueId`
+--  attribute read_missions.py already reads out of missions.xml. That shared
+--  origin is what makes the join sound; a positional index would credit one
+--  contract's payout to another.
+--- ⛔⛔ THE FIELD id A MISSION IS ON -- **NOT** the mission's own id.
+--  askMissionId() below returns `getUniqueId()`, the MISSION's identity, and it
+--  is a STRING. Feeding that into a field lookup is the exact defect
+--  FS25_YieldTracker ships: it puts a farmland id and a field id into one
+--  variable named `fieldID`. Two id spaces, one name, and the join silently
+--  matches nothing -- which renders as "no contract on any field", a clean,
+--  plausible, entirely wrong answer.
+--  ⭐ THE FIELD ID COMES FROM `getField():getId()` and from nowhere else.
+--  Totally guarded, like every other mission read here: an offered mission has
+--  no field yet, so `getField()` returning nil is ORDINARY, not exceptional.
+function FarmManager25.askMissionFieldId(m)
+    local ok, v = pcall(function()
+        local fn = m.getField
+        if fn == nil then
+            return nil
+        end
+        local field = fn(m)
+        if field == nil or field.getId == nil then
+            return nil
+        end
+        return field:getId()
+    end)
+    if not ok then
+        return nil
+    end
+    return tonumber(v)
+end
+
+function FarmManager25.askMissionId(m)
+    local ok, v = pcall(function()
+        local fn = m.getUniqueId
+        if fn == nil then
+            return nil
+        end
+        return fn(m)
+    end)
+    if not ok or type(v) ~= "string" or v == "" then
+        return nil
+    end
+    return v
+end
+
+
+--- PURE. Reduces mission objects to the (id, reward) rows the skill merges,
+--  plus a count of the missions that could not answer. Same split, and for the
+--  same reason, as summarizeMissions: `missions` is an INPUT, so a fixture can
+--  hand this a mission whose getter throws without faking one engine call.
+--
+--  ⛔ A ROW IS WRITTEN ONLY WHEN BOTH HALVES ANSWER, and only for a POSITIVE
+--  reward. Three refusals, each for a different wrong answer:
+--    * no id            -> nothing to join to; a positional write would move a
+--                          payout onto the wrong contract.
+--    * a throw          -> the measured engine case. AbstractFieldMission's
+--                          getReward indexes self.field:getAreaHa(), and an
+--                          offered mission has no field yet. Its neighbours
+--                          keep their figures; only it is dropped.
+--    * reward <= 0      -> `AbstractMission:getReward()` is the literal
+--                          `return 0` (same corpus page), so 0 means "this
+--                          mission type never overrode the base class" just as
+--                          readily as it means a payout. Ambiguous therefore
+--                          UNKNOWN -- publishing it would recreate the exact
+--                          "$0" defect F-025 exists to prevent, one layer down.
+--  A dropped row is not a silent loss: it simply never appears in the file, and
+--  read_missions.py reports that contract's reward as UNKNOWN with its note --
+--  which is what it already does today for every contract.
+function FarmManager25.contractRows(missions)
+    local rows, dropped = {}, 0
+    if type(missions) ~= "table" then
+        return rows, dropped
+    end
+
+    for i = 1, #missions do
+        local m = missions[i]
+        local id, reward = nil, nil
+        if type(m) == "table" then
+            id = FarmManager25.askMissionId(m)
+            reward = FarmManager25.askMission(m, "getReward")
+        end
+        if id ~= nil and reward ~= nil and reward > 0 then
+            rows[#rows + 1] = { id = id, reward = reward }
+        else
+            dropped = dropped + 1
+        end
+    end
+
+    return rows, dropped
+end
+
+
+--- PURE. Reduces a list of mission objects to the four contract figures,
+--  returning d1, d2, d3, d4 -- any of d2..d4 nil when nothing answered it.
+--
+--  ⭐ WHY THIS IS SPLIT OUT, and why it is not abstraction for its own sake. It
+--  is the same split buildFarmRows already uses: the half a headless test can
+--  honestly gate is gated, and the engine half -- obtaining the list -- stays
+--  with the owner's live test. `missions` is an INPUT here, not a stubbed
+--  boundary, so a fixture can hand this a mission whose getter throws without
+--  faking a single engine call.
+--
+--  ⛔ THE DEFECT THIS EXISTS TO FIX (owner live test, savegame3 / MapUS): the
+--  FARM tab rendered d1 = 12 with d2, d3 and d4 all `unknown` -- TOGETHER. That
+--  pattern is not three getters returning nil. AbstractMission:getReward()
+--  returns 0 and :getCompletion() returns 0.0 -- LITERAL CONSTANTS, never nil
+--  -- so a nil return could not have blanked d2 and d4; they would have read 0.
+--  What blanks all three at once is a THROW: one mission raises, the single
+--  enclosing pcall unwinds, and every figure is lost along with the missions
+--  never reached. d1 survived only because it is assigned before the loop.
+--
+--  The throw is expected, not exotic. getMissionsByFarmId returns
+--  `mission.farmId == nil or mission.farmId == farmId` -- the engine's own
+--  comment is "All missions, but only for active it needs to match the farm" --
+--  so the list carries OFFERED contracts, which no farm owns and which were
+--  never started. AbstractFieldMission:getReward indexes `self.field:getAreaHa()`
+--  and :getCompletion reaches `#self.completionPartitions` by way of
+--  getFieldCompletion; on a mission never started, those are the fields that do
+--  not exist yet. Isolating each call keeps ONE throw from costing the OTHER
+--  missions their figures. It does NOT make a call harmless.
+--
+--  ⛔ [[BUG-052]] A `pcall` CONTAINS A THROW; IT DOES NOT UNDO STATE SET BEFORE
+--  THE THROW. This comment used to end "Isolating each call costs the other
+--  missions nothing", and for :getCompletion that was false. Measured in the
+--  engine source (gameSource.zip, AbstractFieldMission.lua:460-464):
+--  getFieldCompletion runs `self:initializeModifier()` and THEN sets
+--  `self.isFieldCompletionInitialized = true`. On an offered mission
+--  `completionModifier` is nil (createModifier runs only in prepare(), :243),
+--  so initializeModifier builds no `completionPartitions`, the flag is set
+--  anyway, and the call then throws -- which the pcall swallowed. The flag
+--  stays true for the life of the session, so once the player ACCEPTS the
+--  contract nothing ever builds the partitions and every update fails
+--  (`AbstractFieldMission.lua:493 ... ipairs (table expected, got nil)`, every
+--  frame). The engine itself asks :getCompletion only of RUNNING missions
+--  (AbstractMission.lua:409-414, updateTick). So completion is asked ONLY of a
+--  mission whose :getIsRunning() is the boolean true. :getIsRunning is
+--  `return self.status == MissionStatus.RUNNING` (AbstractMission.lua:796-798):
+--  a pure read, safe to ask of an offered mission.
+function FarmManager25.summarizeMissions(missions)
+    if type(missions) ~= "table" then
+        return nil, nil, nil, nil, nil
+    end
+
+    -- D1: a real 0 is DATA -- a farm can legitimately hold no contracts, and
+    -- that is not the same as "we could not ask".
+    local count = #missions
+
+    local rewardTotal, rewardSeen = 0, 0
+    local soonest, deadlineSeen = nil, 0
+    local completionTotal, completionSeen = 0, 0
+
+    for i = 1, count do
+        local m = missions[i]
+        if type(m) == "table" then
+            local r = FarmManager25.askMission(m, "getReward")
+            if r ~= nil then
+                rewardTotal = rewardTotal + r
+                rewardSeen = rewardSeen + 1
+            end
+
+            local mins = FarmManager25.askMission(m, "getMinutesLeft")
+            if mins ~= nil then
+                deadlineSeen = deadlineSeen + 1
+                if soonest == nil or mins < soonest then
+                    soonest = mins
+                end
+            end
+
+            -- ⛔ [[BUG-052]] COMPLETION IS ASKED ONLY OF A RUNNING MISSION.
+            -- `== true`, not truthiness: askMissionRaw returns the getter's
+            -- value uncoerced, and a getter that threw answers nil, which is
+            -- NOT running. An offered mission is never asked; see the comment
+            -- above summarizeMissions for the engine state a single call on one
+            -- would change.
+            if FarmManager25.askMissionRaw(m, "getIsRunning") == true then
+                local c = FarmManager25.askMission(m, "getCompletion")
+                if c ~= nil then
+                    completionTotal = completionTotal + c
+                    completionSeen = completionSeen + 1
+                end
+            end
+        end
+    end
+
+    -- Each figure is published ONLY if at least one mission answered it. A sum
+    -- over zero readable rewards is 0, and publishing that would be the exact
+    -- "$0" F-025 warns about -- absence dressed as data.
+    --
+    -- ⏳ DEFERRED, NOT MISSED -- PARTIAL SUMS UNDER TOTAL LABELS.
+    -- This separates NONE-answered from SOME-answered. It does NOT separate
+    -- SOME from ALL. If 3 of 12 contracts answer, a player reads a figure
+    -- labelled as a total that covers a quarter of their contracts.
+    --
+    -- ⛔ THE SCOPE IS WIDER THAN IT LOOKS, and this note exists because the
+    -- original brief got it wrong in three places:
+    --   * d2 is a partial SUM -- it understates, predictably.
+    --   * d4 is a partial AVERAGE over answerers, NOT a sum. That is worse: a
+    --     partial sum always understates and can be reasoned about, while a
+    --     partial average can land anywhere and looks entirely plausible.
+    --   * d3 IS IN SCOPE. It was ruled out for being a min rather than a sum.
+    --     The direction of harm is what matters: a min over a SUBSET is always
+    --     >= the true min, so the row tells the player they have MORE time than
+    --     they do -- on the one row they act on under time pressure.
+    --   * e2 and e3 have the same shape but live in PYTHON, in
+    --     emit_farm_xml.py (saw_damage / saw_hours), not in this file.
+    --
+    -- Deferred deliberately by the owner-facing gate, not overlooked: after the
+    -- per-getter isolation above, "partial" is probably the NORMAL case rather
+    -- than an edge, because offered contracts appear structurally unable to
+    -- answer. Publishing `unknown` for a partial would then blank d2 and d4 on
+    -- a healthy farm -- identical to the broken output this fix just repaired.
+    -- FarmManager25.contractsDiagnostic reports, per figure, how many of the
+    -- contracts answered it, so ONE live test decides this with a measurement
+    -- instead of a guess ([[DEC-080]]).
+    --
+    -- ⚠ THIS COMMENT USED TO SAY THE LINE BELOW ALREADY DID THAT, AND IT WAS
+    -- FALSE IN BOTH HALVES. The line fired only when a figure was COMPLETELY
+    -- unanswered -- silent on exactly the partial this note calls the normal
+    -- case -- and when it did fire it printed `count`, the TOTAL, under the
+    -- words "contract(s) answered". The counters it claimed to report were
+    -- locals that were never returned. It had zero test coverage.
+    local reward = nil
+    if rewardSeen > 0 then
+        reward = rewardTotal
+    end
+
+    local completion = nil
+    if completionSeen > 0 then
+        -- getCompletion() is documented 0..1; render as a percentage.
+        completion = (completionTotal / completionSeen) * 100
+    end
+
+    -- The 5th return is the DIAGNOSTIC channel, deliberately separate from the
+    -- four published figures: it says how many contracts answered each one, so
+    -- a partial can be told from a full answer. It changes nothing a player
+    -- sees -- d2/d3/d4 above are byte-for-byte the values this returned before.
+    return count, reward, soonest, completion, {
+        reward = rewardSeen,
+        deadline = deadlineSeen,
+        completion = completionSeen,
+    }
+end
+
+
+--- PURE. Builds the in-band contracts diagnostic line, or nil when there is
+--  nothing to report.
+--
+--  ⭐ WHY THIS IS A FUNCTION AND NOT A `print` AT THE CALL SITE. The emitted
+--  LINE is the artifact a live test reads. Assembling it inside the engine-only
+--  pcall below put both the fire condition and the numbers somewhere no
+--  headless test could reach -- which is precisely how a diagnostic that
+--  printed the TOTAL under the words "contract(s) answered", and that stayed
+--  silent on every partial, shipped with zero coverage. Returning the string
+--  gates the document itself; the caller only prints it.
+function FarmManager25.contractsDiagnostic(count, answered)
+    if type(count) ~= "number" or type(answered) ~= "table" then
+        return nil
+    end
+
+    local r = tonumber(answered.reward) or 0
+    local s = tonumber(answered.deadline) or 0
+    local c = tonumber(answered.completion) or 0
+
+    -- A PARTIAL is the case this instrument exists to measure, and the case the
+    -- original condition was silent for. `count == 0` stays a trigger so that
+    -- nothing which used to report stops reporting: a farm with no contracts
+    -- answers no figure, and that is still worth one line to a live test.
+    local partial = r < count or s < count or c < count
+    if not partial and count > 0 then
+        return nil
+    end
+
+    return "FarmManager25: contracts " .. tostring(count)
+        .. " -- reward " .. tostring(r) .. "/" .. tostring(count)
+        .. " deadline " .. tostring(s) .. "/" .. tostring(count)
+        .. " completion " .. tostring(c) .. "/" .. tostring(count)
+end
+
+
+--- THE ENGINE BOUNDARY. Fills the `live = true` ids in `values`, in place.
+--
+--  ⛔ NOT HEADLESSLY TESTABLE, AND DELIBERATELY NOT STUBBED. Doctrine: never
+--  stub the boundary under test -- for engine behaviour the real runtime is the
+--  gate, a live test or nothing. Everything here is total: any missing global,
+--  missing method or thrown lookup leaves the id absent, and the assembler
+--  publishes `unknown`. A wrong number is unacceptable; a missing one is not.
+--  ⚠ "Total" was once true only per GROUP, not per FIGURE: one thrown getter
+--  inside group D unwound the whole group and blanked three ids at once. That
+--  is the defect summarizeMissions was extracted to close.
+--
+--  A1 is ADAPTED, not invented: it is the shipped InGameMenuFarmManager25
+--  getFarmBalance() logic moved into core -- documented Farm:getBalance() first,
+--  FOD's undocumented farm.money kept only as the fallback behind it, and nil
+--  rather than 0 on failure. Moving it here is what lets the menu stop calling
+--  the engine at all (DEC-128 ②); it also retires that call site rather than
+--  adding a second one beside it.
+function FarmManager25.readLiveValues(values)
+    values = values or {}
+
+    local ok = pcall(function()
+        local farmId = nil
+        if g_currentMission ~= nil and g_currentMission.getFarmId ~= nil then
+            farmId = g_currentMission:getFarmId()
+        end
+
+        local farm = nil
+        if farmId ~= nil and farmId ~= 0
+                and g_farmManager ~= nil and g_farmManager.getFarmById ~= nil then
+            farm = g_farmManager:getFarmById(farmId)
+        end
+
+        if farm ~= nil then
+            -- A2-A4 are LUADOC-ONLY (Farm.lua is absent from the archive), so
+            -- each is probed for existence before it is called. If a getter is
+            -- not there at runtime the row reads `unknown` -- which is guard 8
+            -- doing its job, not a defect.
+            if farm.getBalance ~= nil then
+                values.a1 = tonumber(farm:getBalance())
+            elseif farm.money ~= nil then
+                values.a1 = tonumber(farm.money)
+            end
+            if farm.getLoan ~= nil then
+                values.a2 = tonumber(farm:getLoan())
+            end
+            if farm.getEquity ~= nil then
+                values.a3 = tonumber(farm:getEquity())
+            end
+            if farm.calculateDailyLoanInterest ~= nil then
+                values.a4 = tonumber(farm:calculateDailyLoanInterest())
+            end
+        end
+
+        -- Last resort for the balance only, exactly as the shipped menu code
+        -- had it: g_currentMission:getMoney() is FOD's route and is undocumented.
+        if values.a1 == nil and g_currentMission ~= nil and g_currentMission.getMoney ~= nil then
+            values.a1 = tonumber(g_currentMission:getMoney())
+        end
+    end)
+
+    if not ok then
+        -- Caught, never thrown. An engine lookup that throws from a GUI-path
+        -- callback is what killed the load at 57%.
+        print("FarmManager25: a live money lookup failed -- those rows read 'unknown'")
+    end
+
+    -- GROUP D -- CONTRACTS. Its own pcall, not folded into the money block:
+    -- a contracts failure must not cost us the balance we already read.
+    --
+    -- ⭐ LIVE BECAUSE D IS LIVE-ONLY. D2 (reward) is not merely missing from
+    -- our parser -- it is ABSENT FROM THE SAVEGAME: the game computes a
+    -- field-tied reward at accept-time, and read_missions.py refuses to report
+    -- the placeholder as "$0" (FRICTION-LOG F-025). D3 (deadline) has no save
+    -- field at all. Both have real bodies in the archive
+    -- (AbstractFieldMission.lua:550-561, AbstractMission.lua:723-751), so the
+    -- engine is the only place either can be known.
+    --
+    -- ⚠ ARCHIVE-EVIDENCED, NOT RUNTIME-PROVEN. Every getter call is ISOLATED,
+    -- so a mission that cannot answer -- whether the method is missing, returns
+    -- nothing, or THROWS -- leaves only its own contribution out, and guard 8
+    -- renders `unknown` for a figure nobody answered. The probe that used to
+    -- stand here checked existence, which was never the thing failing; see
+    -- FarmManager25.summarizeMissions. The owner's live test confirms these four.
+    local okD = pcall(function()
+        local farmId = nil
+        if g_currentMission ~= nil and g_currentMission.getFarmId ~= nil then
+            farmId = g_currentMission:getFarmId()
+        end
+        if farmId == nil or farmId == 0
+                or g_missionManager == nil
+                or g_missionManager.getMissionsByFarmId == nil then
+            return
+        end
+
+        local missions = g_missionManager:getMissionsByFarmId(farmId)
+        if type(missions) ~= "table" then
+            return
+        end
+
+        -- The reduction itself is pure and headlessly gated; see
+        -- FarmManager25.summarizeMissions. Only ACQUIRING the list is engine.
+        local d1, d2, d3, d4, answered = FarmManager25.summarizeMissions(missions)
+        values.d1 = d1
+        if d2 ~= nil then values.d2 = d2 end
+        if d3 ~= nil then values.d3 = d3 end
+        if d4 ~= nil then values.d4 = d4 end
+
+        -- ⚠ IN-BAND REPORT OF A DEGRADED MEASUREMENT. Before the per-getter
+        -- isolation below, an unanswered figure and a THROWN one were the same
+        -- silent `unknown`, so a live test could not tell them apart. It can
+        -- now: this reports, per figure, how many of the contracts answered it,
+        -- which is what separates a PARTIAL from a full answer.
+        local msg = FarmManager25.contractsDiagnostic(d1, answered)
+        if msg ~= nil then
+            print(msg)
+        end
+    end)
+
+    if not okD then
+        print("FarmManager25: a live contracts lookup failed -- those rows read 'unknown'")
+    end
+
+    return values
+end
+
+--- ⭐ THE PUBLISHED SEAM. The menu calls exactly this and renders what it gets.
+--  Rebuilt per call so the live rows are actually live.
+function FarmManager25:getFarmRows()
+    local values, asOfText = {}, nil
+
+    if self.saveFolder ~= nil then
+        values, asOfText = FarmManager25.readFarmFile(
+            self.saveFolder .. FarmManager25.FARM_NAME,
+            FarmManager25.savegameKey())
+    end
+
+    FarmManager25.readLiveValues(values)
+
+    -- Publish the per-contract rewards while the engine is already answering.
+    -- ⭐ WHY HERE. This is the menu's ONE read per page open
+    -- (InGameMenuFarmManager25.lua:441), i.e. human cadence -- the same cadence
+    -- the card store is flushed at, never a per-frame write. The rewards are
+    -- live-only and go stale as contracts expire and respawn, so a load-time
+    -- write alone would publish yesterday's offers; deleteMap catches the
+    -- player who quits without opening the tab.
+    self:saveContracts()
+
+    return FarmManager25.buildFarmRows(values, asOfText, FarmManager25.nowStamp())
+end
+
+-- ---------------------------------------------------------------------------
+-- THE PRODUCTIONS TABLE -- the FIFTH published seam (SPEC Block D, item D5).
+--
+-- ⛔ THE FIFTH, NOT THE SIXTH, AND THERE IS NOTHING NAMED getFieldRows TO COPY.
+-- The spec originally called this "the sixth seam alongside getFieldRows()";
+-- `getFieldRows` is ZERO across mod/source, measured, with the four real seams
+-- -- getMessageLog, SETTINGS_ROWS, register, getFarmRows -- firing as a
+-- control. This follows getFarmRows() instead, and follows it deliberately.
+--
+-- ⛔ THE SPLIT IS THE SAME ONE, FOR THE SAME REASON: ASSEMBLY vs ACQUISITION.
+--   buildProductionRows() -- PURE. Zero engine references. Takes the parsed
+--                            document and produces the rendered rows. This is
+--                            what the headless lupa suite drives, and it is
+--                            where a mutated ANSWER must turn the suite red.
+--   readProductionsFile() -- the engine XML boundary, thin and guarded.
+--
+-- ⛔ AND ONE THING getFarmRows() DOES NOT NEED: TWO RETURN VALUES.
+-- `#rows == 0` is ITSELF an answer here -- a farm can legitimately own no
+-- production points -- so "no productions" and "could not ask" need separate
+-- channels or the tab renders a farm with 27 buildings identically to a broken
+-- read. `meta.status` is that channel. FARM never had the problem: its 20 rows
+-- are a fixed spec and an empty read still publishes 20 honest `unknown`s.
+--
+-- ⛔ EVERY FIGURE HERE IS FILE / AS-OF. There is no live half, so freshness is
+-- a PER-TAB property and one header serves the page -- but it carries TWO
+-- stamps, not one: `asOfText` for savegame-derived figures and `defsAsOfText`
+-- for definition-derived ones. They can differ by weeks, and rendering one
+-- would let month-old definition data borrow a savegame read's freshness.
+-- ---------------------------------------------------------------------------
+
+--- The PRODUCTIONS document emit_productions_xml.py publishes for THIS
+--  savegame. ⛔ PERSISTENT and NEVER consumed, for the same reason farm.xml is:
+--  a consumed bridge would populate the tab once and leave it empty forever,
+--  indistinguishable from the legitimate no-productions state.
+FarmManager25.PRODUCTIONS_NAME   = "productions.xml"
+--- Must track SCHEMA_VERSION in emit_productions_xml.py. A document stamped
+--  anything else is refused rather than read with v1 semantics.
+FarmManager25.PRODUCTIONS_SCHEMA = 1
+-- Bounds on what we will read out of one document. Not a screen bound -- the
+-- list scrolls -- but a memory bound, the same shape as MAX_STORE: a corrupt or
+-- hostile file must not be able to make this loop forever.
+FarmManager25.MAX_POINTS       = 64
+FarmManager25.MAX_POINT_ROWS   = 32       -- per section, per point
+
+--- ⛔ THE RUNWAY BAR'S FIXED HORIZON, IN HOURS. One in-game week.
+--  A bar normalised to the largest value ON SCREEN makes the healthiest chain
+--  look full and the whole farm look fine; the comparison must be against a
+--  CONSTANT so a half-full bar means the same thing on every point. The owner
+--  adjusts this in his live test -- it is the one number here that is a design
+--  choice rather than a measurement.
+FarmManager25.RUNWAY_HORIZON_H = 168
+
+--- ⛔ THE FOOTER'S URGENCY CUT-OFF, IN IN-GAME HOURS. [[DEC-196]], and it lives
+--  HERE rather than in FarmManagerTheme.lua by that ruling: that file holds
+--  visual values, and a cut-off decides what is TRUE about the farm, not how it
+--  looks. This is NOT the bar horizon above -- the bar is normalised to a week
+--  so half-full means the same thing everywhere; this is the line below which a
+--  point is called out.
+--
+--  ⭐ 24 IS MEASURED, NOT PICKED. savegame1, read 2026-09-11: runways cluster
+--  below 11.29 h and then nothing until 52.20 h, so 24 sits mid-gap -- and it
+--  is exactly one in-game day. 6/12/24/48 all flag the same handful today, so
+--  counts cannot separate them; 6 h and 12 h are disqualified ON FUNCTION,
+--  because 89.4% of the owner's elapsed game time arrived via sleep or skip at
+--  ~22 game-hours a go, so a point can go from unflagged to starved without the
+--  warning ever being on screen.
+FarmManager25.RUNWAY_CUTOFF_H = 24
+
+--- 1234.5 -> "1,235". Litres and hours are read as magnitudes, not to the
+--  decimal. Reuses the same digit grouping the FARM table publishes so one
+--  farm's numbers do not render two ways on two tabs.
+local function groupLitres(n)
+    local neg = n < 0
+    local s = string.format("%d", math.floor(math.abs(n) + 0.5))
+    local grouped = s:reverse():gsub("(%d%d%d)", "%1,")
+    local out = grouped:reverse()
+    if out:sub(1, 1) == "," then
+        out = out:sub(2)
+    end
+    return (neg and "-" or "") .. out
+end
+
+--- Hours -> "0.0" / "12.5" / "318". ⛔ ONE DECIMAL BELOW 100 AND NONE ABOVE,
+--  deliberately: `0.0` is THE most important state on this tab (starved right
+--  now) and rounding it to a bare "0" would make it read like a missing value
+--  in a column whose other cells carry decimals. Above 100 hours the decimal is
+--  precision the join does not have.
+local function formatHours(h)
+    if h < 100 then
+        return string.format("%.1f", h)
+    end
+    return groupLitres(h)
+end
+
+-- ---------------------------------------------------------------------------
+-- ⛔ FRESHNESS MARKS RENDER A TIME ONLY -- NO DATES. Owner ruling, 2026-09-06:
+-- "LIVE / AS-OF shows a time only, no dates on messages tab only." Dates belong
+-- to the MESSAGES tab and nowhere else.
+--
+-- ⛔ WHY THE FORMATTING LIVES IN CORE AND NOT IN THE MENU. This is the same
+-- boundary resolveFarmValue already draws: money crosses the seam as a raw
+-- number because it needs a LOCALE, and every other kind is formatted here
+-- because it needs neither a locale nor an engine. A stamp is the second kind.
+-- Formatting it in the menu would put the one answer a player reads about
+-- staleness inside the one half of this codebase no test can drive.
+--
+-- ⚠⚠ AND HERE IS THE CASE THE RULING'S ONE SENTENCE DOES NOT COVER, HANDLED
+-- RATHER THAN GUESSED AT. The PRODUCTIONS tab carries TWO stamps and they are
+-- not the same kind of fact:
+--
+--   generatedAt -- when the skill last read the savegame. Refreshed whenever
+--                  the emitter runs, so in ordinary use it is from today and a
+--                  bare time is exactly right.
+--   defsAsOf    -- when the production_defs CACHE was generated. It is
+--                  regenerated only by a 900-second walk of the whole install
+--                  tree, so it is EXPECTED to be days or weeks old.
+--
+-- MEASURED on the owner's live farm today: generatedAt 2026-09-06 13:59,
+-- defsAsOf 2026-08-20 02:10 -- SEVENTEEN DAYS APART. Rendered as bare times
+-- those read "13:59" and "02:10", and a player sees a seventeen-day-old
+-- capacity figure presented as if it were from eleven hours ago. That is a
+-- stale figure wearing a fresh mark, which is the precise failure the two
+-- stamps were split apart to prevent.
+--
+-- ⭐ SO: A TIME, ALWAYS -- plus a DAY COUNT when, and only when, the stamp does
+-- not fall on the same day as the document that carries it. A day count is not
+-- a date: it names an AGE, which is the fact the player needs and the fact a
+-- bare time silently misstates. On a healthy farm both stamps are from the same
+-- day and both render as bare times, exactly as ruled -- the qualifier appears
+-- only in the case that would otherwise lie.
+-- ⚠ THIS IS AN INTERPRETATION OF A TERSE RULING AND IS FLAGGED AS ONE. If the
+-- owner wants the bare time even at seventeen days, deleting the suffix is one
+-- branch in stampText().
+-- ---------------------------------------------------------------------------
+
+--- Today, as a stamp stampAgeDays() can read, or nil.
+--  ⛔ THE ONLY ENGINE CALL IN THIS FEATURE, and it is isolated to one line so
+--  the assemblers that consume its result stay pure. `getDate` is already this
+--  mod's established clock -- writeReply and saveCards both call it under
+--  exactly this pcall shape -- so this reuses a call that already ships rather
+--  than introducing a second way to ask the time.
+--  ⚠ A DEAD CLOCK RETURNS nil AND THAT IS HANDLED, not defaulted: the caller
+--  then renders a bare time and claims no age. Inventing "now" would let a
+--  week-old document mark itself current, which is the whole failure this
+--  feature exists to prevent.
+function FarmManager25.nowStamp()
+    local ok, stamp = pcall(function() return getDate("%Y-%m-%d %H:%M:%S") end)
+    if ok and type(stamp) == "string" then
+        return stamp
+    end
+    return nil
+end
+
+--- Pull (year, month, day, hour, minute) out of a stamp, or nil.
+--  ⛔ TOTAL AND FORMAT-AGNOSTIC BY CONSTRUCTION. Two writers produce these and
+--  they do NOT agree on shape: emit_productions_xml.py writes
+--  "2026-09-06 13:59 UTC" and the cache's own cache_entry carries
+--  "2026-08-20T02:10:37.942Z". Matching the digits rather than a layout is what
+--  makes one reader serve both -- and an unparseable stamp returns nil, which
+--  the caller turns into `unknown`. ⛔ It NEVER falls back to "now": a stamp we
+--  could not read must not be able to claim freshness.
+local function stampParts(stamp)
+    if type(stamp) ~= "string" then
+        return nil
+    end
+    local y, mo, d = stamp:match("(%d%d%d%d)-(%d%d)-(%d%d)")
+    local h, mi = stamp:match("(%d%d):(%d%d)")
+    if y == nil or h == nil then
+        return nil
+    end
+    return tonumber(y), tonumber(mo), tonumber(d), tonumber(h), tonumber(mi)
+end
+
+--- Days from the civil epoch. Hinnant's algorithm, integer arithmetic only --
+--  no os.date, no os.time, no engine clock, so this half stays pure and
+--  headlessly assertable. Only DIFFERENCES of the result are ever used, so the
+--  epoch it counts from does not matter.
+local function daysFromCivil(y, m, d)
+    y = (m <= 2) and (y - 1) or y
+    local era = math.floor(y / 400)
+    local yoe = y - era * 400
+    local doy = math.floor((153 * (m + ((m > 2) and -3 or 9)) + 2) / 5) + d - 1
+    local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+    return era * 146097 + doe - 719468
+end
+
+--- Whole days `stamp` falls BEFORE `reference`. nil when either is unreadable.
+--  ⚠ Negative is clamped to 0: a defs cache stamped AFTER the document that
+--  cites it is a clock problem, not an age, and reporting "-3d" would invite a
+--  reader to treat it as a measurement.
+function FarmManager25.stampAgeDays(stamp, reference)
+    local y1, m1, d1 = stampParts(stamp)
+    local y2, m2, d2 = stampParts(reference)
+    if y1 == nil or y2 == nil then
+        return nil
+    end
+    local diff = daysFromCivil(y2, m2, d2) - daysFromCivil(y1, m1, d1)
+    return diff > 0 and diff or 0
+end
+
+--- The rendered freshness mark: "13:59", or "02:10 (17d)" when the stamp is
+--  older than the document quoting it. Returns nil when unreadable, and the
+--  menu renders the word `unknown` -- never a blank, never a fabricated time.
+--  `reference` may be nil, in which case no age can be computed and the bare
+--  time is all that is claimed.
+function FarmManager25.stampText(stamp, reference)
+    local _y, _m, _d, h, mi = stampParts(stamp)
+    if h == nil then
+        return nil
+    end
+    local text = string.format("%02d:%02d", h, mi)
+    local age = reference ~= nil and FarmManager25.stampAgeDays(stamp, reference) or nil
+    if age ~= nil and age > 0 then
+        text = text .. string.format(" (%dd)", age)
+    end
+    return text
+end
+
+--- ⭐ THE PURE ASSEMBLER. No engine reference of any kind lives below this line
+--  and above its `end`. Takes the parsed document and returns (rows, meta).
+--
+--  ⛔ ABSENCE IS A FLAG, NEVER A VALUE. Every cell publishes `unknown = true`
+--  and NO text when the document did not carry it; the menu renders the WORD,
+--  from l10n. Never blank, never a dash, never a zero.
+--
+--  ⛔ AND A KNOWN ZERO IS NOT ABSENCE. `hoursToEmpty="0.0"` is a real measured
+--  value meaning STARVED RIGHT NOW -- the most important state on the tab. It
+--  publishes runwayUnknown = false, a runway text of "0.0" and a ratio of 0,
+--  which the menu draws as an EMPTY FILL INSIDE A VISIBLE TRACK. An unknown
+--  runway publishes no ratio at all and the menu hides the track entirely.
+--  A 0-width bar and an absent bar look identical, so they must be told apart
+--  before the pixels, not at them (DEC-001 in pixels).
+--
+--  ⛔ p2, THE MASTER LIST'S RUNWAY, IS DERIVED HERE FROM THE POINT'S OWN INPUT
+--  ROWS -- it is deliberately NOT a second figure carried on the document.
+--  A `shortestRunway` attribute would be a second answer to a question the
+--  input rows already answer, and the two could disagree; a player who opens a
+--  point and reads a different number from the one in the list he clicked has
+--  been told the manager cannot count.
+function FarmManager25.buildProductionRows(doc, meta, nowText)
+    local rows = {}
+    doc = doc or {}
+    meta = meta or {}
+
+    for _, point in ipairs(doc) do
+        local row = {
+            id          = point.id,
+            name        = point.name,
+            nameDerived = (point.nameSource == "derived"),
+            inputs      = {},
+            lines       = {},
+            outputs     = {},
+        }
+
+        local shortest = nil
+        for _, i in ipairs(point.inputs or {}) do
+            local held      = tonumber(i.held)
+            local perHour   = tonumber(i.perHour)
+            local hours     = tonumber(i.hoursToEmpty)
+            -- NaN never equals itself. Normalised ONCE, here, so runwayUnknown,
+            -- runwayText and the bar ratio cannot disagree about whether this
+            -- row has a runway -- three fields bearing one answer with only one
+            -- of them checked is this project's founding defect class.
+            if hours ~= hours then hours = nil end
+            local ratio     = nil
+            if hours ~= nil then
+                if shortest == nil or hours < shortest then
+                    shortest = hours
+                end
+                ratio = hours / FarmManager25.RUNWAY_HORIZON_H
+                if ratio > 1 then ratio = 1 end
+                if ratio < 0 then ratio = 0 end
+            end
+            table.insert(row.inputs, {
+                label        = i.label or i.ft or "",
+                -- ⛔ THE TOKEN, KEPT BESIDE THE LABEL AND NEVER INSTEAD OF IT.
+                -- [[DEC-195]]: the row icon is resolved by fill-type TOKEN, never
+                -- by the display label -- the label is a title and would not
+                -- match in another language. nil when the document carried none,
+                -- which resolves to no icon and therefore the dimmed glyph.
+                ft           = i.ft,
+                heldText     = held ~= nil and groupLitres(held) or nil,
+                heldUnknown  = held == nil,
+                burnText     = perHour ~= nil and groupLitres(perHour) or nil,
+                burnUnknown  = perHour == nil,
+                runwayText   = hours ~= nil and formatHours(hours) or nil,
+                runwayUnknown = hours == nil,
+                -- nil ratio = draw NO bar. 0 = draw an empty bar in a visible
+                -- track. The two are different facts (rules 4 and 5).
+                ratio        = ratio,
+                rate         = i.rate,
+                reason       = i.reason,
+                -- [[DEC-197]] passes through UNINTERPRETED. Core does not
+                -- decide what `stocked`/`empty`/`notStarted`/`unknown` mean --
+                -- the emitter's classify_absent_stock owns that verdict, and
+                -- the page owns the appearance. A nil here is a document that
+                -- predates the field, which the page renders as `unknown`.
+                stockState   = i.stockState,
+                stateReason  = i.stateReason,
+                heldReason   = i.heldReason,
+            })
+        end
+
+        row.runwayText    = shortest ~= nil and formatHours(shortest) or nil
+        row.runwayUnknown = (shortest == nil)
+        -- ⭐ THE NUMBER THE TEXT WAS MADE FROM, not a second answer to the same
+        -- question. The footer has to COUNT points under a cut-off, and parsing
+        -- "11.3 h" back out of the rendered string to do it would be a second
+        -- derivation that could disagree with the first -- the exact defect the
+        -- p2 comment above refuses. So the source value is published and the
+        -- text stays derived from it. nil whenever runwayUnknown is true, and
+        -- the two are set from one variable so they cannot drift.
+        row.runwayHours   = shortest
+
+        for _, l in ipairs(point.lines or {}) do
+            local out = tonumber(l.outPerHour)
+            -- ⛔ `On` / `Off`, NEVER `Running` / `Idle`. `enabled` is read from
+            -- placeables.xml and says "is this line switched on". Running/Idle
+            -- is "is it producing right now", a DIFFERENT fact, and it is killed
+            -- by owner ruling. A lane copying Distribution Redux's STATUS column
+            -- brings Running/Idle/Off across; that is the line to refuse.
+            local enabled = nil
+            if l.enabled == "true" then
+                enabled = true
+            elseif l.enabled == "false" then
+                enabled = false
+            end
+            table.insert(row.lines, {
+                name        = l.name or l.id or "",
+                nameDerived = (l.nameSource == "derived"),
+                enabled     = enabled,
+                enabledUnknown = (enabled == nil),
+                outText     = out ~= nil and groupLitres(out) or nil,
+                outUnknown  = (out == nil),
+                limitingText = l.limitingInput,
+                limitingUnknown = (l.limitingInput == nil),
+                reason      = l.outReason,
+            })
+        end
+
+        for _, o in ipairs(point.outputs or {}) do
+            local held = tonumber(o.held)
+            local cap  = tonumber(o.capacity)
+            -- ⛔ THE RATIO NEEDS BOTH TERMS. A held level presented as a
+            -- percentage against a guessed ceiling is the over-claim
+            -- read_productions.py refuses to make on its own; the join belongs
+            -- to the consumer and this is the consumer, but doing it without a
+            -- capacity is the defect, not the feature.
+            local pct, ratio = nil, nil
+            if held ~= nil and cap ~= nil and cap > 0 then
+                ratio = held / cap
+                if ratio > 1 then ratio = 1 end
+                if ratio < 0 then ratio = 0 end
+                pct = string.format("%d%%", math.floor(ratio * 100 + 0.5))
+            end
+            table.insert(row.outputs, {
+                label       = o.label or o.ft or "",
+                -- Same rule as the input rows above (DEC-195).
+                ft          = o.ft,
+                heldText    = held ~= nil and groupLitres(held) or nil,
+                heldUnknown = (held == nil),
+                capText     = cap ~= nil and groupLitres(cap) or nil,
+                capUnknown  = (cap == nil),
+                pctText     = pct,
+                pctUnknown  = (pct == nil),
+                ratio       = ratio,
+                reason      = o.capacityReason,
+                -- ⚠ NO stockState ON AN OUTPUT ROW -- see the reader. The
+                -- refusal is carried by heldReason instead, and `held="0.0"`
+                -- is a real measured zero ([[DEC-203]]).
+                heldReason  = o.heldReason,
+            })
+        end
+
+        table.insert(rows, row)
+    end
+
+    -- ⛔ TIME ONLY, NO DATES (owner, 2026-09-06) -- and the DEFINITIONS stamp is
+    -- aged against the DOCUMENT'S OWN stamp, not against a clock. That keeps
+    -- this assembler pure, and it is also the comparison that actually matters:
+    -- how much older the definition data is than the savegame read beside it.
+    -- generatedAt is written at emit time, so it IS "now" for this document.
+    -- ⚠ THE TWO STAMPS ARE AGED AGAINST DIFFERENT REFERENCES, ON PURPOSE.
+    -- generatedAt is aged against the CLOCK: a productions.xml nobody has
+    -- regenerated for a week is stale, and a bare time would hide that.
+    -- defsAsOf is aged against generatedAt -- the document's own "now" -- because
+    -- the fact a player needs there is how much older the DEFINITIONS are than
+    -- the savegame read printed beside them.
+    local asOf = FarmManager25.stampText(meta.asOfText, nowText)
+    local defsAsOf = FarmManager25.stampText(meta.defsAsOfText, meta.asOfText)
+
+    return rows, {
+        status        = meta.status or "ok",
+        asOfText      = asOf,
+        defsAsOfText  = defsAsOf,
+        -- The raw stamps, carried but NOT rendered. A reader that needs the
+        -- date (a log line, a defect report) must not have to re-parse the
+        -- rendered mark to get it back -- and nothing on screen reads these.
+        asOfRaw       = meta.asOfText,
+        defsAsOfRaw   = meta.defsAsOfText,
+        reason        = meta.reason,
+        sourceKey     = meta.sourceKey,
+    }
+end
+
+--- Read the productions document Cyrus published for THIS savegame.
+--  Returns (doc, meta). ⛔ Never throws, never returns nil: an absent, corrupt
+--  or wrong-savegame document yields an EMPTY doc and a meta that SAYS SO --
+--  `status = "unavailable"` -- so the tab can tell "you own no productions"
+--  from "we could not ask". Those are different facts and they must not render
+--  the same way.
+function FarmManager25.readProductionsFile(path, expectedKey)
+    local meta = { status = "unavailable", sourceKey = expectedKey }
+
+    if path == nil or not fileExists(path) then
+        meta.reason = "notPublished"
+        return {}, meta
+    end
+
+    local xml = XMLFile.load("FarmManager25Productions", path)
+    if xml == nil then
+        print("FarmManager25: could not parse " .. tostring(path)
+            .. " as XML -- the PRODUCTIONS tab will say so rather than show an "
+            .. "empty farm")
+        meta.reason = "unreadable"
+        return {}, meta
+    end
+
+    local doc = {}
+    local rejected = nil
+
+    -- Same finally-equivalent shape as readFarmFile: free the handle whether the
+    -- body returns or throws. A throw between load and delete must never leak
+    -- the engine handle.
+    local okRead, errRead = pcall(function()
+        -- ⛔ ONE REFUSAL POINT, DELIBERATELY -- readFarmFile's own lesson. These
+        -- checks RECORD a rejection and read on; the single gate after the loop
+        -- withholds the document. Returning early from here leaves nothing read
+        -- at the point of return, so NO mutation of the refusal could change an
+        -- answer and the branch that matters most is the one no test can reach.
+        --
+        -- ⚠ A MISMATCH IS PROOF; ABSENCE IS NOT. A present-and-WRONG attribute
+        -- says this document is not ours. A missing one says only that an older
+        -- writer produced it, and refusing that would break a working install on
+        -- upgrade to buy nothing.
+        local schema = xml:getString("farmManager25Productions#schema")
+        if schema ~= nil and schema ~= tostring(FarmManager25.PRODUCTIONS_SCHEMA) then
+            rejected = "schema " .. tostring(schema) .. ", but this build reads "
+                .. tostring(FarmManager25.PRODUCTIONS_SCHEMA)
+        end
+
+        local stamped = xml:getString("farmManager25Productions#savegame")
+        if rejected == nil and stamped ~= nil and expectedKey ~= nil
+                and stamped ~= expectedKey then
+            rejected = "stamped for " .. tostring(stamped) .. ", but this is "
+                .. tostring(expectedKey)
+        end
+
+        meta.asOfText     = xml:getString("farmManager25Productions#generatedAt")
+        meta.defsAsOfText = xml:getString("farmManager25Productions#defsAsOf")
+
+        for p = 0, FarmManager25.MAX_POINTS - 1 do
+            local pk = string.format("farmManager25Productions.point(%d)", p)
+            if not xml:hasProperty(pk) then
+                break
+            end
+            local point = {
+                id         = xml:getString(pk .. "#id"),
+                name       = xml:getString(pk .. "#name"),
+                nameSource = xml:getString(pk .. "#nameSource"),
+                inputs = {}, lines = {}, outputs = {},
+            }
+            for i = 0, FarmManager25.MAX_POINT_ROWS - 1 do
+                local k = string.format("%s.input(%d)", pk, i)
+                if not xml:hasProperty(k) then break end
+                table.insert(point.inputs, {
+                    ft           = xml:getString(k .. "#ft"),
+                    label        = xml:getString(k .. "#label"),
+                    held         = xml:getString(k .. "#held"),
+                    perHour      = xml:getString(k .. "#perHour"),
+                    hoursToEmpty = xml:getString(k .. "#hoursToEmpty"),
+                    rate         = xml:getString(k .. "#rate"),
+                    reason       = xml:getString(k .. "#reason"),
+                    -- [[DEC-197]]. ⛔ THE DOCUMENT CARRIED THESE AND THIS READER
+                    -- DROPPED THEM. The emitter has published `stockState` since
+                    -- the TD-139 fix; nothing here lifted it off the document,
+                    -- so the ruling could not reach the tab however correctly
+                    -- the page rendered it. An attribute nobody parses is
+                    -- indistinguishable from an attribute nobody emits, and
+                    -- neither says a word in log.txt.
+                    stockState   = xml:getString(k .. "#stockState"),
+                    stateReason  = xml:getString(k .. "#stateReason"),
+                    heldReason   = xml:getString(k .. "#heldReason"),
+                })
+            end
+            for i = 0, FarmManager25.MAX_POINT_ROWS - 1 do
+                local k = string.format("%s.line(%d)", pk, i)
+                if not xml:hasProperty(k) then break end
+                table.insert(point.lines, {
+                    id            = xml:getString(k .. "#id"),
+                    name          = xml:getString(k .. "#name"),
+                    nameSource    = xml:getString(k .. "#nameSource"),
+                    enabled       = xml:getString(k .. "#enabled"),
+                    outPerHour    = xml:getString(k .. "#outPerHour"),
+                    limitingInput = xml:getString(k .. "#limitingInput"),
+                    outReason     = xml:getString(k .. "#outReason"),
+                })
+            end
+            for i = 0, FarmManager25.MAX_POINT_ROWS - 1 do
+                local k = string.format("%s.output(%d)", pk, i)
+                if not xml:hasProperty(k) then break end
+                table.insert(point.outputs, {
+                    ft             = xml:getString(k .. "#ft"),
+                    label          = xml:getString(k .. "#label"),
+                    held           = xml:getString(k .. "#held"),
+                    capacity       = xml:getString(k .. "#capacity"),
+                    capacityReason = xml:getString(k .. "#capacityReason"),
+                    -- ⚠ AN OUTPUT ROW CARRIES NO `stockState` AND THAT IS THE
+                    -- CONTRACT, NOT AN OMISSION ([[DEC-203]], emitter :1116):
+                    -- an output has no urgency to carry, so `held="0.0"` IS the
+                    -- measured zero and an ABSENT `held` WITH a `heldReason` is
+                    -- the refusal. The two are distinguishable without a third
+                    -- attribute. ⛔ So heldReason must be read: it is what tells
+                    -- a missing `held` apart from a zero one. It has ZERO live
+                    -- instances on savegame1 today, which is not the same as
+                    -- absent -- it is still emitted on an unreadable stock index
+                    -- or a case-differing spelling.
+                    heldReason     = xml:getString(k .. "#heldReason"),
+                })
+            end
+            table.insert(doc, point)
+        end
+    end)
+
+    local okDel = pcall(function() xml:delete() end)
+
+    if not okRead then
+        print("FarmManager25: productions.xml read failed (" .. tostring(errRead)
+            .. ") -- the PRODUCTIONS tab will say it could not read the file")
+        meta.reason = "unreadable"
+        return {}, meta
+    end
+    if not okDel then
+        print("FarmManager25: productions.xml handle could not be released")
+    end
+
+    if rejected ~= nil then
+        print("FarmManager25: refusing " .. tostring(path) .. " -- " .. rejected
+            .. " -- the PRODUCTIONS tab will say so rather than show another "
+            .. "savegame's productions")
+        meta.reason = "rejected"
+        meta.asOfText, meta.defsAsOfText = nil, nil
+        return {}, meta
+    end
+
+    -- ⭐ THE READ SUCCEEDED. Zero points here is a real answer -- a farm that
+    -- owns no production buildings -- and it must NOT be reported as a failure.
+    meta.status = "ok"
+    return doc, meta
+end
+
+--- ⭐ THE PUBLISHED SEAM (D5). The menu calls exactly this and renders what it
+--  gets. Rebuilt per call, once per switchTab() into PRODUCTIONS.
+--  ⛔ NEVER THROWS. NEVER RETURNS nil. Returns (rows, meta), always both.
+function FarmManager25:getProductionRows()
+    local doc, meta = {}, { status = "unavailable", reason = "notPublished" }
+
+    if self.saveFolder ~= nil then
+        local ok, a, b = pcall(function()
+            return FarmManager25.readProductionsFile(
+                self.saveFolder .. FarmManager25.PRODUCTIONS_NAME,
+                FarmManager25.savegameKey())
+        end)
+        -- pcall over a function returning two values hands them back in order.
+        -- A throw anywhere below leaves the unavailable default standing, which
+        -- is the honest answer: we could not ask.
+        if ok and type(a) == "table" then
+            doc = a
+            if type(b) == "table" then meta = b end
+        end
+    end
+
+    return FarmManager25.buildProductionRows(doc, meta, FarmManager25.nowStamp())
+end
+
+-- ---------------------------------------------------------------------------
+-- THE FIELDS TABLE -- the SIXTH published seam (item C1/C4/C5, CONTRACT sec. 5.2).
+--
+-- ⛔ CONTRACT-fields-core-row-2026-09-04.md GOVERNS THIS (DEC-140). Where this
+-- and the build spec disagree, the CONTRACT wins.
+--
+-- ⛔ THE SAME ASSEMBLY vs ACQUISITION SPLIT as FARM and PRODUCTIONS:
+--   buildFieldRows()    -- PURE. Zero engine references. Cannot fail: malformed
+--                          input yields `unknown` cells, never a throw.
+--   readFieldsFile()    -- the FILE boundary. Total; never throws.
+--   readLiveContracts() -- the ENGINE boundary, isolated PER MISSION.
+--   getFieldRows()      -- the seam, returning (rows, meta).
+--
+-- ⛔ TWO TRANSPORTS ON ONE ROW, and that is why freshness is per CELL here.
+-- name/area/owned are FILE/AS-OF; the contract column is LIVE. A row-level badge
+-- would be a false claim about three of its four cells. The three AS-OF columns
+-- sit under one `as of` header and the contract cell carries LIVE in-cell --
+-- one label, not 104.
+-- ---------------------------------------------------------------------------
+
+FarmManager25.FIELDS_NAME   = "fields.xml"
+FarmManager25.FIELDS_SCHEMA = 1
+FarmManager25.MAX_FIELDS    = 256      -- memory bound, not a screen bound
+FarmManager25.MAX_SUBIDS    = 16
+
+--- ⛔ OWNED-ONLY, AND IT IS A NAMED CONSTANT SO THE OWNER CAN FLIP IT IN A LIVE
+--  TEST. The seam publishes EVERY row with `owned` on it -- all 104 cross in the
+--  file at a measured ~11 KB -- so this is a filter, never a second fetch.
+--  His own words scope the tab: "fields is for the users field he owns". 104
+--  rows of which 26 are his would bury them.
+--  ⚠ NOT A SETTINGS TOGGLE. That would be designing for a preference nobody has
+--  stated; this is one constant and one live test.
+FarmManager25.FIELDS_OWNED_ONLY = true
+
+--- The seven detail lines of block 1, in render order, with the l10n key the
+--  menu resolves. ⛔ DATA, NOT CODE: adding a line is an edit to this table.
+--  ⛔ NO ROLLER RUNG AND NO STUBBLE RUNG -- PLAN-FARM-DATA-LAYER sec. 2.2a:376,
+--  binding. `rollerLevel` is INVERTED relative to plough and lime and rests on a
+--  single witness; `stubbleShredLevel` is ungrounded. Polarity is not uniform
+--  across these fields and the inconsistent ones are declared on adjacent lines
+--  of the same source, so grounding one and generalising to its neighbour is
+--  exactly backwards while looking right in review.
+--  ⚠ d3 (harvest ready) IS ABSENT: its only honest source is the foliageState
+--  membership test, which the parser reports as unavailable on this install. The
+--  ground-type marker rule is REFUTED (12 of 24 positives wrong) and must never
+--  be substituted for it.
+FarmManager25.FIELD_DETAIL_SPEC = {
+    { key = "crop",   labelKey = "fm25_field_d_crop"   },   -- d1
+    { key = "growth", labelKey = "fm25_field_d_growth" },   -- d2
+    { key = "ground", labelKey = "fm25_field_d_ground" },   -- d4
+    { key = "weeds",  labelKey = "fm25_field_d_weeds"  },   -- d5
+    { key = "plow",   labelKey = "fm25_field_d_plow"   },   -- d6
+    { key = "lime",   labelKey = "fm25_field_d_lime"   },   -- d7
+}
+
+--- 30.0626 -> "30.06". Two decimals: the parser resolves to four and the extra
+--  two are precision a player cannot act on.
+local function formatHa(n)
+    return string.format("%.2f", n)
+end
+
+--- ⛔ THE MERGED-DISAGREEMENT RULE (CONTRACT sec. 3.3 rules 4-5, sec. 3.4).
+--  A merged row reports the AGREEING value, and reports disagreement AS
+--  DISAGREEMENT -- ⛔ never by silently picking the canonical sub-id's answer,
+--  never by averaging, never by majority vote.
+--
+--  ⭐ WHY SURFACING IT IS RIGHT RATHER THAN NOISY: the house rule
+--  `one_crop_per_combined_field` says a merged field is planted with exactly one
+--  crop across all its sub-parcels, never split. So a disagreement MEANS
+--  something, and hiding it discards a signal.
+--  ⚠ IT IS LIVE TODAY on the one field item 17 names: 45 OAT/7, 46 OAT/7,
+--  36 UNKNOWN/0.
+--
+--  Returns (text, unknown, differs, partsText, parts).
+--
+--  ⭐ F12: `parts` is the SAME disagreement as a STRUCTURED array,
+--  { {sub = 45, value = "OAT"}, ... } (value nil when that sub-parcel did not
+--  report). It travels ALONGSIDE `partsText`, never replacing it: partsText is pinned
+--  in five test files, and this assembler is deliberately pure -- no g_*, so it CANNOT
+--  translate. The RENDER side turns each value into a crop name or a ground label;
+--  core keeps publishing the raw token, which is also what the row icon resolves by.
+local function agreeOrDiffer(states, key)
+    local seen, order = {}, {}
+    for _, s in ipairs(states) do
+        local v = s[key]
+        if seen[v == nil and "\0nil" or v] == nil then
+            seen[v == nil and "\0nil" or v] = true
+            table.insert(order, v)
+        end
+    end
+    if #order == 0 then
+        return nil, true, false, nil
+    end
+    if #order == 1 then
+        -- ⚠ A SINGLE AGREED *ABSENCE* IS STILL UNKNOWN. Every sub-id failing to
+        -- report is agreement about nothing.
+        if order[1] == nil then
+            return nil, true, false, nil
+        end
+        return tostring(order[1]), false, false, nil
+    end
+    -- They disagree. Name every sub-id and what it said.
+    local parts, structured = {}, {}
+    for _, s in ipairs(states) do
+        table.insert(parts, tostring(s.sub) .. " " .. tostring(s[key] or "?"))
+        table.insert(structured, { sub = s.sub, value = s[key] })
+    end
+    return nil, false, true, table.concat(parts, "  "), structured
+end
+
+--- ⭐ THE PURE ASSEMBLER (CONTRACT sec. 5.2 ①). Arity 3, returns ONE value: the
+--  ordered array of rows. ⛔ CANNOT FAIL -- zero engine references above its
+--  `end`, which is what makes it lupa-testable with no stub anywhere.
+--
+--  `merges` is `{ [canonicalId] = { subIds… } }`; nil is treated as `{}`, and
+--  ⛔ NO MERGES IS A LEGITIMATE SAVE -- every non-Montana save is exactly that.
+function FarmManager25.buildFieldRows(fields, merges, asOfText, nowText)
+    fields = fields or {}
+    merges = merges or {}
+    local rows = {}
+    local stamp = FarmManager25.stampText(asOfText, nowText)
+
+    for _, f in ipairs(fields) do
+        local subs = merges[f.id] or f.subIds or { f.id }
+        local area = tonumber(f.areaHa)
+        if area ~= nil and area ~= area then area = nil end
+
+        -- ⛔ owned IS A TRISTATE AND IT MUST STAY ONE. `false` and "we could not
+        -- resolve it" are different facts, and defaulting the second to the
+        -- first tells the player he owns nothing -- BUG-016's exact shape.
+        local owned = nil
+        if f.owned == "true" or f.owned == true then
+            owned = true
+        elseif f.owned == "false" or f.owned == false then
+            owned = false
+        end
+
+        local row = {
+            id       = f.id,
+            name     = f.name or ("Field " .. tostring(f.id)),
+            subIds   = subs,
+            -- ⛔ `merged` IS DERIVED FROM #subIds, NEVER FROM MERGE STATE. Under
+            -- that definition the `(n)` marker means exactly "this row sums n
+            -- savegame parcels", so an UNMARKED row is a true statement rather
+            -- than an omission -- which is what makes the two PLANNED merges
+            -- correct as six plain rows.
+            merged   = (#subs > 1),
+            subCount = #subs,
+            areaText    = area ~= nil and formatHa(area) or nil,
+            areaUnknown = (area == nil),
+            -- The number areaText was rendered from. The FIELDS footer has to
+            -- SUM areas, and summing parsed-back display strings would be a
+            -- second derivation that could disagree with the first. Set from
+            -- the same `area` local as the two fields above, so all three
+            -- carry one answer. nil exactly when areaUnknown is true.
+            areaHa      = area,
+            areaReason  = f.areaReason,
+            owned        = owned,
+            ownedUnknown = (owned == nil),
+            ownedReason  = f.ownedReason,
+            -- ⛔ THE CONTRACT CELL STARTS UNKNOWN, NOT EMPTY. readLiveContracts
+            -- sets contractKnown; if the engine never answers, every row keeps
+            -- `contractKnown = false` and renders `unknown` -- not one row is
+            -- silently left with a nil that reads as "no contract".
+            contract      = nil,
+            hasContract   = false,
+            contractKnown = false,
+            asOfText      = stamp,
+            detail        = {},
+        }
+
+        local states = f.states or {}
+        for _, spec in ipairs(FarmManager25.FIELD_DETAIL_SPEC) do
+            local text, unknown, differs, parts, partsList = agreeOrDiffer(states, spec.key)
+            table.insert(row.detail, {
+                key = spec.key, labelKey = spec.labelKey,
+                text = text, unknown = unknown,
+                differs = differs, partsText = parts,
+                parts = partsList,
+            })
+            -- ⛔ THE CROP TOKEN, PUBLISHED SEPARATELY FOR THE ROW ICON
+            -- ([[DEC-195]]). `#crop` is a TOKEN, not translated text, which is
+            -- exactly why the icon may be resolved from it -- the display
+            -- label would not match in another language.
+            -- ⛔ SET ONLY WHEN THE PARTS AGREE AND THE ANSWER IS KNOWN. A
+            -- merged field whose sub-parcels disagree has no single crop, and
+            -- publishing any one of them would put ANOTHER crop's picture on
+            -- the row -- which DEC-195 forbids by name. Absent here means the
+            -- page draws the dimmed glyph, which is the ruled fallback.
+            if spec.key == "crop" and not unknown and not differs then
+                row.cropToken = text
+            end
+        end
+
+        -- d8, PLANNED NEXT CROP, and the field's NOTES: shown exactly as the emitter
+        -- published them, never computed here. nil = the document carried no such
+        -- element (an older emitter), which the pane words as OUR gap, not as `none`.
+        row.plan  = f.plan
+        row.notes = f.notes
+
+        table.insert(rows, row)
+    end
+
+    return rows
+end
+
+--- Read the FIELDS document Cyrus published for THIS savegame (CONTRACT sec. 5.2 ②).
+--  Returns `(fields, merges, asOfText)`. ⛔ Total. Never throws. On any failure:
+--  `({}, {}, nil)` -- empty, never partial-looking.
+function FarmManager25.readFieldsFile(path, expectedKey)
+    local fields, merges = {}, {}
+
+    if path == nil or not fileExists(path) then
+        return {}, {}, nil
+    end
+
+    local xml = XMLFile.load("FarmManager25Fields", path)
+    if xml == nil then
+        print("FarmManager25: could not parse " .. tostring(path)
+            .. " as XML -- the FIELDS tab will say so rather than show an empty farm")
+        return {}, {}, nil
+    end
+
+    local asOfText, rejected = nil, nil
+
+    local okRead, errRead = pcall(function()
+        -- ⛔ ONE REFUSAL POINT. These checks RECORD a rejection and read on; the
+        -- gate after the loop withholds the document. An early return leaves
+        -- nothing read at the point of return, so NO mutation of the refusal
+        -- could change an answer -- the branch that matters most becomes the one
+        -- branch no test can reach.
+        -- ⚠ A MISMATCH IS PROOF; ABSENCE IS NOT. `savegame` and `schema` are
+        -- READ, not merely written: an unread stamp is worse than no stamp,
+        -- because it creates the appearance of a check.
+        local schema = xml:getString("farmManager25Fields#schema")
+        if schema ~= nil and schema ~= tostring(FarmManager25.FIELDS_SCHEMA) then
+            rejected = "schema " .. tostring(schema) .. ", but this build reads "
+                .. tostring(FarmManager25.FIELDS_SCHEMA)
+        end
+        local stamped = xml:getString("farmManager25Fields#savegame")
+        if rejected == nil and stamped ~= nil and expectedKey ~= nil
+                and stamped ~= expectedKey then
+            rejected = "stamped for " .. tostring(stamped) .. ", but this is "
+                .. tostring(expectedKey)
+        end
+
+        asOfText = xml:getString("farmManager25Fields#generatedAt")
+
+        for i = 0, FarmManager25.MAX_FIELDS - 1 do
+            local key = string.format("farmManager25Fields.field(%d)", i)
+            if not xml:hasProperty(key) then
+                break
+            end
+            local id = tonumber(xml:getString(key .. "#id"))
+            if id ~= nil then
+                -- ⛔ `subIds` OMITTED MEANS `{id}`, NOT ABSENCE OF DATA. The
+                -- writer omits it for a single field and the reader's default is
+                -- what keeps the array TOTAL, so no consumer ever handles nil.
+                local subs = { id }
+                local raw = xml:getString(key .. "#subIds")
+                if raw ~= nil then
+                    subs = {}
+                    for token in tostring(raw):gmatch("%d+") do
+                        if #subs < FarmManager25.MAX_SUBIDS then
+                            table.insert(subs, tonumber(token))
+                        end
+                    end
+                    if #subs == 0 then subs = { id } end
+                    if #subs > 1 then merges[id] = subs end
+                end
+
+                local states = {}
+                for s = 0, FarmManager25.MAX_SUBIDS - 1 do
+                    local sk = string.format("%s.state(%d)", key, s)
+                    if not xml:hasProperty(sk) then break end
+                    table.insert(states, {
+                        sub    = tonumber(xml:getString(sk .. "#sub")),
+                        crop   = xml:getString(sk .. "#crop"),
+                        growth = xml:getString(sk .. "#growth"),
+                        ground = xml:getString(sk .. "#ground"),
+                        weeds  = xml:getString(sk .. "#weeds"),
+                        plow   = xml:getString(sk .. "#plow"),
+                        lime   = xml:getString(sk .. "#lime"),
+                    })
+                end
+
+                -- ⛔ PLAN AND NOTES, AS PUBLISHED. An element ABSENT from the document is
+                -- what an older emitter's file looks like: it stays nil here so the pane can
+                -- say "Not available yet." (our gap), never `none` (a statement about the
+                -- field). A state this build does not recognise becomes `unknown`.
+                local function readFact(tag, known)
+                    local fk = key .. "." .. tag
+                    if not xml:hasProperty(fk) then return nil end
+                    local state = xml:getString(fk .. "#state")
+                    local reason = xml:getString(fk .. "#reason")
+                    if state == nil or not known[state] then
+                        state = "unknown"
+                        reason = reason or ("unrecognised " .. tag .. " state")
+                    end
+                    return {
+                        state = state,
+                        reason = reason,
+                        crop = xml:getString(fk .. "#crop"),
+                        window = xml:getString(fk .. "#window"),
+                        plannedOn = xml:getString(fk .. "#plannedOn"),
+                        text = xml:getString(fk .. "#text"),
+                        truncated = xml:getString(fk .. "#truncated") == "true",
+                    }
+                end
+                local planFact = readFact("plan",
+                    { reviewed = true, unreviewed = true, none = true, unknown = true })
+                local notesFact = readFact("notes",
+                    { note = true, none = true, unknown = true })
+
+                table.insert(fields, {
+                    id = id,
+                    plan = planFact,
+                    notes = notesFact,
+                    name = xml:getString(key .. "#name"),
+                    areaHa = xml:getString(key .. "#areaHa"),
+                    owned = xml:getString(key .. "#owned"),
+                    areaReason = xml:getString(key .. "#areaReason"),
+                    ownedReason = xml:getString(key .. "#ownedReason"),
+                    subIds = subs,
+                    states = states,
+                })
+            end
+        end
+    end)
+
+    local okDel = pcall(function() xml:delete() end)
+
+    if not okRead then
+        print("FarmManager25: fields.xml read failed (" .. tostring(errRead)
+            .. ") -- the FIELDS tab will say it could not read the file")
+        return {}, {}, nil
+    end
+    if not okDel then
+        print("FarmManager25: fields.xml handle could not be released")
+    end
+    if rejected ~= nil then
+        print("FarmManager25: refusing " .. tostring(path) .. " -- " .. rejected
+            .. " -- the FIELDS tab will say so rather than show another "
+            .. "savegame's fields")
+        return {}, {}, nil
+    end
+
+    return fields, merges, asOfText
+end
+
+--- The ENGINE boundary (CONTRACT sec. 5.2 ③). Mutates `rows` in place, returns them.
+--  ⛔ TOTAL, AND ISOLATED PER MISSION. A mission whose getter throws costs only
+--  its own contribution.
+--  ⚠ NOT THEORETICAL: on savegame3 one thrown getter inside a single enclosing
+--  pcall blanked three FARM rows together, and the existence probe
+--  `m.getReward ~= nil` could never catch it BECAUSE THE METHOD IS REAL -- it
+--  throws instead of returning.
+--  ⛔ ON TOTAL FAILURE every row keeps `contractKnown = false`; not one row is
+--  left with a nil that a reader could mistake for "no contract".
+function FarmManager25.readLiveContracts(rows)
+    if type(rows) ~= "table" then
+        return rows
+    end
+
+    local ok = pcall(function()
+        local farmId = g_currentMission ~= nil and g_currentMission:getFarmId() or nil
+        if farmId == nil or farmId == 0
+                or g_missionManager == nil
+                or g_missionManager.getMissionsByFarmId == nil then
+            return
+        end
+        local missions = g_missionManager:getMissionsByFarmId(farmId)
+        if type(missions) ~= "table" then
+            return
+        end
+
+        -- fieldId -> { title, reward } for RUNNING missions only.
+        local byField = {}
+        -- [[BUG-040]] architect R-3: "no contract" is KNOWN only if EVERY
+        -- mission answered getIsRunning with a boolean AND every running
+        -- FIELD mission's field resolved. Zero missions is vacuously known.
+        -- Owner-approved reading (FS25 ae5b5b7): a running mission with NO
+        -- getField (deadwood, destructibleRock, treeTransport -- getField is
+        -- defined only on AbstractFieldMission.lua:86) is on no field and is
+        -- SKIPPED; one whose getField exists but returns nil or throws still
+        -- makes every row without a found contract unknown.
+        local allKnown = true
+        for _, m in ipairs(missions) do
+            -- ⛔⛔ OFFERED IS NOT ACTIVE. getMissionsByFarmId returns
+            -- `mission.farmId == nil or mission.farmId == farmId` -- the engine's
+            -- own comment is "All missions, but only for active it needs to match
+            -- the farm" -- so this list carries OFFERED contracts, which no farm
+            -- owns. A column headed "active contract" that rendered every offer
+            -- would mark most of the map as under contract. That is why FARM's
+            -- d1 had to be relabelled "Contracts offered or active".
+            -- ⛔ FILTERED ON getIsRunning(), inside the total pcall shape and
+            -- NEVER behind an existence probe.
+            -- [[BUG-040]] getIsRunning() returns a BOOLEAN
+            -- (AbstractMission.lua:796), so it is read RAW and compared
+            -- `== true`; through askMission's tonumber it was nil on every farm.
+            local running = FarmManager25.askMissionRaw(m, "getIsRunning")
+            if type(running) ~= "boolean" then
+                allKnown = false
+            elseif running == true and m.getField ~= nil then
+                local fieldId = FarmManager25.askMissionFieldId(m)
+                if fieldId == nil then
+                    -- A running contract we cannot place: its field must not
+                    -- read "no contract", and neither may any other.
+                    allKnown = false
+                else
+                    -- ⛔ THE NAME IS getTitle(), the engine's LOCALISED title
+                    -- (AbstractMission.lua:868, set from g_i18n in each
+                    -- mission's constructor). NOT getTypeName (0 definitions
+                    -- in the engine) and NOT m.type.name (the internal save
+                    -- key, e.g. "harvestMission").
+                    local title = FarmManager25.askMissionRaw(m, "getTitle")
+                    if type(title) ~= "string" or title == "" then
+                        title = nil
+                    end
+                    byField[fieldId] = {
+                        title = title,
+                        reward = FarmManager25.askMission(m, "getReward"),
+                    }
+                end
+            end
+        end
+
+        for _, row in ipairs(rows) do
+            -- A row with a FOUND contract is known whatever else failed; a row
+            -- without one may claim "no contract" only when allKnown.
+            row.contractKnown = allKnown
+            for _, sub in ipairs(row.subIds or {}) do
+                -- ⛔ THE UNION OVER subIds (CONTRACT sec. 3.3 rule 5): a contract
+                -- on ANY sub-id is a contract on the row. A harvest mission on
+                -- field 36 shows on row #45.
+                local hit = byField[sub]
+                if hit ~= nil then
+                    -- ⛔ TWO FACTS, TWO FIELDS. `hasContract` says a running
+                    -- mission was found on this row; `contract` is its NAME.
+                    -- Collapsing them would make an unnameable contract render
+                    -- identically to no contract at all -- the tab would say
+                    -- "no contract" about a field that is under one.
+                    row.contractKnown = true
+                    row.hasContract = true
+                    row.contract = hit.title
+                    row.contractReward = hit.reward
+                    break
+                end
+            end
+        end
+    end)
+
+    if not ok then
+        print("FarmManager25: a live contracts lookup failed -- the FIELDS "
+            .. "contract column reads 'unknown'")
+        for _, row in ipairs(rows) do
+            row.contractKnown = false
+            row.contract = nil
+            row.hasContract = nil
+        end
+    end
+    return rows
+end
+
+--- The meta channel. ⛔ `#rows == 0` HAS TWO IRRECONCILABLE MEANINGS and they
+--  must not collapse: a farm that genuinely has no fields, and a document we
+--  could not read. An empty array alone cannot carry that (DEC-001 at the
+--  row-set level), so it needs a channel of its own.
+--
+--  ⛔ F11 / SEAM-4 (BUG-036): the stamp goes through stampText(), like FARM's
+--  and PRODUCTIONS'. It was published raw ("2026-09-07 18:42 UTC"), so a tab
+--  eleven days stale showed no age; it now reads "18:42 (11d)". An unreadable
+--  stamp becomes nil and the menu prints the word `unknown`.
+function FarmManager25.fieldsMeta(fields, asOfText, saveFolder, nowText)
+    if saveFolder == nil then
+        return { status = "unavailable", reason = "noSaveFolder" }
+    end
+    if asOfText == nil and (fields == nil or #fields == 0) then
+        return { status = "unavailable", reason = "notPublished" }
+    end
+    return { status = "ok", asOfText = FarmManager25.stampText(asOfText, nowText),
+             sourceKey = FarmManager25.savegameKey() }
+end
+
+--- ⭐ THE PUBLISHED SEAM (CONTRACT sec. 5.2 ④). Returns (rows, meta), always
+--  both. ⛔ Never throws. Never returns nil. Caller:
+--  InGameMenuFarmManager25:refreshFieldData() -- and nothing else, ever.
+function FarmManager25:getFieldRows()
+    local fields, merges, asOfText = {}, {}, nil
+
+    if self.saveFolder ~= nil then
+        local ok, a, b, c = pcall(function()
+            return FarmManager25.readFieldsFile(
+                self.saveFolder .. FarmManager25.FIELDS_NAME,
+                FarmManager25.savegameKey())
+        end)
+        if ok and type(a) == "table" then
+            fields = a
+            if type(b) == "table" then merges = b end
+            asOfText = c
+        end
+    end
+
+    local nowText = FarmManager25.nowStamp()
+    local rows = FarmManager25.buildFieldRows(fields, merges, asOfText, nowText)
+    FarmManager25.readLiveContracts(rows)
+    return rows, FarmManager25.fieldsMeta(fields, asOfText, self.saveFolder, nowText)
+end
+
+
+--- Open the in-game menu (FM25_TOGGLE_SETTINGS, default Ctrl+Alt+Period), where
+--  registerMenuPage has spliced our page in as a tab.
+--
+--  ⛔ THE GUARD IS DELIBERATELY UNCHANGED. `getIsGuiVisible()` is documented as
+--  *"Determine if any menu or dialog is visible"* (Gui.md; its body is
+--  `self.currentGui ~= nil or self:getIsDialogVisible()`), so it also blocks the
+--  press while the in-game menu is ALREADY open. That is the ruled behaviour,
+--  not an oversight: the tab is visible and clickable once the menu is up, so
+--  the blocked case has a working route, and narrowing the guard is a change we
+--  can make later with no rework.
+--
+--  ⛔ AND WE DO NOT DEEP-LINK TO OUR TAB. `TabbedMenu:goToPage` is in the corpus
+--  with NO Description, and `classify "InGameMenu page registration addPage"`
+--  returns exit 1 -- ZERO documented pages. Jumping straight to the page would
+--  be a guess dressed as a feature. Open the menu; let the player click.
+--
+--  The open itself belongs to the GUI lane: InGameMenuFarmManager25.open() shows
+--  the menu (Gui:showGui, corpus-documented) and then best-effort selects our
+--  tab. It takes no arguments, returns nothing, and is pcall'd on its own side.
+--
+--  ⛔ ONE CALL, NO MACHINERY AROUND IT. open() may fail to land on our tab --
+--  `TabbedMenu:goToPage` is signature-only in the corpus, no Description, so
+--  that is unverified in BOTH directions. There is deliberately NO retry, NO
+--  fallback page-selection and NO did-it-work check here: the owner's live test
+--  is the only authority on whether the tab lands, and apparatus built on an
+--  unverified engine call is a guess with moving parts. If it no-ops the page is
+--  still one click away on the tab, which is a working route.
+--
+--  ⚠ The nil check below is NOT a did-it-work check. It is presence-testing OUR
+--  OWN module -- absent in a headless test, on a dedicated server, or in a
+--  package built without the page file -- and it is the same nil-tolerance
+--  registerMenuPage uses. Without it the key would throw into the pcall and
+--  print a failure on every press in exactly the contexts where there is no
+--  screen to draw on anyway.
 function FarmManager25:onToggleSettings()
     local ok, err = pcall(function()
         if g_gui == nil then
@@ -1221,10 +3880,10 @@ function FarmManager25:onToggleSettings()
         if g_gui:getIsGuiVisible() then
             return
         end
-        if not FarmManager25.settingsGuiLoaded then
+        if InGameMenuFarmManager25 == nil or InGameMenuFarmManager25.open == nil then
             return
         end
-        g_gui:showDialog("FarmManagerSettings")
+        InGameMenuFarmManager25.open()
     end)
     if not ok then
         print("FarmManager25: settings open failed -- " .. tostring(err))
@@ -1350,9 +4009,72 @@ function FarmManager25.gameClock()
 end
 
 
+--- The farm DAY a card was stamped on. Returns a positive integer, or nil when
+--  the day cannot be read. Nil is a real answer here and must stay one: the
+--  MESSAGES tab groups by day, and a fabricated day would file a card under the
+--  wrong heading -- the exact class of lie DEC-001 exists to prevent. A nil day
+--  groups under EARLIER, which is where the design already puts every card
+--  written before this field existed.
+--
+--  ⛔ THE FIELD NAME IS NOT ENGINE-ATTESTED, AND THAT IS WHY THIS IS GUARDED.
+--  Measured 2026-09-12, four instruments, stated so the next reader does not
+--  redo it:
+--    - gameSource.zip: `Environment.lua` IS ABSENT from the 951-file subset
+--      (only `dataS/scripts/environment/weather/` ships). The three `currentDay`
+--      hits in the subset are LOCAL VARIABLES off getDate() in
+--      PlayerSystem.lua:185-203 -- real-world date, not farm time. No evidence.
+--    - fs25-lookup: the `Environment` CLASS IS NOT IN THE CORPUS AT ALL -- a
+--      TOC scan returns only EnvironmentalScoreEvent / RequestEnvironmentalScore
+--      Event. Not a query miss; the page does not exist. No evidence.
+--    - the game's OWN savegame (read-only): `environment.xml` carries
+--      `<currentDay>`, `<currentMonotonicDay>` and `<daysPerPeriod>`. This is
+--      the strongest signal we have, and it is still only a signal.
+--    - installed mods: FS25_FieldsOfStories reads
+--      `environment.currentDayInPeriod` (IAHelper.lua:1222); FS25_Distribution_
+--      Redux probes `env.currentDay` DEFENSIVELY through tryCall
+--      (SmartDistribution.lua:4336) -- i.e. its author was unsure too.
+--
+--  ⚠ AND A MATCHING NAME ON DISK DOES NOT PROVE A MATCHING RUNTIME FIELD. This
+--  very file already documents the counterexample: `environment.xml`'s
+--  `<dayTime>` is MINUTES-of-day on disk while runtime `dayTime` is
+--  MILLISECONDS (:3688, F-002). The save above reads `<dayTime>879.458435</>`
+--  -- 879 minutes, 14:39 -- which is that trap in the owner's own savegame.
+--
+--  ⭐ SO: currentMonotonicDay is preferred because grouping wants a counter that
+--  never resets; currentDay is the fallback. Whichever resolves, an unreadable
+--  day publishes nil. WHICH ONE ACTUALLY RESOLVES IS THE OWNER'S LIVE TEST --
+--  no test in this repo asserts it and none can.
+function FarmManager25.gameDay()
+    if g_currentMission == nil or g_currentMission.environment == nil then
+        return nil
+    end
+    local env = g_currentMission.environment
+    local day = env.currentMonotonicDay
+    if type(day) ~= "number" then
+        day = env.currentDay
+    end
+    if type(day) ~= "number" then
+        return nil
+    end
+    -- Guard the shape, not just the type: a negative or fractional day would
+    -- sort and group wrongly and is not a day we can honestly report.
+    day = math.floor(day)
+    if day < 0 then
+        return nil
+    end
+    return day
+end
+
+
 function FarmManager25:buildOverlays()
     local ok, err = pcall(function()
         local d = FarmManager25.DESIGN
+        -- ⚠ RAW THEME ON PURPOSE, AND IT IS NOT AN OVERSIGHT. This block
+        -- reads GEOMETRY only -- panel.insetPx, cardBorderPx and input's
+        -- *Px sizes -- and doubles as the load assertion for
+        -- FarmManagerTheme.lua. No colour is read here, so there is nothing
+        -- to convert; routing it through engineTheme() would only make the
+        -- load check depend on the converter it is meant to run before.
         local theme = FarmManager25.THEME
         if theme == nil then
             -- FarmManagerTheme.lua is listed before this file in modDesc;
@@ -1443,7 +4165,7 @@ function FarmManager25:buildOverlays()
         --   setOverlayColor(id, r,g,b,a);  renderOverlay(id, x, y, w, h)
         -- ...and it renders the SAME id repeatedly in a loop, which is exactly
         -- what a stack of cards is.
-        local path = Utils.getFilename("textures/fm25_atlas.dds", FarmManager25.MOD_DIR)
+        local path = Utils.getFilename(FarmManager25.ATLAS_FILE, FarmManager25.MOD_DIR)
         if not fileExists(path) then
             error("atlas missing at " .. tostring(path))
         end
@@ -1463,31 +4185,146 @@ function FarmManager25:buildOverlays()
 end
 
 
---- Register the settings dialog with g_gui (S158). Guarded end to end: with
---  g_gui absent (dedicated server / headless test), the source class not
---  loaded, or any load failure, settingsGuiLoaded stays false and the settings
---  key is a clean no-op. loadProfiles + loadGui is AutoDrive's exact shape
---  (Gui.lua:3,60); the controller is instantiated ONCE (.new() BEFORE loadGui
---  -- the "nil controller" trap, BP-064 §1) and reused across map reloads.
---  Loaded is latched on a throw-free pass, not on loadGui's return value
---  (its success convention varies); showDialog is itself guarded in
---  onToggleSettings, so a mis-registered name degrades to a printed no-op.
-function FarmManager25:registerSettingsGui()
-    FarmManager25.settingsGuiLoaded = false
-    if g_gui == nil or FarmManagerSettingsGui == nil or FarmManagerSettingsGui.new == nil then
+--- The savegame this session is playing, as a folder name ("savegame3").
+--
+--  ⛔ THE BASENAME OF missionInfo.savegameDirectory, not savegameIndex. The two
+--  agree on every contiguous set we have observed (six times across three saves,
+--  and the game's own log prints "(savegame3)" beside "My game save(3)") -- but a
+--  player with savegame1 and savegame20 is untested, and a key that mapped two
+--  saves onto one folder would recreate the exact bug this exists to fix. The
+--  folder's own name removes the question, and the Python half derives its key
+--  from the same fact (Path(config.paths.savegame_dir).name) so the two halves
+--  cannot invent different values. Reading a path is not writing to it.
+--
+--  nil until the game has been saved once -- GIANTS says so in its own words
+--  (AISystem.lua:1105: "Savegame directory does not exist yet, please save the
+--  game first"), and a multiplayer client on a remote host has no local save at
+--  all. Callers SKIP persistence on nil; they must never substitute the root.
+--
+--  Timing is safe: missionInfo is fully populated before a mod's loadMap is
+--  dispatched (PlaceableSystem.lua:760, LoadTrigger.lua:132 both read it during
+--  map/placeable loading).
+function FarmManager25.savegameKey()
+    local mi = g_currentMission ~= nil and g_currentMission.missionInfo or nil
+    if mi == nil then
+        return nil
+    end
+    local dir = mi.savegameDirectory
+    if dir ~= nil and dir ~= "" then
+        -- Trailing separators tolerated; the game writes none
+        -- ("C:/Users/.../FarmingSimulator2025/savegame3").
+        return dir:match("([^/\\]+)[/\\]*$")
+    end
+    if mi.savegameIndex ~= nil then
+        return "savegame" .. tostring(mi.savegameIndex)
+    end
+    return nil
+end
+
+--- Dispose of the pre-scoping UNSCOPED replies.xml, exactly once.
+--
+--  <= v3.0.0.0 wrote every reply to modSettings/<MOD>/replies.xml regardless of
+--  savegame, and the skill truncates only on ingest -- so acks earned on one farm
+--  sat there waiting to be claimed by whichever farm ran the skill next. Now that
+--  the skill reads the scoped path, that file is unreachable and would leak
+--  forever.
+--
+--  ⛔ CONSUME AND DISCARD, never ingest. Those entries carry no savegame stamp;
+--  handing them to whichever save loads first is the same attribution error that
+--  makes migrating the orphaned cards unacceptable. The ids are printed to the
+--  log first, so the evidence survives even though the answers do not.
+--
+--  Delete via getfenv(0) (the consumeBridge lesson: FS25's sandboxed global
+--  environment has no deleteFile; the engine's real one does), with the same
+--  write-an-empty-document fallback -- kept at the replies root tag so an
+--  un-upgraded skill copy reads an empty ledger rather than a parse error.
+function FarmManager25.discardLegacyReplies(rootFolder)
+    local path = rootFolder .. FarmManager25.REPLIES_NAME
+    if not fileExists(path) then
         return
     end
-    local ok, err = pcall(function()
-        g_gui:loadProfiles(FarmManager25.MOD_DIR .. "gui/guiProfiles.xml")
-        if FarmManager25.settingsGui == nil then
-            FarmManager25.settingsGui = FarmManagerSettingsGui.new()
+    local ids, hadEntries = {}, false
+    pcall(function()
+        local xml = XMLFile.load("FarmManager25LegacyReplies", path)
+        if xml == nil then
+            return
         end
-        g_gui:loadGui(FarmManager25.MOD_DIR .. "gui/FarmManagerSettingsGui.xml",
-            "FarmManagerSettings", FarmManager25.settingsGui)
-        FarmManager25.settingsGuiLoaded = true
+        pcall(function()
+            for i = 0, FarmManager25.MAX_REPLIES - 1 do
+                local key = string.format("farmManager25Replies.reply(%d)", i)
+                if not xml:hasProperty(key) then
+                    break
+                end
+                hadEntries = true
+                table.insert(ids, tostring(xml:getString(key .. "#id")))
+            end
+        end)
+        xml:delete()
+    end)
+    if not hadEntries then
+        return
+    end
+    print(string.format(
+        "FarmManager25: discarding %d reply/replies from the pre-scoping (<= v3.0.0.0) unscoped "
+        .. "replies.xml -- they cannot be attributed to a savegame, so they are "
+        .. "dropped rather than credited to the wrong farm: %s",
+        #ids, table.concat(ids, ", ")))
+    local ok = pcall(function() getfenv(0).deleteFile(path) end)
+    if ok and not fileExists(path) then
+        return
+    end
+    pcall(function()
+        local f = io.open(path, "w")
+        if f ~= nil then
+            f:write("<farmManager25Replies/>")
+            f:close()
+        end
+    end)
+end
+
+-- registerSettingsGui was deleted here (Stage 1). It registered the S158 modal
+-- dialog, whose files -- FarmManagerSettingsGui.lua, gui/FarmManagerSettingsGui.xml
+-- and its modDesc <sourceFile> entry -- no longer exist: the settings now live on
+-- the in-game menu page, registered by registerMenuPage() above. Loading a GUI
+-- from a path that is not in the package is not a degrade, it is a lie in the log.
+
+--- Register the in-game menu page (Stage 1 seam). The page itself --
+--  InGameMenuFarmManager25 -- is the GUI lane's file, sourced at the bottom of
+--  this one; this side only calls its register(). pcall'd, so a failure costs
+--  the menu page and nothing else.
+--
+--  ⛔ THE TWO KINDS OF ABSENCE ARE NOT THE SAME THING, and treating them alike
+--  is what let a missing source() line ship undetected:
+--
+--  * `InGameMenuFarmManager25 == nil` -- the file was NEVER LOADED. After the
+--    source() call at the bottom of this file that can only mean the page file
+--    is missing from the package. ⛔ A PACKAGING BUG, and it is PRINTED. This
+--    branch was silent, and silence is exactly how the whole page shipped
+--    inert while the log looked healthy.
+--  * the table exists but `.register` is nil -- the file LOADED and took its
+--    OWN headless guard (`if Class == nil or TabbedMenuFrameElement == nil then
+--    return end`), leaving a bare table behind. That is the expected degrade on
+--    a dedicated server or under the lupa harness, where there is no screen to
+--    draw on. Stays SILENT -- printing here would spam every headless run.
+--
+--  The distinction is only available BECAUSE the page file guards itself that
+--  way; without the source() call above, both cases collapse into "nil" and
+--  neither can be told from the other.
+function FarmManager25:registerMenuPage()
+    if InGameMenuFarmManager25 == nil then
+        print("FarmManager25: gui/InGameMenuFarmManager25.lua did not load -- "
+            .. "the farm manager menu page is MISSING from this build. The HUD, "
+            .. "cards and replies are unaffected; the menu tab will not appear.")
+        return
+    end
+    if InGameMenuFarmManager25.register == nil then
+        return   -- loaded, then took its own headless guard: no screen here
+    end
+    local ok, err = pcall(function()
+        InGameMenuFarmManager25.register()
     end)
     if not ok then
-        print("FarmManager25: settings GUI registration failed -- the settings key is off this session -- " .. tostring(err))
+        print("FarmManager25: in-game menu page registration failed -- the page is off this session -- " .. tostring(err))
     end
 end
 
@@ -1507,13 +4344,21 @@ function FarmManager25:loadMap(name)
         return
     end
 
+    -- ⛔ TWO createFolder calls, parent first -- createFolder is NOT mkdir -p.
+    -- Courseplay calls it once per level for the same reason (FileSystem.lua:189)
+    -- and the game's own log shows the two lines separately. One call to the deep
+    -- path may silently no-op, and then every write below fails.
     local folder = getUserProfileAppPath() .. FarmManager25.RELATIVE_FOLDER
     createFolder(folder)
 
-    self.filePath       = folder .. FarmManager25.FILE_NAME
     self.timeSinceCheck = 0
     self.queue          = {}
     self.stack          = {}
+    -- Cleared with the stack, and for the same reason: the transcript is THIS
+    -- savegame's history and rides the same per-savegame cards.xml. Carrying it
+    -- across a map load would show save A's exchanges in save B -- the exact
+    -- bleed the per-savegame split was shipped to fix (BUG-027).
+    self.retained       = {}
     self.useNativeOnly  = false
 
     self.interactiveOk      = true
@@ -1521,32 +4366,86 @@ function FarmManager25:loadMap(name)
     self.inputBarRect       = nil
     self.panelRect          = nil
     FarmManager25.scrollOffset = 0
-    -- loadState populates the stack directly (not via push), so it must not
+    -- loadCards populates the stack directly (not via push), so it must not
     -- arm the dirty-flush -- we would re-save what we just read.
     self.stateDirty         = false
 
+    -- The HUD block is machine-global and loads on EVERY savegame, including the
+    -- ones with no directory to scope to.
     self.stateFolder = folder
     self:loadSettings(folder)     -- hand-edited seed first...
-    self:loadState(folder)        -- ...then the live store wins (mode + cards too)
-    self:buildOverlays()
-    self:installOverlayToggleHook()
-    self:registerSettingsGui()
+    self:loadState(folder)        -- ...then the live store wins (position + mode)
 
-    -- Start from a clean bridge: a message left over from a previous session
-    -- is stale by definition and must not pop on load.
-    if fileExists(self.filePath) then
-        FarmManager25.consumeBridge(self.filePath)
+    local key = FarmManager25.savegameKey()
+    if key == nil then
+        -- ⛔ SKIP persistence. Do NOT fall back to `folder`: an unscoped store is
+        -- the defect, and two simultaneously-unsaved new games would share it.
+        -- Nothing real is lost -- a never-saved game has no careerSavegame.xml, so
+        -- no manager can be bound to it in the first place. Say so out loud:
+        -- absence must not look like data.
+        self.saveFolder = nil
+        self.filePath   = nil
+        print("FarmManager25: this savegame has no directory yet (a new game not "
+            .. "saved once, or a multiplayer client) -- cards and replies are NOT "
+            .. "persisted this session, and no manager can be bound to it until "
+            .. "you save. The panel still works; nothing is written.")
+    else
+        self.saveFolder = folder .. key .. "/"
+        createFolder(self.saveFolder)      -- second call, child of the first
+        self.filePath   = self.saveFolder .. FarmManager25.FILE_NAME
+        self:loadCards(self.saveFolder)
+        -- One-time: dispose of the pre-scoping shared replies.xml so its
+        -- un-ingested acks can never be claimed as this farm's answers.
+        FarmManager25.discardLegacyReplies(folder)
     end
 
-    print(string.format("FarmManager25: watching '%s' (protocol %d, custom HUD %s)",
-        self.filePath, FarmManager25.PROTOCOL, self.overlaysOk and "on" or "OFF - native fallback"))
+    self:buildOverlays()
+    self:installOverlayToggleHook()
+    self:registerMenuPage()
+
+    if self.filePath ~= nil then
+        -- Start from a clean bridge: a message left over from a previous session
+        -- is stale by definition and must not pop on load.
+        if fileExists(self.filePath) then
+            FarmManager25.consumeBridge(self.filePath)
+        end
+        print(string.format("FarmManager25: watching '%s' (protocol %d, custom HUD %s)",
+            self.filePath, FarmManager25.PROTOCOL, self.overlaysOk and "on" or "OFF - native fallback"))
+        -- One manager install serves ONE savegame (README: "one manager install
+        -- per savegame, in its own directory"), so an EMPTY panel is the CORRECT
+        -- state for a savegame nobody has set up a manager for. Unexplained, that
+        -- reads as the cards having vanished -- i.e. as a new bug. Say it on the
+        -- panel, through the card mechanism the mod already has.
+        if #self.stack == 0
+                and not fileExists(self.saveFolder .. FarmManager25.CARDS_NAME)
+                and not fileExists(self.saveFolder .. FarmManager25.REPLIES_NAME) then
+            local n = FarmManager25.buildNotification("info", "FARM MANAGER", nil, {
+                "No manager is set up for " .. key .. ".",
+                "Each savegame needs its own manager install,",
+                "in its own directory -- see the skill README.",
+            }, "briefing", nil, nil)
+            if n ~= nil then
+                -- Inserted the way loadCards does, NOT via push(): this notice is
+                -- recomputed every load. `ephemeral` keeps saveCards from writing
+                -- it, so it can never become a card that restores itself forever
+                -- -- which is the shape of the very bug being fixed here.
+                n.ephemeral = true
+                table.insert(self.stack, n)
+            end
+        end
+    end
 end
 
 function FarmManager25:deleteMap()
-    -- Persist the window position, overlay mode and un-actioned action cards
-    -- on the way out (saveState no-ops when stateFolder is nil, i.e. the
-    -- dedicated-server path never got this far).
+    -- Persist the window position and overlay mode (machine-global) plus this
+    -- savegame's un-actioned cards on the way out. Both no-op on a nil folder:
+    -- the dedicated-server path never got this far, and saveCards additionally
+    -- skips a savegame that has no directory to scope to.
     self:saveState()
+    self:saveCards()
+    -- ...and this savegame's live contract rewards, on the way out. Same no-op
+    -- on a nil folder as the two above.
+    self:saveContracts()
     -- No manual input teardown here, on purpose: both keybinds
     -- (FM25_TOGGLE_OVERLAY, FM25_TOGGLE_CURSOR) are owned by the
     -- survives-rebuild hook (installOverlayToggleHook, the Courseplay shape)
@@ -1563,9 +4462,11 @@ function FarmManager25:deleteMap()
     self.scrollThumbRect    = nil
     self.scrollDrag         = nil
     self.stateFolder   = nil
+    self.saveFolder    = nil
     self.filePath      = nil
     self.queue         = {}
     self.stack         = {}
+    self.retained      = {}
     self.atlasId       = nil
     self.overlaysOk    = false
     self.headerRect    = nil
@@ -1676,6 +4577,63 @@ end
 
 
 --- Move a parsed notification onto the visible stack.
+-- Retained-card statuses. ⛔ L10N KEYS, NOT TEXT. Every user-visible string in
+-- this mod belongs to the translation files (en is authoritative -- the game
+-- falls back to it), and getMessageLog is specified as ZERO engine calls, so it
+-- cannot resolve these itself: the consuming page must. A prose literal here
+-- would be a defect, not a shortcut.
+FarmManager25.STATUS_LIVE      = "fm25_status_live"
+FarmManager25.STATUS_ANSWERED  = "fm25_status_answered"
+FarmManager25.STATUS_DISMISSED = "fm25_status_dismissed"
+FarmManager25.STATUS_EXPIRED   = "fm25_status_expired"
+FarmManager25.STATUS_EVICTED   = "fm25_status_evicted"
+FarmManager25.STATUS_NATIVE    = "fm25_status_native"
+
+--- Move a card OUT of the live stack and INTO the transcript (TECH-DEBT-060).
+--  The single place a card may leave `stack` and still exist.
+--
+--  ⛔ THIS DOES NOT REMOVE FROM THE STACK -- every caller pairs it with its own
+--  table.remove. That is deliberate: the four removal sites remove by four
+--  different rules (index 1 on overflow, a reverse-walk index on expiry, table
+--  IDENTITY on answer, and a whole-stack wipe in the draw latch), so a helper
+--  that also removed would have to re-implement all four and would silently pick
+--  the wrong card the day a fifth site appears.
+--
+--  `ephemeral` cards (loadMap's "no manager is set up" notice) are NOT retained:
+--  they are recomputed every load and saveCards already refuses to write them, so
+--  retaining one would reintroduce the self-restoring-card bug inside the
+--  transcript -- the exact shape of the bug the per-savegame split exists to fix.
+--
+--  A cap of 0 means the player switched retention OFF. Honour it exactly and
+--  silently: keeping "just one" would ignore the setting, and printing per card
+--  would spam a log the player deliberately turned off.
+function FarmManager25:retain(n, status)
+    if n == nil or n.ephemeral then
+        return
+    end
+    if FarmManager25.retentionCap <= 0 then
+        return
+    end
+    -- ⛔ `status` is the ONLY thing stored. `answered` is DERIVED from it in
+    -- getMessageLog and nowhere else. It used to be stored here too and
+    -- recomputed in loadCards -- two fields bearing one answer, of which the
+    -- mutation pass could only ever check one: pinning this copy to false left
+    -- the entire suite green, because a card that had been through a reload got
+    -- its value from the other copy. One source, one thing to get wrong.
+    n.status = status
+    table.insert(self.retained, n)
+    -- Bounded like the live stack, and printed for the same reason: a card that
+    -- vanishes with no log trail reads as a sender bug and cost a live yes/no
+    -- card once. The transcript exists so that exchange can be reconstructed
+    -- afterwards -- dropping from it silently would rebuild the hole it fills.
+    while #self.retained > FarmManager25.retentionCap do
+        table.remove(self.retained, 1)
+        print("FarmManager25: message log full, dropped the oldest retained card")
+    end
+    -- The transcript rides cards.xml, so a change to it is a change to persist.
+    self.stateDirty = true
+end
+
 function FarmManager25:push(n)
     if self.useNativeOnly or not self.overlaysOk then
         FarmManager25.showNative(n)   -- the game owns its lifetime, not us
@@ -1697,8 +4655,13 @@ function FarmManager25:push(n)
     -- fit-window decision. Eviction is printed -- a card that vanishes with
     -- no log trail reads as a sender bug and cost a live yes/no card once.
     while #self.stack > FarmManager25.MAX_STORE do
-        table.remove(self.stack, 1)   -- drop the oldest; the newest is the one that matters
-        print("FarmManager25: card store full, dropped the oldest card")
+        local evicted = table.remove(self.stack, 1)   -- oldest off the SCREEN store; the newest is the one that matters
+        -- TECH-DEBT-060: off the stack, not out of existence. The wording moved
+        -- with the behaviour -- "dropped" was true and is not any more, and a
+        -- log line that misdescribes what happened is the failure this print was
+        -- added to prevent, not an instance of preventing it.
+        self:retain(evicted, FarmManager25.STATUS_EVICTED)
+        print("FarmManager25: card store full, oldest card moved to the message log")
     end
     -- LT-8: the stack changed -> the persisted store is stale. Flushed once at
     -- the end of update() so a burst of arrivals coalesces to a single write.
@@ -1732,6 +4695,9 @@ function FarmManager25:update(dt)
         n.age = n.age + dt
         if not FarmManager25.overlayOn and n.age >= n.ttl and n.actions == nil then
             table.remove(self.stack, i)
+            -- TECH-DEBT-060: an expired transient card is still something the
+            -- farm manager said. It leaves the screen; it does not leave history.
+            self:retain(n, FarmManager25.STATUS_EXPIRED)
             -- LT-8: state.xml mirrors the live stack -- an OFF-mode expired
             -- transient card must not resurrect on restart.
             self.stateDirty = true
@@ -1743,12 +4709,13 @@ function FarmManager25:update(dt)
     end
 
     -- LT-8: coalesced persist. Any stack mutation this tick (arrival, eviction,
-    -- expiry, and dismiss/answer set from mouseEvent) writes state.xml exactly
+    -- expiry, and dismiss/answer set from mouseEvent) writes cards.xml exactly
     -- ONCE here, not per-card -- human message cadence, negligible cost, and
-    -- never a per-frame write on an idle stack.
+    -- never a per-frame write on an idle stack. A stack change does not touch
+    -- the HUD block, so this flushes the cards only.
     if self.stateDirty then
         self.stateDirty = false
-        self:saveState()
+        self:saveCards()
     end
 end
 
@@ -1760,6 +4727,14 @@ end
 --- Draw one atlas region. renderOverlay takes x,y as the BOTTOM-LEFT corner.
 function FarmManager25:blit(uv, x, y, w, h, c, alpha)
     setOverlayUVs(self.atlasId, unpack(GuiUtils.getUVs(uv, {FarmManager25.ATLAS_W, FarmManager25.ATLAS_H})))
+    -- ⛔ THE CONVERSION HAPPENS AT THE SINK, AND THAT IS DELIBERATE. This is
+    -- the ONLY setOverlayColor call in the mod, so converting here makes it
+    -- impossible for any of the ten blit() call sites to hand the engine a
+    -- display-space colour -- the guarantee stops depending on every caller
+    -- remembering. Safe because engineColor() is IDEMPOTENT: a caller that
+    -- already converted (every THEME path does, via engineTheme()) passes
+    -- through untouched, so nothing is double-encoded.
+    c = FarmManager25.engineColor(c)
     setOverlayColor(self.atlasId, c[1], c[2], c[3], (c[4] or 1) * alpha)
     renderOverlay(self.atlasId, x, y, w, h)
 end
@@ -1838,7 +4813,13 @@ end
 --  never the card.
 function FarmManager25:drawAffordances(n, buttons, cardX, cardBottom, alpha)
     local d = FarmManager25.DESIGN
-    local theme = FarmManager25.THEME
+    -- ⛔ engineTheme(), NOT FarmManager25.THEME. The table holds DISPLAY
+    -- (sRGB) values and the engine paints in LINEAR; handing it the raw table
+    -- renders every colour too bright (+43.9% at placeholder, measured on the
+    -- owner's 2026-09-17 screenshots). ONE shared conversion lives in
+    -- FarmManagerTheme.lua and the menu calls the same one -- see the seam
+    -- note there for why the table itself is never converted in place.
+    local theme = FarmManager25.engineTheme()
     local fam = theme.cards[n.severity] or theme.cards[FarmManager25.DEFAULT_SEVERITY]
     local y = cardBottom + self.padY
     local x = cardX + self.cardW - self.padX
@@ -1891,7 +4872,13 @@ end
 
 function FarmManager25:drawCard(n, top, alpha)
     local d = FarmManager25.DESIGN
-    local theme = FarmManager25.THEME
+    -- ⛔ engineTheme(), NOT FarmManager25.THEME. The table holds DISPLAY
+    -- (sRGB) values and the engine paints in LINEAR; handing it the raw table
+    -- renders every colour too bright (+43.9% at placeholder, measured on the
+    -- owner's 2026-09-17 screenshots). ONE shared conversion lives in
+    -- FarmManagerTheme.lua and the menu calls the same one -- see the seam
+    -- note there for why the table itself is never converted in place.
+    local theme = FarmManager25.engineTheme()
     local sev = FarmManager25.SEVERITIES[n.severity] or FarmManager25.SEVERITIES[FarmManager25.DEFAULT_SEVERITY]
     local fam = theme.cards[n.severity] or theme.cards[FarmManager25.DEFAULT_SEVERITY]
     local lines = self:linesFor(n)
@@ -1974,7 +4961,13 @@ function FarmManager25:drawCard(n, top, alpha)
 end
 
 function FarmManager25:drawBanner(top, alpha)
-    local theme = FarmManager25.THEME
+    -- ⛔ engineTheme(), NOT FarmManager25.THEME. The table holds DISPLAY
+    -- (sRGB) values and the engine paints in LINEAR; handing it the raw table
+    -- renders every colour too bright (+43.9% at placeholder, measured on the
+    -- owner's 2026-09-17 screenshots). ONE shared conversion lives in
+    -- FarmManagerTheme.lua and the menu calls the same one -- see the seam
+    -- note there for why the table itself is never converted in place.
+    local theme = FarmManager25.engineTheme()
     local x = self.panelLeft
     -- The banner is the drag handle (the drawPill contract, bigger art). Its
     -- rect is recorded every drawn frame in the same normalized space
@@ -2004,7 +4997,13 @@ end
 --  dialog (LT-4). Draws at the stack's bottom and fades with the same peak
 --  alpha.
 function FarmManager25:drawInputBar(top, alpha)
-    local theme = FarmManager25.THEME
+    -- ⛔ engineTheme(), NOT FarmManager25.THEME. The table holds DISPLAY
+    -- (sRGB) values and the engine paints in LINEAR; handing it the raw table
+    -- renders every colour too bright (+43.9% at placeholder, measured on the
+    -- owner's 2026-09-17 screenshots). ONE shared conversion lives in
+    -- FarmManagerTheme.lua and the menu calls the same one -- see the seam
+    -- note there for why the table itself is never converted in place.
+    local theme = FarmManager25.engineTheme()
     local inp = theme.input
     local x = self.panelLeft + self.insetX
     local barTop = top
@@ -2197,7 +5196,7 @@ function FarmManager25:renderStack()
     if hiddenOlder > 0 then
         setTextAlignment(RenderText.ALIGN_RIGHT)
         setTextBold(false)
-        local c = FarmManager25.DESIGN.timeColor
+        local c = FarmManager25.engineColor(FarmManager25.DESIGN.timeColor)   -- DEC-216
         setTextColor(c[1], c[2], c[3], peak)
         renderText(self.panelLeft + self.insetX + self.cardW - self.padX,
                    top - self.timeSize, self.timeSize,
@@ -2218,7 +5217,7 @@ function FarmManager25:renderStack()
     if hiddenNewer > 0 then
         setTextAlignment(RenderText.ALIGN_RIGHT)
         setTextBold(false)
-        local c = FarmManager25.DESIGN.timeColor
+        local c = FarmManager25.engineColor(FarmManager25.DESIGN.timeColor)   -- DEC-216
         setTextColor(c[1], c[2], c[3], peak)
         renderText(self.panelLeft + self.insetX + self.cardW - self.padX,
                    top - self.timeSize, self.timeSize,
@@ -2290,6 +5289,17 @@ function FarmManager25:renderStack()
 end
 
 function FarmManager25.alphaOf(n)
+    -- Settings row 9, the minimum severity shown. Gated HERE because renderStack
+    -- already routes EVERY visibility decision it makes through alphaOf > 0 --
+    -- the peak/header fade, the scroll clamp, the fit window and both overflow
+    -- counters. One gate keeps them all consistent; a filter bolted onto the
+    -- draw loop alone would have left the counters reporting cards nobody can
+    -- see. Rank 0 = a severity we do not know, and an unrankable card is SHOWN,
+    -- never hidden (see severityRank).
+    local rank = FarmManager25.severityRank(n.severity)
+    if rank > 0 and rank < FarmManager25.severityRank(FarmManager25.minSeverity) then
+        return 0
+    end
     if n.age < FarmManager25.FADE_IN_MS then
         return n.age / FarmManager25.FADE_IN_MS
     end
@@ -2337,6 +5347,16 @@ function FarmManager25:draw()
             for _, n in ipairs(self.stack) do
                 FarmManager25.showNative(n)
             end
+        end
+        -- ⚠ THE FOURTH REMOVAL SITE, and the one that loses most: the WHOLE
+        -- stack is wiped here. The cards are re-shown natively once and the game
+        -- owns their lifetime from then on, so without this the mod -- again,
+        -- the only component that ever held their text -- discards every live
+        -- card on the single path where something has already gone wrong.
+        -- Retained OUTSIDE the g_currentMission guard above: whether the native
+        -- tier could re-show them has no bearing on whether they happened.
+        for _, n in ipairs(self.stack) do
+            self:retain(n, FarmManager25.STATUS_NATIVE)
         end
         self.stack = {}
     end
@@ -2390,7 +5410,18 @@ function FarmManager25:handleAffordanceClick(posX, posY)
                 -- dismissed by its own click -- see writeReply.)
                 for i = #self.stack, 1, -1 do
                     if self.stack[i] == r.card then
-                        table.remove(self.stack, i)
+                        local gone = table.remove(self.stack, i)
+                        -- ⭐ TECH-DEBT-060: THIS is the card the transcript
+                        -- exists for. writeReply records id/action/gameTime/
+                        -- realTime only, so before this the correlation id
+                        -- survived while the question text it referred to was
+                        -- destroyed -- 49 live exchanges, none reconstructable.
+                        -- An id'd card was ANSWERED; an id-less one (LT-6, the
+                        -- passive info X) was DISMISSED. Same click, two
+                        -- different things to have recorded.
+                        self:retain(gone, r.id ~= nil
+                            and FarmManager25.STATUS_ANSWERED
+                            or FarmManager25.STATUS_DISMISSED)
                         break
                     end
                 end
@@ -2582,5 +5613,33 @@ function FarmManager25:mouseEvent(posX, posY, isDown, isUp, button)
         print("FarmManager25: mouseEvent failed -- " .. tostring(err))
     end
 end
+
+-- ⛔ THE IN-GAME MENU PAGE IS LOADED HERE, AND NOWHERE ELSE.
+--
+-- modDesc's <extraSourceFiles> lists ONLY FarmManagerTheme.lua and this file.
+-- ⛔ extraSourceFiles does NOT auto-load anything under gui/ -- so without this
+-- line gui/InGameMenuFarmManager25.lua ships inside the zip and NEVER EXECUTES:
+-- InGameMenuFarmManager25 stays nil, registerMenuPage() and onToggleSettings()
+-- both hit their nil checks and return, and the entire page -- both tabs, the
+-- ten settings rows, the message log -- is silently absent while the mod logs
+-- as healthy. That was the shipped state until this line was added; every test
+-- passed throughout, because the core suite tests core in isolation.
+--
+-- The idiom is the reference mod's, verbatim in shape:
+--   FS25_FarmOperationsDashboard/FarmOperationsDashboard.lua:5
+--     source(dir .. "gui/InGameMenuFarmOperationsDashboard.lua")
+-- whose modDesc likewise declares only its top-level scripts.
+--
+-- ⚠ MODULE SCOPE, NOT loadMap. MOD_DIR is captured at the top of this file
+-- while g_currentModDirectory is still set; by loadMap it is nil and the path
+-- would resolve to a bare "gui/..." that finds nothing.
+--
+-- ⚠ Unguarded ON PURPOSE. source() is a GIANTS global that always exists in the
+-- game, and wrapping this in `if source ~= nil` would put a test-harness
+-- accommodation into shipped code -- the same class of silent degrade that hid
+-- the missing call in the first place. The harness defines source() faithfully
+-- instead (it really loads the file), which is also what makes the core<->GUI
+-- seam testable at all.
+source(FarmManager25.MOD_DIR .. "gui/InGameMenuFarmManager25.lua")
 
 addModEventListener(FarmManager25)

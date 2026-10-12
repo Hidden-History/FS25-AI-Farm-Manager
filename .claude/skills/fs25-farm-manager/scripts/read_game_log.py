@@ -30,6 +30,20 @@ LOG SHAPE (grounded in the real log, read 2026-07-18):
         Available mod: (Hash: <h>) (Version: <v>) <name>
         ... Map loaded: <map>, Savegame name: <name>   (session start)
         quit savegame / Application quit / #End.
+        FarmManager25: <text>                  (OUR OWN diagnostic namespace --
+                                                e.g. a contracts-tracking summary
+                                                or a notify-file watch
+                                                confirmation. Captured verbatim
+                                                under one bucket rather than
+                                                split further, so a new
+                                                FarmManager25-prefixed line the
+                                                mod starts emitting later is
+                                                still caught, not silently
+                                                misfiled into `other`. Any
+                                                Windows home-path prefix in the
+                                                text is redacted to '<user>'
+                                                before storage -- a privacy
+                                                sweep, not a content change.)
       Lifecycle matching is deliberately EXACT (whole-message or the literal
       'Map loaded:' marker) -- a substring match on "savegame" drowned the
       bucket in file-path noise ('.../savegame1/densityMap_fruits.gdm')
@@ -44,8 +58,9 @@ Output contract (toolkit norm):
       tried path; a parsed log with zero errors is a VERIFIED "0 errors", which
       is a different claim entirely.
     - Nothing dropped silently: every line lands in exactly one bucket
-      (preamble / errors / warnings / mods_available / lifecycle / other /
-      blank), and the buckets' counts sum to the line count. `other` keeps a
+      (preamble / errors / warnings / mods_available / lifecycle /
+      farmmanager_diagnostics / other / blank), and the buckets' counts sum
+      to the line count. `other` keeps a
       capped sample and an explicit count, and any dedup-list truncation is
       reported with the number dropped -- a cap that doesn't announce itself
       reads as "covered everything" when it didn't.
@@ -72,6 +87,25 @@ MOD_RE = re.compile(r"^Available mod: \(Hash: ([0-9a-fA-F]+)\) \(Version: ([^)]*
 # greedy .+ matcher swallowed into the source).
 WARN_SRC_RE = re.compile(r"^Warning \((.+?)\):\s*(.*)$")
 QUOTED_PATH_RE = re.compile(r"'([^']*[/\\][^']*)'")
+# Our own diagnostic namespace (F-121 plan item 8). Captures the text after
+# the prefix verbatim -- observed shapes today are a contracts-tracking
+# summary and a notify-file watch confirmation, and this deliberately does
+# not split further so a future third shape is still caught, not dropped.
+FARMMGR_RE = re.compile(r"^FarmManager25: (.+)$")
+# Privacy sweep (CLAUDE.md doctrine): the `watching` shape's path starts with
+# the Windows home-path prefix '<drive>:/Users/<name>' (or '\'-separated),
+# which carries the player's Windows username -- PII, not diagnostic value.
+# Everything AFTER it (savegame id, mod folder, filename) IS the diagnostic
+# value and is kept untouched. 'Parzival' / '_ByParzival' is the owner's
+# public brand, not a username, and this pattern never matches it -- it only
+# matches the literal 'Users/<name>' segment.
+HOME_PATH_RE = re.compile(r"[A-Za-z]:[/\\]Users[/\\][^/\\]+")
+
+
+def _redact_home_path(text):
+    """Replace every Windows home-path prefix in `text` with '<user>',
+    preserving the rest of the path."""
+    return HOME_PATH_RE.sub("<user>", text)
 
 # Dedup lists are capped so a pathological log can't produce a megabyte of
 # JSON -- but never silently: the number of unique entries dropped is
@@ -130,7 +164,8 @@ def _dedup_add(bucket, key, message, source_file, timestamp):
 
 def classify(message):
     """Route one (timestamp-stripped) message to its bucket.
-    Returns (kind, payload) -- kind in {error, warning, mod, lifecycle, other}."""
+    Returns (kind, payload) -- kind in {error, warning, mod, lifecycle,
+    farmmanager, other}."""
     m = MOD_RE.match(message)
     if m:
         return "mod", {"hash": m.group(1), "version": m.group(2), "name": m.group(3).strip()}
@@ -145,6 +180,9 @@ def classify(message):
         return "warning", {"message": message[len("Warning:"):].strip(), "source_file": None}
     if message in ("quit savegame", "Application quit", "#End.") or "Map loaded:" in message:
         return "lifecycle", {"message": message}
+    m = FARMMGR_RE.match(message)
+    if m:
+        return "farmmanager", {"message": _redact_home_path(m.group(1))}
     return "other", {"message": message}
 
 
@@ -203,6 +241,8 @@ def main():
     mods = {}
     mod_occurrences = 0
     lifecycle = []
+    farmmanager = {}
+    farmmanager_occurrences = 0
     other_count = 0
     other_sample = []
     preamble_count = 0
@@ -245,6 +285,10 @@ def main():
                                      "hash": payload["hash"]}
         elif kind == "lifecycle":
             lifecycle.append({"timestamp": timestamp, "message": message})
+        elif kind == "farmmanager":
+            farmmanager_occurrences += 1
+            _dedup_add(farmmanager, payload["message"], payload["message"],
+                       None, timestamp)
         elif timestamp is None and not seen_timestamp:
             # Untimestamped, unclassified, before the first timestamped line:
             # the engine/hardware preamble. Counted, with the two
@@ -284,6 +328,7 @@ def main():
             "mods": list(mods.values()),
         },
         "lifecycle": {"count": len(lifecycle), "events": lifecycle},
+        "farmmanager_diagnostics": _finish_bucket(farmmanager, farmmanager_occurrences),
         "other": {
             "count": other_count,
             "sample": other_sample,

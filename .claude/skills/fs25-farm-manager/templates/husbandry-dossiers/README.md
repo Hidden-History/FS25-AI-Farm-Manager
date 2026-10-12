@@ -15,7 +15,7 @@ fresh every session by `read_placeables.py` (feeding `farm_snapshot.py`'s digest
 count/health come from `read_livestock.py`, run on its own — `farm_snapshot.py`
 carries no husbandry section. A dossier holds durable facts (feed supplier,
 observed consumption rate, sell-price patterns) and
-an append-only History table, never a cached "current state" (friction-log F-117).
+an append-only History table, never a cached "current state".
 
 **History sidecars:** when a dossier's History table would push it over cap, the
 oldest rows relocate verbatim into a sibling `husbandry-{{id}}-history.md` in this

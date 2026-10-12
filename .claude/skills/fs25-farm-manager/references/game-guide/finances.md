@@ -22,7 +22,7 @@ live version of this content.
 - "At the end of each month, you will have to pay any excess interest on the loans."
   Pay loans back as fast as possible to save on interest.
 
-**Interest billing frequency (resolved, F-124):** the manual states interest is settled
+**Interest billing frequency (resolved):** the manual states interest is settled
 "at the end of each month" — i.e. once per calendar month, not per day. The
 finance-screen screenshot on this page has no separate "Interest" line item, consistent
 with interest being folded into the month-end settlement rather than accrued/shown as a

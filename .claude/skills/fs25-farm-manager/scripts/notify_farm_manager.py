@@ -69,7 +69,7 @@ import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional, Tuple
 
 PROTOCOL = 4
@@ -78,8 +78,21 @@ PROTOCOL = 4
 # same string or we write somewhere the game refuses to touch. test_bridge_folder_
 # matches_the_mod_name asserts these agree with the actual built zip.
 MOD_NAME = "FS25_AIFarmManager25"
-BRIDGE_SUBPATH = ("modSettings", MOD_NAME, "notify.xml")
+BRIDGE_NAME = "notify.xml"
+BRIDGE_ROOT_SUBPATH = ("modSettings", MOD_NAME)
+# <= v3.0.0.0 wrote the bridge HERE, unscoped -- one file for every savegame, so
+# save A's cards showed up in save B. The constant survives only so a refusal can
+# NAME the path we are declining to write to; nothing may resolve to it.
+LEGACY_BRIDGE_SUBPATH = BRIDGE_ROOT_SUBPATH + (BRIDGE_NAME,)
 MOD_ZIP_NAME = MOD_NAME + ".zip"
+
+
+def bridge_subpath(savegame_key: str) -> Tuple[str, ...]:
+    """modSettings/<MOD>/<savegameKey>/notify.xml -- the mod watches exactly this,
+    deriving <savegameKey> from basename(missionInfo.savegameDirectory). Both
+    halves read the savegame FOLDER'S OWN NAME so neither can invent a value the
+    other does not have."""
+    return BRIDGE_ROOT_SUBPATH + (savegame_key, BRIDGE_NAME)
 
 SEVERITIES = ("ok", "info", "warn", "critical")
 DEFAULT_SEVERITY = "info"
@@ -235,6 +248,67 @@ def resolve_profile_dir(config: Optional[str] = None) -> Path:
     )
 
 
+def resolve_savegame_key(config: Optional[str] = None) -> str:
+    """The savegame this manager is bound to, as a folder name ("savegame3").
+
+    THE SAVEGAME DIRECTORY'S OWN NAME, and nothing else. The mod derives its key
+    from basename(missionInfo.savegameDirectory); we derive ours from
+    basename(paths.savegame_dir). Both halves therefore read the same filesystem
+    fact, and neither can invent a value the other does not have.
+
+    NOT config["save_slot"]: that is a hand-recorded string written at onboarding
+    that nothing ever checks against reality. A wrong key here writes cards into
+    a folder the mod is not watching and reports success.
+
+    config["savegame_key"] may record the key explicitly -- it is the value the
+    onboarding step writes down and the one a human reads. It is CHECKED, never
+    trusted: a recorded key that disagrees with the directory is a config that has
+    drifted off its own save, and that fails loud rather than silently picking one.
+    """
+    cfg_path = Path(config) if config else _find_config()
+    if cfg_path is None or not Path(cfg_path).is_file():
+        raise BridgeError(
+            "cannot determine which savegame this manager is bound to: no "
+            "sanctum/config.json found.\n"
+            "  The mod watches modSettings/%s/<savegame>/%s -- one folder per "
+            "savegame, because one manager install serves one savegame.\n"
+            "  Pass --config /path/to/sanctum/config.json, or --bridge with the "
+            "full path to the notify.xml you mean.\n"
+            "  Refusing to fall back to the unscoped %s: <= v3.0.0.0 wrote there, "
+            "nothing reads it any more, and a write nobody reads that reports "
+            "success is the exact failure this scoping removes."
+            % (MOD_NAME, BRIDGE_NAME, "/".join(LEGACY_BRIDGE_SUBPATH))
+        )
+
+    try:
+        cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BridgeError(f"{cfg_path} could not be read as JSON: {exc}") from exc
+
+    raw = (cfg.get("paths") or {}).get("savegame_dir") or cfg.get("savegame_path")
+    if not raw:
+        raise BridgeError(
+            f"{cfg_path} records no paths.savegame_dir (nor savegame_path), so the "
+            f"savegame folder name -- the key the mod scopes by -- cannot be "
+            f"derived. Record it, or pass --bridge with the full notify.xml path."
+        )
+    # Windows-style separators are tolerated; a trailing separator is stripped so
+    # ".../savegame3/" and ".../savegame3" give the same key.
+    derived = PurePosixPath(str(raw).replace("\\", "/").rstrip("/")).name
+    if not derived:
+        raise BridgeError(f"{cfg_path}: savegame_dir {raw!r} has no folder name to key on")
+
+    recorded = cfg.get("savegame_key")
+    if recorded and recorded != derived:
+        raise BridgeError(
+            f"{cfg_path} is inconsistent: savegame_key is {recorded!r} but "
+            f"paths.savegame_dir points at {derived!r}. The mod scopes by the "
+            f"directory name, so one of these two is writing where nobody reads. "
+            f"Fix the config; not guessing which is right."
+        )
+    return derived
+
+
 def get_bridge_path(config: Optional[str] = None, bridge: Optional[str] = None) -> Path:
     if bridge:
         return Path(bridge)
@@ -249,8 +323,11 @@ def get_bridge_path(config: Optional[str] = None, bridge: Optional[str] = None) 
             f"(no modSettings/ and no savegame1/). Refusing to write there."
         )
 
-    path = profile.joinpath(*BRIDGE_SUBPATH)
-    # Creating modSettings/FarmManager25/ under a VERIFIED profile dir is safe;
+    # Raises rather than falling back. A bridge written to the wrong folder is
+    # read by nobody and still exits 0 -- absence dressed as data.
+    key = resolve_savegame_key(config)
+    path = profile.joinpath(*bridge_subpath(key))
+    # Creating modSettings/<MOD>/<savegame>/ under a VERIFIED profile dir is safe;
     # the mod creates it too. We only ever makedirs somewhere already proven real.
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
@@ -400,7 +477,15 @@ def _observe_environment(path: Path) -> list[str]:
     wasn't running while it was.
     """
     notes = []
-    profile = path.parent.parent.parent  # .../FarmingSimulator2025
+    # .../FarmingSimulator2025. The bridge gained a <savegame> level when the
+    # store was scoped per savegame, so a fixed number of .parent hops is wrong
+    # for one shape or the other -- anchor on modSettings/ instead, which holds
+    # for both and for a --bridge override that still lives under it.
+    profile = path.parent.parent.parent
+    for ancestor in path.parents:
+        if ancestor.name == "modSettings":
+            profile = ancestor.parent
+            break
     mods = profile / "mods"
     mod_present = False
     if mods.is_dir():
@@ -426,7 +511,7 @@ def _observe_environment(path: Path) -> list[str]:
         notes.append(f"newest save wrote {age:.0f} min ago ({newest.parent.name})")
         notes.append(
             "  (save mtime does NOT prove the game is closed: FS25 defers the write "
-            "until the player next opens the map -- see FRICTION-LOG F-023)"
+            "until the player next opens the map)"
         )
     else:
         notes.append(f"found no savegame*/careerSavegame.xml under {profile} -- unexpected; not inferring anything from it")
@@ -474,7 +559,11 @@ def send_notification(
     if not quiet:
         print(f"NOT CONSUMED after {timeout:.1f}s: {message!r}")
         print(f"  written to: {path}")
+        print(f"  savegame key this manager is bound to: {path.parent.name}")
         print("  the bridge file still carries the message, so nothing in the game has read it.")
+        print(f"  if the player is in a DIFFERENT savegame, this is CORRECT: the mod only "
+              f"watches the save it is in, and one manager install serves one savegame. "
+              f"A card for {path.parent.name} does not appear in another save.")
         for note in _observe_environment(path):
             print(f"  - {note}")
         print("  Not guessing a cause -- those are the facts.")

@@ -19,8 +19,8 @@ Modes (exactly one; default is --fleet if none given):
                             this whole script -- see "Validation" below.
     --fuel-capacity         Resolve every owned vehicle's real DIESEL tank
                             capacity (litres) from its own store/mod XML
-                            (added 2026-07-24, for the fuel/repair alert
-                            house rule -- see CHANGELOG.md). Capacity is NOT
+                            (added 2026-07-24, for the fuel/repair alerts,
+                            which are on by default -- see CHANGELOG.md). Capacity is NOT
                             in vehicles.xml (see read_vehicles.py); this is
                             the one place that resolves it, same $moddir$/
                             base-install logic as --fleet (F-019).
@@ -147,13 +147,65 @@ from xml_utils import load_xml, emit, arg_or_exit, xml_to_dict, resolve_game_xml
 MODDIR_RE = re.compile(r"^\$moddir\$([^/]+)/(.+)$")
 
 # type= attribute values (root <vehicle type="...">) observed in this
-# install's base game data, grouped into the categories this farm is
-# actually missing. Verified by scanning all 758 base vehicle XMLs
-# 2026-07-16 and tabulating every distinct `type` seen -- not guessed.
+# install's base game data, grouped into the CANDIDATE categories a crop
+# cycle needs. Verified by scanning all 758 base vehicle XMLs 2026-07-16 and
+# tabulating every distinct `type` seen -- not guessed.
+#
+# F-040 / TECH-DEBT-001: this comment used to read "grouped into the
+# categories this farm is actually missing". Nothing in this script reads any
+# farm's fleet, so that was a property this constant has no input to
+# determine -- and the consumer (farm_snapshot.py build_equipment_gaps)
+# believed the comment and shipped all three categories as gaps to a farm
+# that owned two of them. These are the categories PRICED. Which ones a farm
+# actually lacks is decided by the caller from ownership data; see
+# GAP_CATEGORY_CAPABILITY_SPECS below and this script's --gaps docstring.
 GAP_CATEGORIES = {
     "seeder": ["sowingMachine", "fertilizingSowingMachine"],
     "tillage": ["plow", "cultivator", "turnOnCultivator", "plowPacker", "weeder", "roller"],
     "sprayer": ["sprayer", "selfPropelledSprayer"],
+}
+
+# The savegame SPECIALIZATION tags that PROVE a category is already covered.
+# Emitted with each --gaps category so a caller holding fleet data can decide
+# ownership against a documented key instead of re-deriving one. This states
+# a fact about the SAVE's schema, not about any farm's fleet -- the rule in
+# the --gaps docstring above still holds: this script never carries one
+# farm's books.
+#
+# ⚠ These are a DIFFERENT NAMESPACE from GAP_CATEGORIES above and the two are
+# not interchangeable. GAP_CATEGORIES holds vehicleType names
+# (`<vehicle type="...">` in store XML); read_vehicles.py's `specializations`
+# holds the savegame <vehicle> element's direct-child tag names. A vehicleType
+# is COMPOSED OF several specializations, so the names overlap without being
+# the same set. Measured against the real save 2026-08-30:
+#   - a Lemken Solitair 12 has store type="fertilizingSowingMachine" and
+#     records the child tag <sowingMachine>  (NOT <fertilizingSowingMachine>)
+#   - a Superchisel CP2050 has store type="plowPacker" and records the child
+#     tag <plow>                             (NOT <plowPacker>)
+# Corroborated in the GIANTS docs (FS25-Community-LUADOC @ 24afb18e7cfb):
+#   FertilizingSowingMachine.prerequisitesPresent requires SowingMachine;
+#   PlowPacker.prerequisitesPresent requires Plow and Cultivator.
+# So the composite type names are deliberately NOT capability keys -- the
+# specialization each is built ON is the key, and it fires for both.
+#
+# `turnOnCultivator`, `selfPropelledSprayer`, `plowPacker`,
+# `fertilizingSowingMachine` and `roller` are omitted on purpose: they are
+# type names whose specialization identity is not confirmed. Omitting one can
+# only make a category read as a GAP that might be covered -- the conservative
+# direction. It never hides a real gap, and it cannot re-create F-040,
+# because the base specialization each one composes IS listed.
+#
+# ⚠ LIMIT, measured, binding on every consumer of this map: a savegame child
+# tag proves a specialization is PRESENT; its absence does NOT prove the
+# specialization is absent, because only specializations that persist state
+# write a child element. The same Solitair 12 is a fertilizingSowingMachine,
+# whose documented prerequisites include Sprayer, yet it records no <sprayer>
+# child. Read a hit as "covered, proven"; read a miss as "not proven
+# covered" -- never as "proven absent".
+GAP_CATEGORY_CAPABILITY_SPECS = {
+    "seeder": ["sowingMachine"],
+    "tillage": ["plow", "cultivator", "weeder"],
+    "sprayer": ["sprayer"],
 }
 
 STORE_SUBDIRS = {
@@ -477,6 +529,295 @@ def extract_active_fill_unit_config_id(v_elem):
                "defaulting to configuration 1")
 
 
+# --------------------------------------------------------------------------
+# F9b -- THE MACHINE RECORD, built on the SAME store-XML pass as the fuel tank
+# --------------------------------------------------------------------------
+#
+# ⭐ ONE RESOLVER, TWO ANSWERS (SPEC-livetest-fixes-2026-09-18 §4 step 4). The
+# fuel capacity and the machine record are both read out of a vehicle's own
+# store/mod XML, so they come out of ONE parse per filename (get_parsed below)
+# and cannot disagree about which file a vehicle resolved to.
+#
+# ⛔ WHY A RECORD AT ALL. vehicles.xml persists a child element per
+# specialisation ONLY when that specialisation's saveToXMLFile writes one, and
+# Cultivator/Weeder/Sprayer write none -- so ownership judged from vehicles.xml
+# told every farm it lacked them. The store XML declares the specialisation
+# blocks unconditionally; that is the signal that found the machines.
+#
+# ⛔ ENCRYPTED DLC (`$pdlcdir$...`) cannot be opened at all. Such a vehicle gets
+# `record_status: "unknown"` and a reason, NEVER a guessed type or block list.
+
+# The engine upper-cases category and fill-type names on registration
+# (FillTypeManager.addFillTypeCategory: `name = string.upper(name)`), so the
+# base game's `SPRAYER` and a vehicle's `fillTypeCategories="sprayer"` are the
+# same key. Match on the upper-cased form only.
+def _upper_names(text):
+    return [t.strip().upper() for t in (text or "").split() if t.strip()]
+
+
+def _declared_fill_type_files(root):
+    """Every fill-type definition file a modDesc.xml (or map config) root
+    declares, as inner paths under the mod. A `$data/...` reference points at
+    the BASE install (already loaded) and is skipped."""
+    files = []
+    for ft in root.findall("fillTypes"):
+        fn = ft.attrib.get("filename")
+        if fn and not fn.startswith("$data"):
+            files.append(fn)
+    return files
+
+
+def load_fill_type_categories(savegame_dir, install_dir, mods_dir):
+    """Resolve fillTypeCategories across BASE, MAP and MODS.
+
+    Returns {"categories": {NAME: set(FILLTYPE)}, "sources": [...],
+    "errors": [...], "complete": bool}.
+
+    ⛔ `complete` is False whenever ANY source that could add to a category
+    could not be read (no base file, active-mod list unreadable, an active mod's
+    zip or modDesc missing). Additive by engine rule: a map or mod EXTENDS an
+    existing category rather than replacing it (FillTypeManager.loadFillTypes
+    :235-247; addFillTypeCategory ignores a duplicate only for base types), so
+    a union is the faithful merge -- and a missing source means the union may be
+    short, which the caller must treat as `unknown`, never as "not in it".
+
+    Active mods come from careerSavegame.xml (<mod modName>, and the map mod
+    from <mapId>), not from a scan of the whole mods folder: an installed but
+    inactive mod contributes nothing to this save."""
+    categories = {}
+    sources, errors = [], []
+
+    def absorb(root, label):
+        for cat in root.iter("fillTypeCategory"):
+            name = (cat.attrib.get("name") or "").strip().upper()
+            if name:
+                categories.setdefault(name, set()).update(_upper_names(cat.text))
+        sources.append(label)
+
+    complete = True
+    if not install_dir:
+        errors.append("no install directory given, so the base game's fillTypeCategories "
+                      "cannot be read")
+        return {"categories": categories, "sources": sources, "errors": errors,
+                "complete": False}
+    base_path = os.path.join(install_dir, "data", "maps", "maps_fillTypes.xml")
+    base_root, meta = load_xml(base_path)
+    if base_root is None:
+        errors.append(f"could not read {base_path}: {(meta or {}).get('error')}")
+        return {"categories": categories, "sources": sources, "errors": errors,
+                "complete": False}
+    absorb(base_root, "base:data/maps/maps_fillTypes.xml")
+
+    career, cmeta = load_xml(os.path.join(savegame_dir, "careerSavegame.xml"))
+    if career is None:
+        errors.append("careerSavegame.xml could not be read, so the active mod list is "
+                      f"unknown and mod/map-declared categories were not consulted: "
+                      f"{(cmeta or {}).get('error')}")
+        return {"categories": categories, "sources": sources, "errors": errors,
+                "complete": False}
+    if not mods_dir:
+        errors.append("no mods directory given, so mod/map-declared categories were not consulted")
+        return {"categories": categories, "sources": sources, "errors": errors,
+                "complete": False}
+
+    map_id_el = career.find(".//mapId")
+    map_id = (map_id_el.text or "").strip() if map_id_el is not None else ""
+    # A base-game map id has no dot ("MapUS"); a map MOD's is "<ModName>.<mapId>".
+    map_mod, _, map_local = map_id.partition(".") if "." in map_id else ("", "", map_id)
+    active = [m.attrib.get("modName") for m in career.iter("mod") if m.attrib.get("modName")]
+    if map_mod and map_mod not in active:
+        active.append(map_mod)
+
+    for mod_name in active:
+        zip_path = os.path.join(mods_dir, mod_name + ".zip")
+        dir_path = os.path.join(mods_dir, mod_name)
+        zf = None
+        try:
+            if os.path.isfile(zip_path):
+                zf = zipfile.ZipFile(zip_path)
+                names = {n.lower(): n for n in zf.namelist()}
+
+                def read_inner(path, zf=zf, names=names):
+                    real = names.get(path.replace("\\", "/").lower())
+                    if real is None:
+                        return None
+                    # Some mod authors leave a BOM or blank line before the
+                    # XML declaration, which ElementTree refuses; the engine
+                    # does not. Strip only that leading run.
+                    return ET.fromstring(zf.read(real).lstrip(b"\xef\xbb\xbf \t\r\n"))
+            elif os.path.isdir(dir_path):
+                def read_inner(path, dir_path=dir_path):
+                    full = os.path.join(dir_path, path)
+                    return ET.parse(full).getroot() if os.path.isfile(full) else None
+            elif mod_name.startswith("pdlc_"):
+                # Official DLC lives under the INSTALL's pdlc/ and is encrypted,
+                # so it is never in the mods folder and its fill-type categories
+                # cannot be read. Say that -- not "not found in mods".
+                errors.append(f"active {mod_name} is encrypted DLC: its fill-type "
+                              "categories cannot be read")
+                complete = False
+                continue
+            else:
+                errors.append(f"active mod {mod_name} not found in {mods_dir}")
+                complete = False
+                continue
+            desc = read_inner("modDesc.xml")
+            if desc is None:
+                errors.append(f"active mod {mod_name} has no modDesc.xml")
+                complete = False
+                continue
+            files = _declared_fill_type_files(desc)
+            if mod_name == map_mod:
+                for m in desc.iter("map"):
+                    if m.attrib.get("id") == map_local and m.attrib.get("configFilename"):
+                        cfg = read_inner(m.attrib["configFilename"])
+                        if cfg is None:
+                            errors.append(f"map config {m.attrib['configFilename']} not found "
+                                          f"in {mod_name}")
+                            complete = False
+                        else:
+                            files += _declared_fill_type_files(cfg)
+            for f in files:
+                froot = read_inner(f)
+                if froot is None:
+                    errors.append(f"{mod_name} declares fillTypes file {f} but it is not there")
+                    complete = False
+                else:
+                    absorb(froot, f"mod:{mod_name}:{f}")
+        except (zipfile.BadZipFile, ET.ParseError, OSError, KeyError) as e:
+            errors.append(f"could not read active mod {mod_name}: {e}")
+            complete = False
+        finally:
+            if zf is not None:
+                zf.close()
+    return {"categories": categories, "sources": sources, "errors": errors,
+            "complete": complete}
+
+
+def default_config_index(entries):
+    """1-based index of the configuration item the ENGINE picks when the save
+    names none: the first `isDefault` item that is selectable, else the first
+    selectable item, else 1 (ConfigurationUtil.getDefaultConfigIdFromItems,
+    ConfigurationUtil.lua:637-655)."""
+    for i, e in enumerate(entries, 1):
+        if e.attrib.get("isDefault", "").lower() == "true" and \
+                e.attrib.get("isSelectable", "").lower() != "false":
+            return i
+    for i, e in enumerate(entries, 1):
+        if e.attrib.get("isSelectable", "").lower() != "false":
+            return i
+    return 1
+
+
+def extract_active_fill_types(root, config_id, cat_table, silent_save=False):
+    """(fill_types_sorted_list, status, reason_or_None, unresolved_categories).
+
+    The fill types the vehicle's ACTIVE fillUnit configuration accepts, across
+    every fill unit in it: explicit `fillTypes` plus `fillTypeCategories`
+    expanded through `cat_table`. status is "ok" or "unknown".
+
+    ⛔ "unknown" -- never an empty list standing in for it -- when the
+    configuration cannot be located, or when a category the vehicle names is not
+    in the (possibly incomplete) table. A fill type that IS listed proves the
+    vehicle takes it whatever the status; a missing one proves nothing unless
+    status is "ok". A vehicle with NO <fillUnit> is a measured "takes nothing",
+    status "ok" and an empty list."""
+    fill_unit = root.find("fillUnit")
+    if fill_unit is None:
+        return [], "ok", None, []
+    configurations = fill_unit.find("fillUnitConfigurations")
+    cfgs = configurations.findall("fillUnitConfiguration") if configurations is not None else []
+    if configurations is None or not cfgs:
+        return [], "unknown", "unexpected <fillUnit> shape: no fillUnitConfigurations", []
+    # ⛔ NEVER `config_id or 1`: a default standing in for an unknown. A save that
+    # names NO configuration (`silent_save`) gets the engine's default item; a
+    # save whose configuration id could not be parsed (None) is UNKNOWN.
+    if config_id is None and not silent_save:
+        return [], "unknown", "the save's fillUnit configuration id could not be parsed", []
+    idx = (default_config_index(cfgs) if config_id is None else config_id) - 1
+    if idx < 0 or idx >= len(cfgs):
+        return [], "unknown", (f"fillUnit configuration {config_id} out of range "
+                               f"({len(cfgs)} declared)"), []
+    found, unresolved = set(), []
+    units = cfgs[idx].find("fillUnits")
+    for u in (units.findall("fillUnit") if units is not None else []):
+        found.update(_upper_names(u.attrib.get("fillTypes")))
+        for cat in _upper_names(u.attrib.get("fillTypeCategories")):
+            if cat in cat_table["categories"]:
+                found.update(cat_table["categories"][cat])
+            elif cat not in unresolved:
+                unresolved.append(cat)
+    if unresolved:
+        return sorted(found), "unknown", (
+            "fillTypeCategories not found in the categories read across base/map/mods: "
+            + ", ".join(unresolved)), unresolved
+    if not cat_table["complete"] and any(
+            u.attrib.get("fillTypeCategories")
+            for u in (units.findall("fillUnit") if units is not None else [])):
+        return sorted(found), "unknown", (
+            "the category table is incomplete (" + "; ".join(cat_table["errors"]) + "), so a "
+            "category's member list may be short"), []
+    return sorted(found), "ok", None, []
+
+
+def extract_type_record(root, v_elem):
+    """type / category / xml blocks / vehicle-type-configuration override.
+
+    `xml_blocks` is the sorted set of DIRECT CHILD element names of the vehicle's
+    own XML root -- the specialisation blocks (`sprayer`, `cultivator`, ...) and
+    the structural ones (`storeData`, `base`...) alike. Nothing is filtered by a
+    list of ours: a consumer intersects it with the capability tags it cares
+    about, so the record never guesses which tags are specialisations.
+
+    ⚠ `category` is ONE space-separated string in storeData
+    (e.g. "lowloaders trailersSemi"); the record splits it.
+
+    Vehicle:setType (Vehicle.lua:531-548) replaces the type when the ACTIVE
+    `vehicleType` configuration item names one, so `type` alone can be wrong for
+    such a vehicle (the Lemken Solitair's root type is fertilizingSowingMachine
+    while its item can select another). `type_config_override` says whether the
+    active item names a type; `effective_type` is that type, else the root's."""
+    store_type = root.attrib.get("type")
+    sd = root.find("storeData")
+    cat_el = sd.find("category") if sd is not None else None
+    categories = (cat_el.text or "").split() if cat_el is not None else []
+
+    cfg_id, cfg_raw = None, None
+    for cfg in v_elem.findall("configuration"):
+        if cfg.attrib.get("name") == "vehicleType":
+            cfg_raw = cfg.attrib.get("id")
+            break
+    entries_el = root.find("vehicleTypeConfigurations")
+    entries = entries_el.findall("vehicleTypeConfiguration") if entries_el is not None else []
+    override, effective, note = False, store_type, None
+    if entries:
+        try:
+            # A save that names no vehicleType configuration gets the engine's
+            # default item (isDefault, else the first), not blindly item 1.
+            cfg_id = int(cfg_raw) if cfg_raw is not None else default_config_index(entries)
+        except ValueError:
+            cfg_id = None
+        if cfg_id is None or cfg_id < 1 or cfg_id > len(entries):
+            override, effective = None, None
+            note = (f"vehicleType configuration {cfg_raw!r} is not one of the "
+                    f"{len(entries)} the store XML declares, so the effective type is unknown")
+        else:
+            named = entries[cfg_id - 1].attrib.get("vehicleType")
+            if named:
+                override, effective = True, named
+    elif cfg_raw is not None:
+        note = "the save carries a vehicleType configuration but the store XML declares none"
+    return {
+        "store_type": store_type,
+        "effective_type": effective,
+        "type_config_override": override,
+        "vehicle_type_config_id": cfg_raw,
+        "type_config_note": note,
+        "categories": categories,
+        "xml_blocks": sorted({c.tag for c in root if isinstance(c.tag, str)}),
+    }
+
+
 def run_fuel_capacity(savegame_dir, farm_id, install_dir, mods_dir):
     """--fuel-capacity mode: resolve every owned vehicle's real DIESEL tank
     capacity (litres), added 2026-07-24 so fuel can be reported as a real
@@ -504,13 +845,17 @@ def run_fuel_capacity(savegame_dir, farm_id, install_dir, mods_dir):
     # vehicle was pure waste (measured: ~8s for ~109 owned vehicles across
     # ~40 distinct filenames before this cache existed).
     parsed_by_filename = {}
+    # F9b: the fill-type category table is resolved ONCE per run (base + map +
+    # active mods), then shared by every vehicle's record.
+    cat_table = load_fill_type_categories(savegame_dir, install_dir, mods_dir)
 
     def get_parsed(filename):
         if filename in parsed_by_filename:
             return parsed_by_filename[filename]
         root, source_label, kind, load_err = _load_root_for_filename(filename, install_dir, mods_dir)
         if root is None:
-            result = {"kind": kind, "load_err": load_err, "name": None, "configs": None, "cfg_err": None}
+            result = {"kind": kind, "load_err": load_err, "name": None, "configs": None,
+                      "cfg_err": None, "root": None}
         else:
             item = extract_store_item(root, source_label)
             configs, cfg_err = extract_fill_unit_capacities(root)
@@ -518,9 +863,34 @@ def run_fuel_capacity(savegame_dir, farm_id, install_dir, mods_dir):
                 "kind": kind, "load_err": None,
                 "name": (item or {}).get("name_literal") or (item or {}).get("derived_label"),
                 "configs": configs, "cfg_err": cfg_err, "source_label": source_label,
+                "root": root,
             }
         parsed_by_filename[filename] = result
         return result
+
+    def machine_record(v, parsed, config_id, silent_save=False):
+        """The F9b record for one owned vehicle, from the SAME parsed store XML
+        the tank capacity comes from. Unreadable -> "unknown" with the reason."""
+        if parsed["root"] is None:
+            saved_cfg = next((c.attrib.get("id") for c in v.findall("configuration")
+                              if c.attrib.get("name") == "vehicleType"), None)
+            return {"record_status": "unknown", "record_error": parsed["load_err"],
+                    # The SAVE still says whether this vehicle carries a
+                    # vehicleType configuration; what that selects is unreadable.
+                    "vehicle_type_config_id": saved_cfg,
+                    "type_config_override": None}
+        rec = extract_type_record(parsed["root"], v)
+        fts, ft_status, ft_reason, ft_unresolved = extract_active_fill_types(
+            parsed["root"], config_id, cat_table, silent_save)
+        rec.update({
+            "record_status": "resolved",
+            "record_error": None,
+            "fill_types": fts,
+            "fill_types_status": ft_status,
+            "fill_types_reason": ft_reason,
+            "fill_type_categories_unresolved": ft_unresolved,
+        })
+        return rec
 
     rows = []
     resolved_count = 0
@@ -539,6 +909,13 @@ def run_fuel_capacity(savegame_dir, farm_id, install_dir, mods_dir):
             "resolution_kind": parsed["kind"],
             "name": parsed["name"],
         }
+        # extract_active_fill_unit_config_id answers (1, "no explicit ...") for a
+        # SILENT save and (None, "unparsable ...") for a bad id; the diesel path
+        # keeps its historical config-1 reading, the machine record must not.
+        silent = bool(config_note) and config_note.startswith("no explicit")
+        row.update(machine_record(
+            v, parsed, None if silent else (config_id if isinstance(config_id, int) else None),
+            silent_save=silent))
         if parsed["load_err"]:
             row["resolved"] = False
             row["error"] = parsed["load_err"]
@@ -554,6 +931,14 @@ def run_fuel_capacity(savegame_dir, farm_id, install_dir, mods_dir):
             rows.append(row)
             continue
 
+        if config_id is None:
+            # The save's fillUnit configuration id is unparsable: the tank cannot
+            # be picked, and guessing a configuration is the F-4 defect.
+            row["resolved"] = False
+            row["error"] = config_note
+            unresolved_count += 1
+            rows.append(row)
+            continue
         idx = config_id - 1
         if idx < 0 or idx >= len(configs):
             row["resolved"] = False
@@ -582,6 +967,16 @@ def run_fuel_capacity(savegame_dir, farm_id, install_dir, mods_dir):
         "owned_count": len(owned),
         "resolved_count": resolved_count,
         "unresolved_count": unresolved_count,
+        # F9b: how many vehicles' OWN XML could be read for the machine record
+        # (independent of `resolved_count`, which is DIESEL tanks only).
+        "record_resolved_count": sum(1 for r in rows if r.get("record_status") == "resolved"),
+        "record_unknown_count": sum(1 for r in rows if r.get("record_status") != "resolved"),
+        "fill_type_categories": {
+            "complete": cat_table["complete"],
+            "sources": cat_table["sources"],
+            "errors": cat_table["errors"],
+            "count": len(cat_table["categories"]),
+        },
         "vehicles": rows,
         "note": (
             "diesel_capacity_litres is resolved from each vehicle's own store/mod XML "
@@ -758,6 +1153,14 @@ def run_gaps(install_dir, mods_dir, include_mods, limit, verbose=False):
             summary["shown"] = [attach_verbose_specs(i, install_dir, mods_dir) for i in summary["shown"]]
         results[gap_name] = {
             "types_searched": types,
+            # The savegame specialization tag(s) that prove this category is
+            # already covered. Emitted so a caller holding fleet data decides
+            # ownership against a documented key rather than re-deriving one,
+            # and so a caller holding NO fleet data can tell it is missing an
+            # input rather than reading this block as "this farm has no
+            # seeder" (F-040 / TECH-DEBT-001). Never match these against
+            # types_searched -- different namespace, see the constant.
+            "capability_specializations": GAP_CATEGORY_CAPABILITY_SPECS[gap_name],
             "mod_items_scanned": mods_scanned if include_mods else None,
             **summary,
         }
@@ -767,9 +1170,12 @@ def run_gaps(install_dir, mods_dir, include_mods, limit, verbose=False):
         "why": (
             "Prices the equipment categories a farm needs to complete its crop cycle -- "
             "sowing, tillage, spraying -- so a gap between what the farm CAN do and what it "
-            "NEEDS to do can be costed rather than guessed at. Which gaps this farm actually "
-            "has comes from read_vehicles.py's `specializations` (the save's own runtime "
-            "state), not from this script and not from any assumption baked in here."
+            "NEEDS to do can be costed rather than guessed at. ⚠ THESE ARE CANDIDATE "
+            "CATEGORIES, PRICED -- NOT this farm's gaps. Which gaps this farm actually has "
+            "comes from read_vehicles.py's `specializations` (the save's own runtime state), "
+            "matched against each category's `capability_specializations` key by the caller. "
+            "Rendering this payload as a farm's gaps without that match is the false-gap defect, "
+            "which told a farm owning a seeder and a plough to buy both."
         ),
         "why_not_here": (
             "This states no farm's fleet, debt or interest rate, by design: a skill's scripts "

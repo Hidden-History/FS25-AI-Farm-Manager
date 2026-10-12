@@ -73,9 +73,10 @@ parsers rule above. Two things it deliberately will NOT do:
        node of this never-traded farm, which would value the grain at nothing
        (F-001's exact shape).
     2. Recommend holding on the price spread. It reports the peak and the
-       gross gain and stops, because carrying cost dominates that spread here
-       and the arithmetic is farm-specific doctrine (sanctum/identity/creed.md), not
-       portable skill logic. A spread that looks great is not a decision.
+       gross gain and stops, because whether carrying cost outweighs that spread
+       depends on the individual farm (its loan rate, its calendar) and is
+       farm-specific doctrine (sanctum/identity/creed.md), not portable skill
+       logic. A spread that looks great is not a decision.
 
 THE BUY SIDE (added 2026-07-16): inventory answers "what have we produced and
 what is it worth" -- the SELL side. `input_costs`, `weeds`, `equipment_market`
@@ -136,6 +137,12 @@ import subprocess
 
 SCRIPT_DIR = os.path.dirname(__file__)
 
+# The `read_store_prices.py --fuel-capacity` pass resolves every vehicle's tank
+# AND machine record (~20 s on a 400-vehicle farm). Its inner timeout is this;
+# any wrapper that shells out to farm_snapshot (check_fleet_alerts --fleet-only)
+# must wait LONGER, or a slow-but-healthy pass times the wrapper out first.
+FUEL_CAPACITY_TIMEOUT = 90
+
 # --verbose ships every row; the default ships what THIS farm can act on.
 # The digest once grew to 2.0x the size of the full snapshot it exists to
 # condense -- every capability justified, the sum not. A briefing that must be
@@ -183,6 +190,246 @@ CAPABILITY_REQUIREMENTS = {
     # treeTransportMission, deadwoodMission, destructibleRockMission: no
     # verified specialization mapping -- left out on purpose, not guessed.
 }
+
+# ⛔ F9a / BUG-032 / BUG-048. A PERSISTED SPECIALISATION MAY ONLY PROVE
+# OWNERSHIP. vehicles.xml carries a child element per specialisation ONLY when
+# that specialisation's saveToXMLFile writes one (Vehicle.lua:1546-1551), and
+# Cultivator.lua, Weeder.lua and Sprayer.lua have NO saveToXMLFile at all --
+# so every farm was told it owns no cultivator, weeder or sprayer (the live
+# farm owns 2 cultivators, 3 weeders and 4 machines declaring <sprayer>).
+#
+# The ONLY specialisations whose absence from vehicles.xml means anything are
+# the ones whose saveToXMLFile writes UNCONDITIONALLY -- measured in
+# gameSource.zip 2026-09-23: Combine (workedHectars, numAttachedCutters),
+# Cutter (cutHeight), Plow (rotationMax), SowingMachine
+# (selectedSeedFruitType). Baler is NOT here: it writes nothing for a full
+# round baler (Baler.lua:792+). For these four a miss is reported as
+# `not_found_among_N_readable` -- a count of what was read, never "absent".
+# Every other specialisation's miss is `unknown`.
+ALWAYS_PERSISTED_SPECS = frozenset({"combine", "cutter", "plow", "sowingMachine"})
+
+OWNED = "owned"
+NOT_FOUND_AMONG_N_READABLE = "not_found_among_N_readable"
+OWNERSHIP_UNKNOWN = "unknown"
+
+
+def _record_readable(machine_record):
+    """How many owned vehicles' OWN store XML the F9b machine record read, or 0
+    when there is no usable record (unavailable, or nothing readable)."""
+    if not isinstance(machine_record, dict) or machine_record.get("status") != "ok":
+        return 0
+    return machine_record.get("readable_count") or 0
+
+
+def ownership_state(spec, fleet_specs, fleet_specs_err, machine_record=None):
+    """One specialisation -> owned / not_found_among_N_readable / unknown.
+    NEVER "absent" (F9a): the save cannot prove a machine is missing.
+
+    ⭐ F9b: a machine record -- each vehicle's OWN store XML, which declares its
+    specialisation blocks unconditionally -- turns a miss for ANY specialisation
+    into `not_found_among_N_readable` (N = the vehicles whose XML was read;
+    encrypted-DLC vehicles are not among them). Without a record, only the four
+    ALWAYS_PERSISTED_SPECS can say that; every other miss stays `unknown`."""
+    if fleet_specs_err:
+        return OWNERSHIP_UNKNOWN
+    if spec in (fleet_specs or ()):
+        return OWNED
+    # ⛔ A record miss speaks only for the blocks the record COLLECTED
+    # (`by_block` is filtered to MACHINE_RECORD_BLOCKS): "not found among N" for
+    # a spec nobody looked for would be a claim about nothing.
+    if spec in ALWAYS_PERSISTED_SPECS or (_record_readable(machine_record)
+                                          and spec in MACHINE_RECORD_BLOCKS):
+        return NOT_FOUND_AMONG_N_READABLE
+    return OWNERSHIP_UNKNOWN
+
+
+def _record_unread(machine_record):
+    """Vehicles the record could NOT judge (encrypted DLC, type-overridden)."""
+    if not _record_readable(machine_record):
+        return 0
+    return machine_record.get("unknown_count") or 0
+
+
+def _unread_note(machine_record):
+    n = _record_unread(machine_record)
+    return (f" ({n} more could not be judged: encrypted DLC, or a vehicleType "
+            "configuration that changes the type)") if n else ""
+
+
+def _ownership_phrase(spec, state, readable_count, machine_record=None):
+    if state == OWNED:
+        return f"{spec}: owned"
+    if state == NOT_FOUND_AMONG_N_READABLE:
+        n = _record_readable(machine_record)
+        if n and spec not in ALWAYS_PERSISTED_SPECS:
+            return (f"{spec}: not found among the {n} vehicle(s) whose own XML was read"
+                    + _unread_note(machine_record))
+        return (f"{spec}: not found among the {readable_count} vehicle(s) read "
+                "from vehicles.xml")
+    return (f"{spec}: unknown -- this specialisation writes no state to "
+            "vehicles.xml, so the save cannot show whether the farm owns one")
+
+
+# ⭐ F9b -- THE MACHINE RECORD. Fuel and the record are ONE pass: this is read
+# out of the same `read_store_prices.py --fuel-capacity` result build_fleet
+# joins fuel against, so the two cannot disagree about which store file a vehicle
+# resolved to. Blocks Cyrus can answer capability questions with; the record
+# keeps EVERY child element name and this vocabulary only selects which ones the
+# compact digest lists.
+MACHINE_RECORD_BLOCKS = frozenset().union(*CAPABILITY_REQUIREMENTS.values()) | frozenset({
+    "plow", "cultivator", "weeder", "sowingMachine", "sprayer"})
+
+# A herbicide contract needs a sprayer that TAKES herbicide (SPEC F9b). Only
+# herbicide is mapped: the fill type a fertilize contract needs is not in the
+# engine source shipped with the SDK (the mission classes live in dataS.gar),
+# so it is left unmapped rather than guessed.
+REQUIRED_FILL_TYPES = {"herbicideMission": ("sprayer", "HERBICIDE")}
+
+
+def _proof_sources(specs, machine_record):
+    """Which instrument PROVED these specs. A spec listed in the machine record
+    came from the vehicle's own store XML; anything else from vehicles.xml's
+    persisted tags. Cyrus repeats this to the player, so it must name the
+    instrument that actually spoke (step-4 review MEDIUM-1)."""
+    in_record = set((machine_record or {}).get("by_block") or {}) if _record_readable(
+        machine_record) else set()
+    store = sorted(x for x in specs if x in in_record)
+    persisted = sorted(x for x in specs if x not in in_record)
+    bits = []
+    if store:
+        bits.append("each owned machine's own store XML declares "
+                    + ", ".join(f"<{x}>" for x in store))
+    if persisted:
+        bits.append("vehicles.xml runtime state via read_vehicles.py, records "
+                    + ", ".join(f"<{x}>" for x in persisted))
+    return "; ".join(bits)
+
+
+def _gap_proof(proving, machine_record):
+    """The evidence sentence for a covered gap category: names the instrument
+    that proved each capability, and for `sprayer` says what was actually proved
+    (a sprayer that takes HERBICIDE), not merely a `<sprayer>` block."""
+    bits = []
+    rest = [p for p in proving if p != "sprayer"]
+    if rest:
+        bits.append(_proof_sources(rest, machine_record))
+    if "sprayer" in proving:
+        bits.append("an owned machine's own store XML declares <sprayer> and takes HERBICIDE")
+    return "; ".join(bits)
+
+
+def crop_sprayer_state(fleet_specs, fleet_specs_err, machine_record):
+    """Does the farm own a machine that can spray a CROP -- a `<sprayer>` block
+    that takes HERBICIDE -- owned / not_found_among_N_readable / unknown.
+
+    ⛔ A `<sprayer>` BLOCK IS NOT A CROP SPRAYER (step-4 review HIGH-1). The base
+    game declares it on spreaders, slurry tanks and fertilising seeders; the live
+    farm's only four take FERTILIZER / SEEDS / LIME and never HERBICIDE. Weeds and
+    the sprayer gap therefore ask exactly what a herbicide contract asks
+    (fill_type_state), so one digest cannot answer the same question twice.
+
+    With no readable record the old F9a rule stands: a persisted `<sprayer>` tag
+    proves a sprayer, its absence proves nothing."""
+    if fleet_specs_err:
+        return OWNERSHIP_UNKNOWN
+    if not _record_readable(machine_record):
+        return ownership_state("sprayer", fleet_specs, None, None)
+    state, n = fill_type_state("sprayer", "HERBICIDE", machine_record)
+    if state == NOT_FOUND_AMONG_N_READABLE and not n and "sprayer" in (fleet_specs or ()):
+        # a persisted <sprayer> tag names a machine the record did not list
+        # (e.g. an unread one): it might be a crop sprayer.
+        return OWNERSHIP_UNKNOWN
+    return state
+
+
+def build_machine_record(fuel_capacity):
+    """The F9b machine record from the --fuel-capacity pass, or an unavailable
+    section with the reason (never an empty record).
+
+    Compact by default: machines are listed under each capability block they
+    declare (`by_block`); --verbose ships every machine's full row."""
+    data, err = fuel_capacity if fuel_capacity else (None, "not requested")
+    if err or not isinstance(data, dict):
+        return unavailable(f"read_store_prices.py --fuel-capacity: {err or 'no data'}")
+    rows = data.get("vehicles")
+    if not isinstance(rows, list) or "record_resolved_count" not in data:
+        return unavailable("read_store_prices.py --fuel-capacity carried no machine record "
+                           "(an older parser?), so machine capability cannot be read from store XML")
+    machines, unknown, ambiguous = [], [], []
+    for r in rows:
+        if r.get("record_status") == "resolved" and r.get("type_config_override") is not False:
+            # ⛔ The store XML declares the blocks of EVERY vehicleType
+            # configuration, and which one is active decides which blocks are
+            # real (Vehicle:setType). Without the type -> specialisation table a
+            # block here may belong to an unselected configuration, so it is
+            # listed apart and never counted as proof of ownership.
+            ambiguous.append({
+                "unique_id": r.get("unique_id"), "name": r.get("name"),
+                "effective_type": r.get("effective_type"),
+                "type_config_override": r.get("type_config_override"),
+                "declared_blocks": [b for b in (r.get("xml_blocks") or [])
+                                    if b in MACHINE_RECORD_BLOCKS]})
+        elif r.get("record_status") == "resolved":
+            machines.append({
+                "unique_id": r.get("unique_id"),
+                "name": r.get("name"),
+                "store_type": r.get("store_type"),
+                "effective_type": r.get("effective_type"),
+                "type_config_override": r.get("type_config_override"),
+                "categories": r.get("categories") or [],
+                "xml_blocks": r.get("xml_blocks") or [],
+                "fill_types": r.get("fill_types") or [],
+                "fill_types_status": r.get("fill_types_status"),
+            })
+        else:
+            unknown.append({"unique_id": r.get("unique_id"), "filename": r.get("filename"),
+                            "status": "unknown", "reason": r.get("record_error"),
+                            "type_config_override": r.get("type_config_override")})
+    by_block = {}
+    for m in machines:
+        for b in m["xml_blocks"]:
+            if b in MACHINE_RECORD_BLOCKS:
+                by_block.setdefault(b, []).append({
+                    "unique_id": m["unique_id"], "name": m["name"],
+                    "effective_type": m["effective_type"], "categories": m["categories"],
+                    "fill_types": m["fill_types"], "fill_types_status": m["fill_types_status"]})
+    return {
+        "status": "ok",
+        "readable_count": len(machines),
+        "unknown_count": len(unknown) + len(ambiguous),
+        "unknown_vehicles": unknown,
+        "type_ambiguous_vehicles": ambiguous,
+        "by_block": by_block,
+        "machines": machines if VERBOSE else None,
+        "fill_type_categories": data.get("fill_type_categories"),
+        "note": (
+            "Each vehicle's OWN store/mod XML, read in the same pass as the fuel tanks. "
+            "`by_block` lists the machines that declare each capability block; a machine "
+            "NOT listed is 'not found among the readable', never proof of absence. "
+            "unknown_vehicles are vehicles whose XML could not be opened (encrypted DLC): "
+            "their type, blocks and fill types are UNKNOWN, not guessed. `type_config_override` "
+            "means the active vehicleType configuration replaces the root type "
+            "(effective_type)."),
+    }
+
+
+def fill_type_state(block, fill_type, machine_record):
+    """Does the farm own a machine declaring `block` that takes `fill_type`?
+    owned / not_found_among_N_readable / unknown -- from the record only.
+
+    A machine whose fill types are LISTED proves it takes the type whatever
+    else is unknown; a miss is only a miss when every candidate's fill types
+    were fully resolved."""
+    if not _record_readable(machine_record):
+        return OWNERSHIP_UNKNOWN, None
+    cands = (machine_record.get("by_block") or {}).get(block) or []
+    if any(fill_type in (m.get("fill_types") or []) for m in cands):
+        return OWNED, len(cands)
+    if not cands:
+        return NOT_FOUND_AMONG_N_READABLE, 0
+    if all(m.get("fill_types_status") == "ok" for m in cands):
+        return NOT_FOUND_AMONG_N_READABLE, len(cands)
+    return OWNERSHIP_UNKNOWN, len(cands)
 
 
 def find_config(explicit):
@@ -324,7 +571,7 @@ def build_save_freshness(career, savegame_dir):
             "note": (
                 "source_age_seconds (measured mtime) is the ONLY honest freshness signal "
                 "-- state it as 'as of N minutes ago' and stop there. autoSaveInterval "
-                "bounds NOTHING (FRICTION-LOG.md F-023): FS25 defers the actual write to "
+                "bounds NOTHING: FS25 defers the actual write to "
                 "the next map/menu open after the interval elapses, so a save can be "
                 "arbitrarily older than the interval with the player actively playing the "
                 "whole time. Do not infer a cause (paused, idle, crashed) for any gap --"
@@ -352,7 +599,7 @@ def build_save_freshness(career, savegame_dir):
                     f"read_career.py was unavailable ({err}) -- fell back to this file's "
                     "raw filesystem mtime instead of careerSavegame.xml's own reading. "
                     "Same caveat applies: this measured age is the only honest freshness "
-                    "signal there is (FRICTION-LOG.md F-023) -- autoSaveInterval bounds "
+                    "signal there is -- autoSaveInterval bounds "
                     "nothing and no cause (paused/idle/crashed) should be inferred from a gap."
                 ),
             }
@@ -371,7 +618,7 @@ def build_money(economy):
         "loan": data.get("loan"),
         "source": "farms.xml via read_economy.py",
         "note": "economy.xml is NOT the source (it's fillType price history only, "
-                "see FRICTION-LOG.md F-001) -- never substitute it here.",
+                "nothing more) -- never substitute it here.",
     }
 
 
@@ -443,8 +690,9 @@ def ownership_note(xc):
         return (gates + "WARNING: its computed land cost does NOT agree with "
                         "farms.xml's own <fieldPurchase>" + figures + ". The two "
                         "gates above still hold, but this comparison does not -- do "
-                        "NOT quote the land cost as cross-checked. See BUG-014 for "
-                        "what the disagreement means. " + tail)
+                        "NOT quote the land cost as cross-checked. See the land_value entry in "
+                        "references/blocked-capabilities.json for what the "
+                        "disagreement means. " + tail)
 
     return (gates + "The land-cost cross-check against farms.xml's <fieldPurchase> "
                     "did NOT run, so the land cost is neither confirmed nor refuted "
@@ -476,7 +724,7 @@ def build_field_state(fields):
                 "farmId); it is normally derived by decoding the map's GRLE raster, but "
                 "that did not resolve this run (see why_unresolved). Attribute NO subset "
                 "of these fields to the player. null here means unknown -- it does not "
-                "mean the farm owns nothing (F-004)."
+                "mean the farm owns nothing."
             ),
         }
 
@@ -506,10 +754,10 @@ def build_field_state(fields):
     }
 
 
-# Fleet alert tiers -- house rule set 2026-07-24 (player asked for deterministic
-# fuel/repair thresholds instead of a judgment call every check; see
-# sanctum/config.json house_rules.fuel_and_repair_alerts and
-# sanctum/identity/decision-making.md). Fed to scripts/check_fleet_alerts.py,
+# Fleet alert tiers -- deterministic fuel/repair thresholds instead of a
+# judgment call every check. The alerts are on for every player; the switch is
+# config.json `fleet_alerts_enabled`, read by check_fleet_alerts.py (absent
+# means on). Fed to scripts/check_fleet_alerts.py,
 # which turns a NEW crossing into an in-game card -- see that script for the
 # dedup/notification side; this module only computes the tiers.
 FUEL_MINOR_THRESHOLD = 0.50    # fuel remaining fraction AT OR BELOW this -> minor
@@ -535,6 +783,25 @@ def _tier(value, minor_bound, severe_bound, direction):
     if value >= minor_bound:
         return "minor"
     return None
+
+
+def _fleet_note(needs_attention, max_wear, min_fuel_fraction, capacity_err, fuel_unresolved):
+    """⛔ F9a. "nothing needs attention" is said ONLY when both wear and fuel
+    were actually checked. It used to fire when fuel was UNAVAILABLE, stating
+    a fuel all-clear nobody measured."""
+    if needs_attention:
+        return (f"{len(needs_attention)} item(s) need attention (fuel/wear) -- see "
+                "fleet.needs_attention.")
+    if max_wear is None:
+        return "no wear/fuel data available"
+    wear = f"max wear is {max_wear:.2%}"
+    if capacity_err or min_fuel_fraction is None:
+        return (f"no wear item needs attention -- {wear}. Fuel was NOT checked: tank "
+                f"capacities were unavailable ({capacity_err or 'no tank resolved'}), so this "
+                "is not a fuel all-clear.")
+    tail = (f" {len(fuel_unresolved)} fuel-carrying vehicle(s) could not be tiered (tank "
+            "size or fuel level unresolved) -- see fuel_unresolved_vehicles." if fuel_unresolved else "")
+    return (f"nothing needs attention -- {wear}, min fuel is {min_fuel_fraction:.0%}." + tail)
 
 
 def build_fleet(vehicles, fuel_capacity=None):
@@ -579,13 +846,63 @@ def build_fleet(vehicles, fuel_capacity=None):
             fuel_litres = None
         cap_row = capacity_by_id.get(uid)
         cap_litres = cap_row.get("diesel_capacity_litres") if (cap_row and cap_row.get("resolved")) else None
-        fuel_known = fuel_litres is not None and cap_litres is not None and cap_litres > 0
+
+        # ⛔ AN EMPTY DIESEL TANK IS NOT "NO TANK" (step-5 delta review D-1, FM-S5-F2).
+        # When a fill unit's level reaches 0 the engine RESETS its fill type to UNKNOWN
+        # (FillUnit.lua:1576-1580) and saves that name (:538-541), so a bone-dry diesel
+        # tank is written `<unit fillType="UNKNOWN" fillLevel="0"/>`. read_vehicles.extract_fuel
+        # matches DIESEL only and hands back None -- indistinguishable, on the level alone,
+        # from an implement with no tank. The store-XML pass separates them: a vehicle whose
+        # store XML declares a DIESEL unit (a RESOLVED capacity) but whose save carries no
+        # DIESEL unit and DOES carry an emptied UNKNOWN/0 unit is a 0 L tank -- the most
+        # severe tier. Without this a dry tractor was missing from the low-fuel count
+        # (FARM's e4 AND Cyrus's fuel alert, which share this function) and an all-dry
+        # fleet printed "Low fuel 0".
+        # A resolved tank with NEITHER a DIESEL nor an emptied unit is not guessed either
+        # way: it lands in fuel_unresolved below (level unreadable), never in 0.
+        #
+        # ⛔ ONLY A VEHICLE WITH AN ENGINE HAS A DIESEL TANK TO BE DRY (FM-S5-F3, Sonnet H-1).
+        # The store pass calls ANY fill unit whose fillTypes list `diesel` a "diesel capacity"
+        # (read_store_prices.py:403-411), so a liquid tanker or trailer gets a RESOLVED capacity
+        # and, with no DIESEL unit in its save, looked exactly like a dry tractor: on the
+        # measured farm the unresolved-fuel count went 1 -> 4 (two milk/water tankers and a
+        # water trailer), and once emptied they would raise false "fuel 0%" alerts and count
+        # in e4. The engine-generic persisted specialisations are `enterable` and `drivable`:
+        # measured on 5 saves, all 100 vehicles carrying a real DIESEL unit have BOTH and the
+        # tankers have NEITHER. A vehicle without them keeps its pre-F2 treatment (ignored when
+        # it carries no DIESEL unit). Absent or unreadable specialisations count as no engine.
+        specs = v.get("specializations")
+        has_engine = isinstance(specs, list) and ("enterable" in specs or "drivable" in specs)
+        fuel_dry = False
+        if has_engine and fuel_litres is None and cap_litres is not None and cap_litres > 0:
+            units = v.get("fill_units")
+            if isinstance(units, list) and any(
+                    isinstance(u, dict) and u.get("fill_type") == "UNKNOWN"
+                    and u.get("fill_level_litres") == 0 for u in units):
+                fuel_litres, fuel_dry = 0.0, True
+        fuel_level_unreadable = (has_engine and fuel_litres is None
+                                 and cap_litres is not None and cap_litres > 0)
+        # ⛔ A DIESEL UNIT ON A VEHICLE WITH NO ENGINE IS CARGO, NOT A FUEL TANK (TD-164).
+        # extract_fuel returns the first DIESEL unit's level whichever unit it is, so a
+        # tanker hauling diesel read as a low tank: 5,000 of 64,000 L tiered e4 = 1.0 and raised
+        # a critical Cyrus fuel card. Same trade as the F3 guard above: a miss, never a false
+        # alert. fuel_known needs an engine; the tank-size-unresolved note below needs one too.
+        fuel_known = (has_engine and fuel_litres is not None
+                      and cap_litres is not None and cap_litres > 0)
         fuel_fraction = (fuel_litres / cap_litres) if fuel_known else None
         if fuel_fraction is not None and (min_fuel_fraction is None or fuel_fraction < min_fuel_fraction):
             min_fuel_fraction = fuel_fraction
         fuel_tier = _tier(fuel_fraction, FUEL_MINOR_THRESHOLD, FUEL_SEVERE_THRESHOLD, "at_or_below")
 
-        if fuel_litres is not None and not fuel_known:
+        if fuel_level_unreadable:
+            # A resolved DIESEL tank whose level the save does not show (no DIESEL unit and no
+            # emptied unit): a real unknown, never 0.
+            fuel_unresolved.append({
+                "unique_id": uid, "filename": v.get("filename"), "fuel_litres": None,
+                "reason": "diesel tank declared by the store XML, but its level is not readable "
+                          "from the save",
+            })
+        if has_engine and fuel_litres is not None and not fuel_known:
             # Carries fuel, but the tank size couldn't be resolved this run --
             # a real unknown, distinct from "no fuel tank at all" (fuel_litres
             # is None for implements, which is correctly excluded here).
@@ -607,6 +924,8 @@ def build_fleet(vehicles, fuel_capacity=None):
             "damage_known": dmg_f is not None,
             "damage_tier": damage_tier,
             "fuel_litres": fuel_litres,
+            # True when the tank is empty and the save shows it only as an emptied UNKNOWN unit
+            "fuel_dry_inferred": fuel_dry,
             "fuel_capacity_litres": cap_litres,
             "fuel_fraction": fuel_fraction,
             "fuel_known": fuel_known,
@@ -642,17 +961,13 @@ def build_fleet(vehicles, fuel_capacity=None):
         "needs_attention": needs_attention,
         "fuel_unresolved_vehicles": fuel_unresolved,
         "fuel_unresolved_note": (
-            f"{len(fuel_unresolved)} vehicle(s) carry fuel but their tank capacity "
-            "couldn't be resolved this run -- raw litres only, no tier assigned. Never "
-            "guessed into a percent."
+            f"{len(fuel_unresolved)} vehicle(s) carry fuel but could not be tiered this run -- "
+            "either the tank capacity couldn't be resolved (raw litres only), or the capacity "
+            "is known but the save shows no readable fuel level (each entry's `reason` says "
+            "which). No tier assigned. Never guessed into a percent."
         ) if fuel_unresolved else None,
-        "note": (
-            f"{len(needs_attention)} item(s) need attention (fuel/wear) -- see "
-            "fleet.needs_attention." if needs_attention else
-            (f"nothing needs attention -- max wear is {max_wear:.2%}"
-             + (f", min fuel is {min_fuel_fraction:.0%}" if min_fuel_fraction is not None else "")
-             if max_wear is not None else "no wear/fuel data available")
-        ),
+        "note": _fleet_note(needs_attention, max_wear, min_fuel_fraction,
+                            capacity_err, fuel_unresolved),
         "source": (
             "vehicles.xml via read_vehicles.py; fuel tank capacity via "
             "read_store_prices.py --fuel-capacity"
@@ -678,10 +993,9 @@ def build_inventory(vehicles, placeables, prices):
     ON HOLD-VS-SELL, WHICH IS THE ONLY REASON ANYONE ASKS: this section
     reports the peak of the price curve and the gain to it, and REFUSES to
     recommend holding on that basis, because the price spread alone is a trap.
-    Worked, with this save's real numbers: holding to peak gains ~+$20,040,
-    and on a farm carrying the notional debt this project's creed tracks, the
-    interest over those same in-game days runs several times that -- the
-    percentage looks great and the decision is still wrong. The carrying cost
+    The gross spread can look great as a percentage while the decision is still
+    wrong once the farm's own carrying cost (debt interest, the machine or storage the
+    grain occupies) is weighed against it. That cost
     is farm-specific doctrine (it lives in the sanctum, not in this portable
     skill), so this section surfaces the gross spread, states plainly that it
     is gross, and hands the decision to the doctrine rather than pre-empting
@@ -848,10 +1162,10 @@ def build_inventory(vehicles, placeables, prices):
             "verdict": "NOT COMPUTED HERE -- BY DESIGN",
             "why": (
                 "gain_if_held_to_peak is a GROSS price spread. It ignores carrying cost "
-                "entirely, and on this farm the carrying cost dominates it: the interest on "
-                "the notional debt over the few in-game days to peak runs several times the "
-                "spread, so the trade that looks obviously good on percentage is a large net "
-                "loss. A spread is not a recommendation. Weigh it against the debt per "
+                "entirely (the interest on any debt over the days to peak, and the machine "
+                "or storage the grain occupies). Whether that cost outweighs the spread "
+                "depends on the individual farm, and this script does not compute it. A "
+                "spread is not a recommendation. Weigh it against this farm's own debt per "
                 "sanctum/identity/creed.md doctrine -- that arithmetic is farm-specific and "
                 "deliberately does not live in this portable skill."
             ),
@@ -867,7 +1181,7 @@ def build_inventory(vehicles, placeables, prices):
         "price_source": (
             "economy.xml per-period price curve via read_fill_prices.py. NOT read_prices.py's "
             "meanValue, which is 0.000000 on every node of this never-traded farm and would "
-            "value this grain at nothing (F-001's shape)."
+            "value this grain at nothing."
         ) if not pr_err else None,
         "price_error": pr_err,
         "holdings_caveats": [
@@ -1109,15 +1423,16 @@ def build_input_costs(prices, game_defs, placeables, fields):
     }
 
 
-def build_weeds(fields, prices, vehicles, game_defs):
+def build_weeds(fields, prices, vehicles, game_defs, machine_record=None):
     """Weeds on the farm's OWN land, what treating them costs, and whether the
     farm can treat them at all.
 
     NO YIELD-LOSS MODEL IS INVENTED HERE, and that is a deliberate refusal
-    rather than an omission. weedState is an ordinal from the map's own weed
-    info-layer; the map's weed.xml carries only the raster wiring (info-layer
-    filename, channels, a blocking state) and NOTHING that maps a weed level
-    to a yield penalty, and the install's loose XML is equally silent. Any
+    rather than an omission. weedState is the number the game's weed tables
+    are written in (data/maps/maps_weed.xml: growth, per-tool replacements and
+    a `factor` per state; the map's own weed.xml usually carries only the
+    info-layer wiring). The factor feeds a harvest multiplier that is native
+    code, so nothing here can turn a weed level into a yield penalty. Any
     "weeds at 9 cost you N% of your crop" would therefore be fabricated. What
     IS derivable is reported: which owned fields are affected, how badly on
     the game's own scale, what herbicide costs, and whether the farm owns
@@ -1134,7 +1449,7 @@ def build_weeds(fields, prices, vehicles, game_defs):
             "note": (
                 "Field ownership did not resolve this run, so weeds cannot be attributed to the "
                 "player's land. A map-wide weed count would be meaningless next to farm data "
-                "(F-004's shape) and is deliberately not printed."
+                "and is deliberately not printed."
             ),
             "why_unresolved": own.get("why_unresolved"),
         }
@@ -1162,15 +1477,13 @@ def build_weeds(fields, prices, vehicles, game_defs):
             })
     weedy.sort(key=lambda x: -x["weed_state"])
 
-    # Can the farm act? Sprayer specialization, read from the save's own
-    # runtime state -- never guessed from a filename (F-026).
+    # Can the farm act? ⛔ F9a / U8 (BUG-048): the Sprayer specialisation
+    # persists NOTHING to vehicles.xml, so the save can prove a sprayer is owned
+    # and can never prove one is not. has_sprayer is True or None -- never False.
     v_data, v_err = vehicles
-    has_sprayer = None
-    if not v_err:
-        specs = set()
-        for v in (v_data.get("vehicles") or []):
-            specs |= set(v.get("specializations") or [])
-        has_sprayer = "sprayer" in specs
+    specs, _specs_err = build_fleet_specializations(vehicles, machine_record)
+    sprayer_state = crop_sprayer_state(specs, v_err, machine_record)
+    has_sprayer = True if sprayer_state == OWNED else None
 
     pr_data, pr_err = prices
     herbicide_price = None
@@ -1187,6 +1500,7 @@ def build_weeds(fields, prices, vehicles, game_defs):
         "max_weed_state_observed_on_owned_land": observed_max,
         "herbicide_price_per_1000l": herbicide_price,
         "farm_owns_sprayer": has_sprayer,
+        "sprayer_ownership": sprayer_state,
         "can_treat": (
             None if has_sprayer is None else has_sprayer
         ),
@@ -1194,32 +1508,63 @@ def build_weeds(fields, prices, vehicles, game_defs):
         "cost_of_treatment_note": (
             "NOT COMPUTED. Herbicide's price per 1000 L is known and the game's own sprayType "
             "gives a litres-per-SECOND application rate, but converting that into a per-hectare "
-            "cost needs the sprayer's working width and speed -- and this farm owns no sprayer, "
-            "so there is no machine to take those from. A number here would be invented."
+            "cost needs the sprayer's working width and speed, which the save does not record. "
+            "A number here would be invented."
         ),
         "yield_loss": None,
         "yield_loss_note": (
-            "NOT DERIVABLE, and deliberately not estimated. weedState is an ordinal on the map's "
-            "own weed info-layer; the map's weed.xml defines only the raster wiring and no "
-            "yield relationship, and the install's loose XML is silent too (the economics live "
-            "in the packed dataS.gar). Any percentage here would be fabrication dressed as "
-            "analysis. Report the level, the cost of herbicide and whether the farm can spray; "
+            "NOT DERIVABLE, and deliberately not estimated. weedState is the number the game's "
+            "weed tables (data/maps/maps_weed.xml) are written in. That file lists a `factor` per "
+            "state, but the harvest multiplier that uses it is native code, so no yield "
+            "percentage can be derived from it. Any percentage here would be fabrication dressed "
+            "as analysis. Report the level, which tool clears it (the field's own `weeds` "
+            "operation, `clearing_tools`), the cost of herbicide and whether the farm can spray; "
             "let the player judge the rest."
         ),
         "note": (
             f"{len(weedy)} owned field(s) carry weeds"
             + (f", worst at weedState {weedy[0]['weed_state']}" if weedy else "")
             + (
-                ". The farm owns NO sprayer, so this is a cost of inaction it currently cannot "
-                "address without buying or hiring one -- see equipment_gaps."
-                if has_sprayer is False else
                 ". The farm owns a sprayer." if has_sprayer else
-                ". Whether the farm owns a sprayer could not be determined."
+                (". " + _ownership_phrase("crop sprayer (a sprayer taking HERBICIDE)", sprayer_state,
+                                          None, machine_record)
+                 + " -- not proof of absence; ask the player, never assume none.")
+                if sprayer_state == NOT_FOUND_AMONG_N_READABLE else
+                ". Whether the farm owns a sprayer is UNKNOWN: the sprayer specialisation "
+                "writes no state to vehicles.xml, so the save cannot show it either way "
+                "-- ask the player, never assume none."
             )
         ),
         "sources": ["fields.xml via read_fields.py (weedState + ownership)",
-                    "vehicles.xml via read_vehicles.py (sprayer specialization, F-026)"],
+                    "each owned machine's own store XML via read_store_prices.py "
+                    "--fuel-capacity (a `<sprayer>` block that takes HERBICIDE), and "
+                    "vehicles.xml via read_vehicles.py (persisted sprayer tag); "
+                    "either proves ownership, neither proves absence -- F9a/F9b"],
     }
+
+
+def weeds_decision(w):
+    """The briefing's weeds line, or None. ⛔ F9a / U8 (BUG-048): it never says
+    the farm owns no sprayer -- the save cannot show that (see build_weeds)."""
+    if w.get("status") != "ok" or not w.get("weedy_owned_field_count"):
+        return None
+    worst = w.get("worst") or []
+    ids = ", ".join(str(x["field_id"]) for x in worst[:3])
+    if w.get("farm_owns_sprayer") is True:
+        return None
+    if w.get("sprayer_ownership") == NOT_FOUND_AMONG_N_READABLE:
+        sprayer_bit = ("No sprayer was found among the vehicles whose own XML was read -- "
+                       "not proof of absence, so ask the player.")
+    else:
+        sprayer_bit = ("Whether the farm owns a sprayer is UNKNOWN -- the save cannot show it "
+                       "(sprayers write no state to vehicles.xml), so ask the player.")
+    return (
+        f"{w['weedy_owned_field_count']} owned field(s) have weeds (worst: {ids} at "
+        f"weedState {worst[0]['weed_state']} of {w.get('max_weed_state_observed_on_owned_land')} "
+        f"seen). {sprayer_bit} Herbicide is "
+        f"{w.get('herbicide_price_per_1000l')}/1000 L. No yield-loss figure is given "
+        f"because none is derivable from the save or the install -- see weeds.yield_loss_note."
+    )
 
 
 def build_equipment_market(market):
@@ -1261,7 +1606,7 @@ def build_equipment_market(market):
         ] or None,
         "note": (
             "discount_pct is against the RESOLVED new price (base install or the mod's own zip "
-            "-- never a basename guess, F-019). It is NOT a buy signal on its own: wear/damage "
+            "-- never a basename guess). It is NOT a buy signal on its own: wear/damage "
             "are part of what makes a machine cheap, and repair cost is computed by the game at "
             "the workshop and cannot be read from the save. Listings EXPIRE (time_left) -- read "
             "with save_freshness."
@@ -1270,18 +1615,83 @@ def build_equipment_market(market):
     }
 
 
-def build_equipment_gaps(gaps, weeds_section):
-    """What the farm cannot do, and what fixing it costs.
+def build_equipment_gaps(gaps, weeds_section, fleet_specs, fleet_specs_err,
+                         fleet_count=None, machine_record=None):
+    """What the farm is not PROVEN to be able to do, and what fixing it costs.
 
-    Composed from read_store_prices.py --gaps, which prices real store items
-    for the categories this farm has no equipment in.
+    ⛔ F9a / BUG-032. `missing_specializations` / `missing_capabilities` mean
+    NOT PROVEN OWNED, never "absent": a persisted specialisation proves
+    ownership and its absence proves nothing for a specialisation that writes
+    no state (sprayer, cultivator, weeder). Each one therefore also carries its
+    three-state answer in `ownership_states` / `capability_ownership`:
+    owned / not_found_among_N_readable / unknown.
+
+    Priced from read_store_prices.py --gaps, which prices CANDIDATE
+    categories and knows nothing about any fleet. Ownership is decided HERE,
+    against `fleet_specs` -- the specialization tags read out of this save's
+    own vehicles.xml, already filtered to farm_id by read_vehicles.py.
+
+    F-040 / TECH-DEBT-001. This function used to take no fleet argument at
+    all and render every priced category as a gap, so a farm owning a Lemken
+    Solitair 12 (<sowingMachine>) and a Superchisel CP2050 (<plow>) was told
+    to buy a seeder and a plough. There was no ownership read to filter -- the
+    absence of an input was being rendered as the finding "you own none",
+    which is RSK-001, not a missing farm_id filter (read_vehicles.py has
+    always applied that one).
+
+    ⚠ COVERAGE IS DECIDED PER CAPABILITY, NOT PER CATEGORY. A category is a
+    pricing bucket bundling several specializations, so "owns any member" is
+    the wrong question: the first cut of this fix rolled tillage up on it and
+    dropped a missing cultivator -- blocking four contracts -- because the
+    farm owned a plow. Trading F-040's false positive for that false negative
+    is not a fix. Each capability is answered on its own.
+
+    The three outcomes are kept apart on purpose, and none of them is a
+    silent default:
+      covered_by_fleet      -- EVERY capability the category prices is owned.
+                               Never a gap, never priced as one.
+      by_category           -- at least one capability is missing. Carries
+                               missing_specializations and, when the farm owns
+                               some of the others, coverage "partial" plus the
+                               owned list so nothing already on the yard is
+                               ever recommended.
+      ownership_undetermined-- the category block carried no capability key,
+                               so this cannot be answered. Reported as
+                               unanswered, NOT as a gap.
+    If the fleet read failed outright the whole section is unavailable: with
+    no ownership data every category would look like a gap, which is exactly
+    the defect above.
     """
     data, err = gaps
     if err:
         return unavailable(f"read_store_prices.py --gaps: {err}")
 
+    # No fleet, no gap answer. Emitting priced categories here would restate
+    # F-040 -- absence of the input rendered as the finding.
+    if fleet_specs_err:
+        return unavailable(
+            "cannot determine equipment gaps: the fleet's specializations could not be read, "
+            f"so ownership is unknown -- read_vehicles.py: {fleet_specs_err}. Prices were "
+            "fetched but are withheld: without ownership every category would read as a gap, "
+            "which is the false-gap defect."
+        )
+
+    owned = set(fleet_specs or ())
+    # ⛔ Step-4 review HIGH-1: `sprayer` coverage means a machine that can spray a
+    # CROP (a <sprayer> block that takes HERBICIDE), not any <sprayer> block.
+    crop_sprayer = crop_sprayer_state(owned, None, machine_record)
+    if crop_sprayer != OWNED:
+        owned.discard("sprayer")
+
+    def gap_state(spec):
+        if spec == "sprayer":
+            return crop_sprayer
+        return ownership_state(spec, owned, None, machine_record)
+
     cats = data.get("categories") or {}
     out = {}
+    covered = {}
+    undetermined = {}
     for name, block in cats.items():
         # read_store_prices.py --gaps reports match_count/priced_count/
         # min_price/max_price plus a truncated `shown` sample. Read those
@@ -1292,7 +1702,7 @@ def build_equipment_gaps(gaps, weeds_section):
         cheapest_item = min(
             (i for i in shown if i.get("price")), key=lambda i: i["price"], default=None
         )
-        out[name] = {
+        priced = {
             "options_found": block.get("match_count"),
             "priced_count": block.get("priced_count"),
             "cheapest_price": cheapest,
@@ -1308,22 +1718,124 @@ def build_equipment_gaps(gaps, weeds_section):
             ),
         }
 
+        # The capability key comes from the producer, never re-derived here --
+        # and never taken from `types_searched`, which is vehicleType names,
+        # a different namespace (see read_store_prices.GAP_CATEGORIES).
+        keys = block.get("capability_specializations")
+        if not keys:
+            undetermined[name] = {
+                "reason": (
+                    "read_store_prices.py --gaps returned no capability_specializations for "
+                    "this category, so whether the farm already covers it CANNOT be decided "
+                    "from this data. Reported unanswered rather than assumed either way."
+                ),
+                **priced,
+            }
+            continue
+
+        # ⚠ COVERAGE IS PER CAPABILITY, NEVER PER CATEGORY. A category is a
+        # PRICING bucket that bundles several capabilities -- tillage bundles
+        # plow, cultivator and weeder -- so "does the farm own any member" is
+        # the wrong question and rolling the category up on it hides real
+        # gaps. Measured: this farm owns a plow and neither a cultivator nor a
+        # weeder, and an any-member roll-up dropped tillage from the report
+        # entirely while a missing cultivator was blocking four contracts.
+        # That is a FALSE NEGATIVE traded for the false positive F-040 fixed,
+        # which is not a fix. Each capability is answered on its own.
+        proving = sorted(owned & set(keys))
+        missing = sorted(set(keys) - owned)
+        if not missing:
+            covered[name] = {
+                "owned_specializations": proving,
+                "missing_specializations": [],
+                "checked_for": sorted(keys),
+                "coverage": "full",
+                "evidence": (
+                    _gap_proof(proving, machine_record)
+                    + " -- every capability this category prices is accounted for."
+                ),
+            }
+        else:
+            priced["checked_for"] = sorted(keys)
+            priced["missing_specializations"] = missing
+            priced["owned_specializations"] = proving
+            # ⚠ PROVEN coverage (F9a): "none" means nothing in this category is
+            # PROVEN owned -- never that the farm owns none.
+            priced["coverage"] = "partial" if proving else "none"
+            priced["coverage_meaning"] = (
+                "proven coverage only: a capability outside owned_specializations is not "
+                "PROVEN owned, which is not the same as absent -- see ownership_states")
+            if proving:
+                # State what is already owned IN the gap entry. Without this a
+                # partial category reads as wholly missing, which is F-040
+                # again -- the farm would be told to buy the plough it owns.
+                # ⛔ F9a / BUG-032: never "missing" -- each unproven capability
+                # carries its own state (owned / not_found_among_N_readable /
+                # unknown). The cultivator and weeder here were "missing" on a
+                # farm that owns 2 and 3 of them.
+                priced["already_owned_note"] = (
+                    f"This farm already owns {proving}; not proven owned: "
+                    + ", ".join(f"{s} ({gap_state(s)})" for s in missing)
+                    + ". Ask the player before recommending a purchase, and do NOT "
+                    "recommend buying what is listed in owned_specializations."
+                )
+                priced["price_scope"] = (
+                    "⚠ The prices in this block cover the WHOLE category pool "
+                    f"({block.get('match_count')} items across {block.get('types_searched')}), "
+                    "including vehicleTypes that serve capabilities this farm already has. "
+                    "Treat them as a floor for the category, NOT as a quote for "
+                    f"{missing} -- per-capability pricing needs a vehicleType-to-"
+                    "specialization map this toolkit does not have."
+                )
+            priced["ownership_states"] = {s: gap_state(s) for s in missing}
+            priced["ownership_note"] = "; ".join(
+                _ownership_phrase(
+                    "crop sprayer (a sprayer taking HERBICIDE)" if s == "sprayer" else s,
+                    priced["ownership_states"][s], fleet_count, machine_record)
+                for s in missing) + (
+                ". Not proof of absence -- only specializations that persist state write a "
+                "child element (see read_store_prices.GAP_CATEGORY_CAPABILITY_SPECS).")
+            out[name] = priced
+
+    # The flat list of what the farm cannot do. A capability missing inside an
+    # otherwise well-equipped category is the shape that hid here, so it gets
+    # a surface of its own that no roll-up can swallow.
+    missing_capabilities = sorted({
+        s for block in out.values() for s in block["missing_specializations"]
+    })
+
     return {
         "status": "ok",
         "by_category": out,
+        "gap_count": len(out),
+        "missing_capabilities": missing_capabilities,
+        "capability_ownership": {s: gap_state(s) for s in missing_capabilities},
+        "readable_vehicle_count": fleet_count,
+        "missing_capability_count": len(missing_capabilities),
+        "covered_by_fleet": covered,
+        "ownership_undetermined": undetermined,
+        "no_gaps_note": (
+            None if out else
+            "No priced capability is missing: every specialization these categories price is "
+            "already covered by equipment this farm owns (see covered_by_fleet). This is a "
+            "MEASURED empty set, not a failed read."
+        ),
         "why_it_matters": (
-            "A capability the farm lacks is a cost it pays silently, every period. The weeds "
-            "section is the live example: weeds on owned land that the farm cannot treat "
-            "because it owns no sprayer."
-            if (weeds_section or {}).get("farm_owns_sprayer") is False else
-            "Categories where this farm owns no equipment, priced from the store."
+            "Capabilities the save does not PROVE this farm owns, priced from the store -- "
+            "each with its own ownership state; `unknown` means the save cannot show it, so "
+            "ask the player before recommending a purchase. Coverage "
+            "is decided PER CAPABILITY, not per category: a category the farm partly equips "
+            "still reports its missing members (see missing_capabilities). Only a category "
+            "whose every capability is owned moves to covered_by_fleet."
         ),
         "note": (
             "Prices are real store prices resolved from the install/mod zips (read_store_prices.py). "
             "This lists what a capability COSTS, not whether to buy it -- that trades against the "
-            "debt and is doctrine (creed.md), not arithmetic this script should pre-empt."
+            "debt and is doctrine (creed.md), not arithmetic this script should pre-empt. "
+            "Ownership is decided from vehicles.xml specializations filtered to this farm_id "
+            "(read_vehicles.py), never from the store catalogue."
         ),
-        "source": "read_store_prices.py --gaps",
+        "source": "read_store_prices.py --gaps, gated on read_vehicles.py specializations",
     }
 
 
@@ -1345,44 +1857,126 @@ def build_field_lookup(fields):
     return lookup, None
 
 
-def build_fleet_specializations(vehicles):
-    """Returns (set_of_specialization_tags_owned, error_or_None)."""
+def build_fleet_specializations(vehicles, machine_record=None):
+    """Returns (set_of_specialization_tags_owned, error_or_None).
+
+    F9b: the set is the union of what vehicles.xml PERSISTS and the blocks each
+    owned vehicle's own store XML DECLARES. Either one proves ownership; neither
+    can prove absence."""
     data, err = vehicles
     if err:
         return set(), err
     specs = set()
     for v in (data.get("vehicles") or []):
         specs |= set(v.get("specializations") or [])
+    if _record_readable(machine_record):
+        for blocks in (machine_record.get("by_block") or {}):
+            specs.add(blocks)
     return specs, None
 
 
-def assess_mission_capability(m, fleet_specs, fleet_specs_err, field_lookup, fields_err):
-    """Returns {"verdict": "actionable"|"not_actionable"|"unknown", "reason": str, ...}.
+BORROWED = "actionable_with_borrowed_vehicles"
+
+
+def mission_vehicle_group(m):
+    """The mission's lendable vehicle group, or None. The engine persists it as
+    `<vehicles group="N"/>` (AbstractMission.lua:151-152) and lends it iff
+    `vehiclesToLoad ~= nil` (hasLeasableVehicles, :965-967)."""
+    group = (m.get("vehicles") or {}).get("group") if isinstance(m.get("vehicles"), dict) else None
+    return group if group not in (None, "") else None
+
+
+def assess_mission_capability(m, fleet_specs, fleet_specs_err, field_lookup, fields_err,
+                              fleet_count=None, machine_record=None):
+    """Returns {"verdict": "actionable"|"actionable_with_borrowed_vehicles"|
+    "not_actionable"|"unknown", "reason": str, "own_fleet": {spec: state}, ...}.
     Never claims "actionable" past what CAPABILITY_REQUIREMENTS plus this
     save's own vehicles.xml/fields.xml data actually support -- see the
-    module docstring's F-026 section for why each check exists."""
+    module docstring's F-026 section for why each check exists.
+
+    ⛔ F9a / BUG-032. The answer has two halves and neither is ever "absent":
+      * with OUR machines -- each required specialisation is owned /
+        not_found_among_N_readable / unknown (ownership_state);
+      * with BORROWED vehicles -- a mission with a vehicle group can be done
+        with the game's lent vehicles, at a cost of numVehicles x
+        VEHICLE_USE_COST x difficulty, charged only if they spawn
+        (AbstractMission.lua:636-700). Such a mission is NEVER not_actionable."""
     mtype = m.get("type")
     required = CAPABILITY_REQUIREMENTS.get(mtype)
 
-    if fleet_specs_err:
-        return {"verdict": "unknown", "reason": f"fleet specialization data unavailable: {fleet_specs_err}"}
     if required is None:
         return {"verdict": "unknown", "reason": f"no verified equipment-specialization mapping for {mtype!r} in this codebase"}
 
-    missing = sorted(required - fleet_specs)
-    if missing:
-        return {
-            "verdict": "not_actionable",
-            "reason": f"farm does not own equipment with specialization(s): {missing}",
-            "required_specializations": sorted(required),
-        }
+    states = {s: ownership_state(s, fleet_specs, fleet_specs_err, machine_record)
+              for s in sorted(required)}
+    own_bits = "; ".join(_ownership_phrase(s, st, fleet_count, machine_record)
+                         for s, st in states.items())
+    # ⭐ F9b: a herbicide contract needs a sprayer that TAKES herbicide, not just
+    # a sprayer block. The fill-type requirement is its own entry in own_fleet
+    # (`sprayer:HERBICIDE`) so it flows through the same verdict rules and shows
+    # up in missing_specializations like any other unmet requirement.
+    ft_req = REQUIRED_FILL_TYPES.get(mtype)
+    if ft_req and not fleet_specs_err:
+        block, fill = ft_req
+        if states.get(block) == OWNED:
+            ft_state, n_cands = fill_type_state(block, fill, machine_record)
+            states[f"{block}:{fill}"] = ft_state
+            if ft_state == OWNED:
+                own_bits += f"; a {block} machine takes {fill}: owned"
+            elif ft_state == NOT_FOUND_AMONG_N_READABLE:
+                own_bits += (f"; {block} machine(s) taking {fill}: none of the {n_cands} "
+                             f"{block} machine(s) read declare {fill}"
+                             + _unread_note(machine_record))
+            else:
+                own_bits += (f"; {block} machine(s) taking {fill}: unknown -- the fill types "
+                             "of the owned sprayer machine(s) could not all be resolved")
+    if fleet_specs_err:
+        own_bits += f" (fleet specialization data unavailable: {fleet_specs_err})"
+    group = mission_vehicle_group(m)
 
-    result = {
-        "verdict": "actionable",
-        "reason": f"farm owns equipment with required specialization(s) {sorted(required)} "
-                  "(vehicles.xml runtime state via read_vehicles.py, F-026)",
-        "required_specializations": sorted(required),
-    }
+    if all(st == OWNED for st in states.values()):
+        result = {
+            "verdict": "actionable",
+            "reason": f"farm owns equipment with required specialization(s) {sorted(required)} "
+                      f"({_proof_sources(sorted(required), machine_record)})",
+        }
+    elif group is not None:
+        result = {
+            "verdict": BORROWED,
+            "reason": (f"with our machines: {own_bits}. With borrowed vehicles: yes, at a cost "
+                       f"-- this contract lends vehicle group {group}; the game charges for "
+                       "them only if they are spawned"),
+        }
+    elif any(st == OWNERSHIP_UNKNOWN for st in states.values()):
+        return {"verdict": "unknown", "reason": f"with our machines: {own_bits}",
+                "required_specializations": sorted(required), "own_fleet": states,
+                "vehicle_group": None}
+    else:
+        # ⛔ Step-4 review F-2. A miss that rests on the RECORD (not on a spec that
+        # vehicles.xml persists unconditionally) is blind to the vehicles the
+        # record could not read; while any are unread it is `unknown`, never the
+        # definitive `not_actionable`.
+        record_miss = _record_unread(machine_record) and any(
+            st == NOT_FOUND_AMONG_N_READABLE and (":" in k or k not in ALWAYS_PERSISTED_SPECS)
+            for k, st in states.items())
+        if record_miss:
+            return {"verdict": "unknown",
+                    "reason": (f"with our machines: {own_bits}; no lendable vehicle group -- "
+                               "not a definitive no while vehicles remain unread"),
+                    "required_specializations": sorted(required), "own_fleet": states,
+                    "vehicle_group": None}
+        return {"verdict": "not_actionable",
+                "reason": f"with our machines: {own_bits}; no lendable vehicle group",
+                "required_specializations": sorted(required), "own_fleet": states,
+                "vehicle_group": None}
+
+    result["required_specializations"] = sorted(required)
+    result["own_fleet"] = states
+    result["vehicle_group"] = group
+    # ⛔ F9a review (M-2): "equipment confirmed" only when OUR fleet proves it.
+    # A borrowed-vehicle verdict carries its own two-part answer instead.
+    equip = ("equipment confirmed" if result["verdict"] == "actionable"
+             else result["reason"])
 
     # Equipment alone isn't proof for a harvest contract -- cross-check the
     # target field is actually ready, per team lead's explicit instruction:
@@ -1397,14 +1991,14 @@ def assess_mission_capability(m, fleet_specs, fleet_specs_err, field_lookup, fie
         if fields_err:
             result["verdict"] = "unknown"
             result["reason"] = (
-                f"equipment confirmed, but field readiness could not be verified: "
+                f"{equip}, but field readiness could not be verified: "
                 f"fields.xml unavailable ({fields_err})"
             )
             return result
         field = field_lookup.get(str(field_id))
         if field is None:
             result["verdict"] = "unknown"
-            result["reason"] = f"equipment confirmed, but field id {field_id} was not found in fields.xml"
+            result["reason"] = f"{equip}, but field id {field_id} was not found in fields.xml"
             return result
         # crop_state, not groundType. groundType is the TERRAIN TEXTURE: it still
         # reads HARVEST_READY on a field cut days ago, so it confirmed nothing.
@@ -1415,14 +2009,14 @@ def assess_mission_capability(m, fleet_specs, fleet_specs_err, field_lookup, fie
         if crop_state is None:
             result["verdict"] = "unknown"
             result["reason"] = (
-                f"equipment confirmed, but field {field_id}'s crop state could not be "
+                f"{equip}, but field {field_id}'s crop state could not be "
                 f"determined ({field.get('crop_state_reason')}) -- unknown, not ready"
             )
             return result
         if crop_state != "ready":
             result["verdict"] = "unknown"
             result["reason"] = (
-                f"equipment confirmed, but field {field_id} is {crop_state!r}, not ready "
+                f"{equip}, but field {field_id} is {crop_state!r}, not ready "
                 f"({field.get('crop_state_reason')}) -- do not treat as ready without checking in-game"
             )
             return result
@@ -1432,7 +2026,8 @@ def assess_mission_capability(m, fleet_specs, fleet_specs_err, field_lookup, fie
     return result
 
 
-def build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_lookup, fields_err):
+def build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_lookup, fields_err,
+                    fleet_count=None, machine_record=None):
     data, err = missions
     if err:
         return unavailable(f"read_missions.py: {err}")
@@ -1447,6 +2042,8 @@ def build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_l
     not_actionable_missing = set()
     unknown_capability_by_type = {}
     unknown_capability_today_by_type = {}
+    borrowed_by_type = {}
+    borrowed_today_by_type = {}
 
     for m in all_missions:
         mtype = m.get("type") or "unknown"
@@ -1465,7 +2062,8 @@ def build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_l
         if is_expiring_today:
             expiring_today.append(mtype)
 
-        capability = assess_mission_capability(m, fleet_specs, fleet_specs_err, field_lookup, fields_err)
+        capability = assess_mission_capability(m, fleet_specs, fleet_specs_err, field_lookup,
+                                               fields_err, fleet_count, machine_record)
 
         if capability["verdict"] == "actionable" and is_expiring_today:
             actionable_today.append({
@@ -1478,10 +2076,14 @@ def build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_l
                 "reward_note": m.get("reward_note"),
                 "capability_reason": capability["reason"],
             })
+        elif capability["verdict"] == BORROWED:
+            borrowed_by_type[mtype] = borrowed_by_type.get(mtype, 0) + 1
+            if is_expiring_today:
+                borrowed_today_by_type[mtype] = borrowed_today_by_type.get(mtype, 0) + 1
         elif capability["verdict"] == "not_actionable":
             not_actionable_by_type[mtype] = not_actionable_by_type.get(mtype, 0) + 1
             not_actionable_missing.update(
-                s for s in capability.get("required_specializations", []) if s not in fleet_specs
+                s for s, st in (capability.get("own_fleet") or {}).items() if st != OWNED
             )
             if is_expiring_today:
                 not_actionable_today_by_type[mtype] = not_actionable_today_by_type.get(mtype, 0) + 1
@@ -1504,10 +2106,23 @@ def build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_l
             "today_count": sum(not_actionable_today_by_type.values()),
             "today_by_type": not_actionable_today_by_type,
             "missing_specializations": sorted(not_actionable_missing),
-            "note": "equipment ownership confirmed absent via vehicles.xml specializations (F-026) "
-                    "-- not a guess. count/by_type are ALL such contracts in this save; "
-                    "today_count/today_by_type are the subset also expiring today.",
+            "note": "no lendable vehicle group, and the required specialization(s) were not "
+                    "found among the vehicles read from vehicles.xml (F9a: a count of what was "
+                    "read, not proof the farm owns none). count/by_type are ALL such contracts "
+                    "in this save; today_count/today_by_type are the subset also expiring today.",
         } if not_actionable_by_type else None,
+        "borrowed_vehicles_summary": {
+            "count": sum(borrowed_by_type.values()),
+            "by_type": borrowed_by_type,
+            "today_count": sum(borrowed_today_by_type.values()),
+            "today_by_type": borrowed_today_by_type,
+            "note": "the owned fleet is not PROVEN to cover these (see each mission's "
+                    "own_fleet), but each contract lends a vehicle group, so it can be done "
+                    "with borrowed vehicles at a cost -- the game charges numVehicles x "
+                    "VEHICLE_USE_COST x difficulty, only if they are spawned "
+                    "(AbstractMission.lua:636-700). count/by_type are ALL such contracts; "
+                    "today_count/today_by_type are the subset also expiring today.",
+        } if borrowed_by_type else None,
         "unknown_capability_summary": {
             "count": sum(unknown_capability_by_type.values()),
             "by_type": unknown_capability_by_type,
@@ -1520,7 +2135,7 @@ def build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_l
                     "expiring today.",
         } if unknown_capability_by_type else None,
         "capability_check_source": (
-            "vehicles.xml 'specializations' (read_vehicles.py, F-026), cross-referenced against "
+            "vehicles.xml 'specializations' (read_vehicles.py), cross-referenced against "
             "fields.xml groundType for harvestMission field readiness specifically"
         ),
         "note": (
@@ -1591,7 +2206,7 @@ def main():
         vehicles = call("read_vehicles.py", savegame_dir, farm_id)
         no_cfg = (None, config_err)
         fuel_capacity = call("read_store_prices.py", savegame_dir, farm_id,
-                    (path_args or []) + ["--fuel-capacity"]) if path_args else no_cfg
+                    (path_args or []) + ["--fuel-capacity"], timeout=FUEL_CAPACITY_TIMEOUT) if path_args else no_cfg
         when = build_when(env)
         snapshot = {
             "savegame_dir": savegame_dir,
@@ -1622,15 +2237,18 @@ def main():
     gaps = call("read_store_prices.py", savegame_dir, farm_id,
                 (path_args or []) + ["--gaps"], timeout=120) if path_args else no_cfg
     fuel_capacity = call("read_store_prices.py", savegame_dir, farm_id,
-                (path_args or []) + ["--fuel-capacity"]) if path_args else no_cfg
+                (path_args or []) + ["--fuel-capacity"], timeout=FUEL_CAPACITY_TIMEOUT) if path_args else no_cfg
 
     when = build_when(env)
     current_day = when.get("in_game_day") if when.get("status") == "ok" else None
 
     field_lookup, fields_err = build_field_lookup(fields)
-    fleet_specs, fleet_specs_err = build_fleet_specializations(vehicles)
+    # ⭐ F9b: ONE record, from the same --fuel-capacity pass fuel is judged on.
+    machine_record = build_machine_record(fuel_capacity)
+    fleet_specs, fleet_specs_err = build_fleet_specializations(vehicles, machine_record)
+    fleet_count = None if fleet_specs_err else len((vehicles[0] or {}).get("vehicles") or [])
 
-    weeds = build_weeds(fields, prices, vehicles, game_defs)
+    weeds = build_weeds(fields, prices, vehicles, game_defs, machine_record)
 
     snapshot = {
         "savegame_dir": savegame_dir,
@@ -1640,13 +2258,15 @@ def main():
         "money": build_money(economy),
         "land": build_land(economy),
         "field_state": build_field_state(fields),
-        "fleet": build_fleet(vehicles, fuel_capacity),
+        "fleet": {**build_fleet(vehicles, fuel_capacity), "machine_record": machine_record},
         "inventory": build_inventory(vehicles, placeables, prices),
         "input_costs": build_input_costs(prices, game_defs, placeables, fields),
         "weeds": weeds,
         "equipment_market": build_equipment_market(market),
-        "equipment_gaps": build_equipment_gaps(gaps, weeds),
-        "contracts": build_contracts(missions, current_day, fleet_specs, fleet_specs_err, field_lookup, fields_err),
+        "equipment_gaps": build_equipment_gaps(gaps, weeds, fleet_specs, fleet_specs_err,
+                                               fleet_count, machine_record),
+        "contracts": build_contracts(missions, current_day, fleet_specs, fleet_specs_err,
+                                     field_lookup, fields_err, fleet_count, machine_record),
     }
 
     decisions = []
@@ -1739,18 +2359,9 @@ def main():
                 f"plan, so no farm total is computed; see input_costs.seed_cost_per_hectare."
             )
 
-    w = snapshot["weeds"]
-    if w.get("status") == "ok" and w.get("weedy_owned_field_count"):
-        worst = w.get("worst") or []
-        ids = ", ".join(str(x["field_id"]) for x in worst[:3])
-        if w.get("farm_owns_sprayer") is False:
-            decisions.append(
-                f"{w['weedy_owned_field_count']} owned field(s) have weeds (worst: {ids} at "
-                f"weedState {worst[0]['weed_state']} of {w.get('max_weed_state_observed_on_owned_land')} "
-                f"seen). The farm owns NO sprayer, so it cannot treat them. Herbicide is "
-                f"{w.get('herbicide_price_per_1000l')}/1000 L. No yield-loss figure is given "
-                f"because none is derivable from the save or the install -- see weeds.yield_loss_note."
-            )
+    weeds_line = weeds_decision(snapshot["weeds"])
+    if weeds_line:
+        decisions.append(weeds_line)
 
     em = snapshot["equipment_market"]
     if em.get("status") in ("ok", "partial") and em.get("listings"):
@@ -1776,18 +2387,24 @@ def main():
             decisions.append(
                 f"{field_bit} -- {a['type']}, expires {expiry}. {a['capability_reason']}. "
                 f"Reward: {a['reward'] if a['reward'] is not None else 'UNKNOWN until accepted'} "
-                "-- check the in-game contract screen, never assume $0 (FRICTION-LOG.md F-025)."
+                "-- check the in-game contract screen, never assume $0."
             )
 
         leftover_today = contracts.get("expiring_today_count", 0) - len(actionable)
         if leftover_today > 0:
             na = contracts.get("not_actionable_summary") or {}
             uk = contracts.get("unknown_capability_summary") or {}
+            bw = contracts.get("borrowed_vehicles_summary") or {}
             na_today = na.get("today_count", 0)
             uk_today = uk.get("today_count", 0)
+            bw_today = bw.get("today_count", 0)
             bits = []
+            if bw_today:
+                bits.append(f"{bw_today} doable with borrowed vehicles, at a cost (our own "
+                            "machines not proven to cover them)")
             if na_today:
-                bits.append(f"{na_today} not actionable today (missing: {', '.join(na.get('missing_specializations', []))})")
+                bits.append(f"{na_today} not actionable today (not found among the vehicles "
+                            f"read: {', '.join(na.get('missing_specializations', []))})")
             if uk_today:
                 bits.append(f"{uk_today} capability not machine-verified")
             # These must sum to leftover_today by construction (both are scoped
@@ -1796,10 +2413,10 @@ def main():
             # arithmetic that doesn't add up (the exact bug this comment replaced:
             # an earlier version used the ALL-missions counts here, not the
             # today-scoped ones, and 10+4 != 11 silently shipped once).
-            if na_today + uk_today != leftover_today:
+            if bw_today + na_today + uk_today != leftover_today:
                 bits.append(
                     f"[internal count mismatch: today-scoped breakdown sums to "
-                    f"{na_today + uk_today}, expected {leftover_today} -- see contracts section directly]"
+                    f"{bw_today + na_today + uk_today}, expected {leftover_today} -- see contracts section directly]"
                 )
             decisions.append(
                 f"{leftover_today} other contract(s) also expire today but are not confirmed "

@@ -424,8 +424,8 @@ def read_mission_gates(savegame_dir):
 # onion, pea, potato and spinach can NEVER be weeded, only hoed. Grape, olive,
 # grass and rice permit NEITHER, ever.
 #
-# ⚠ "NO PERMITTED TOOL" IS A LEGITIMATE, REPORTABLE ANSWER -- the field waits, or
-# is mulched at the cost of the crop. It is not an empty result to be hidden.
+# ⚠ "NO PERMITTED TOOL" IS A LEGITIMATE, REPORTABLE ANSWER -- no tool sends the state
+# to 0, or the crop forbids the one that does. It is not an empty result to be hidden.
 CROP_GATED_TOOLS = {
     "weeder": "allows_weeding",
     "weederHoe": "allows_hoeing",
@@ -449,7 +449,8 @@ def weed_verdict(fruit_type, weed_state, growth_state, crop_states, weed_model):
     out = {
         "weed_state": weed_state,
         "clearing_tools": [],
-        "tools_that_change_without_clearing": [],
+        "tools_that_move_it_to_another_state": [],
+        "standing_crop_warning": None,
         "blocked_by_crop": [],
         "status": "ok",
         "reason": None,
@@ -490,7 +491,7 @@ def weed_verdict(fruit_type, weed_state, growth_state, crop_states, weed_model):
     for tool, entry in sorted(weed_model.items()):
         rules = entry.get("by_fruit_type", {}).get(fruit) or entry.get("default") or {}
         clears = rules.get("clears") or []
-        changes = rules.get("changes_without_clearing") or {}
+        changes = rules.get("moves_to") or {}
 
         if state in clears:
             gate_attr = CROP_GATED_TOOLS.get(tool)
@@ -508,21 +509,28 @@ def weed_verdict(fruit_type, weed_state, growth_state, crop_states, weed_model):
                     continue
             out["clearing_tools"].append(tool)
         elif str(state) in changes:
-            out["tools_that_change_without_clearing"].append({
+            out["tools_that_move_it_to_another_state"].append({
                 "tool": tool,
                 "moves_state_to": changes[str(state)],
                 "why": (
-                    f"{tool} changes weedState {state} to {changes[str(state)]} WITHOUT "
-                    f"clearing it. Sending it does not remove the weed."
+                    f"{tool} moves weedState {state} to {changes[str(state)]}. The game's "
+                    f"field info labels only weedStates 1 to 6 as weeds, and whether "
+                    f"state {changes[str(state)]} still costs yield is decided in native "
+                    f"code and is not known; an in-game test settles it. This is not a "
+                    f"statement that the tool does or does not help."
                 ),
             })
+    if has_crop and "mulcher" in out["clearing_tools"]:
+        out["standing_crop_warning"] = (
+            f"a crop ({fruit}) is standing on this field: a mulcher destroys it. Never "
+            f"offer mulching as weed control here without saying so.")
 
     if not out["clearing_tools"] and out["status"] == "ok":
         out["reason"] = (
-            f"No tool the game declares can clear weedState {state} on this field"
+            f"No tool in the game's weed tables sends weedState {state} to 0 on this field"
             + (f" while {fruit} is at growthState {gs}" if has_crop else "")
-            + ". That is a real answer: the field waits, or the crop is sacrificed to a "
-              "mulcher. It is not an empty result."
+            + ". That is a real answer, not an empty result. Tools that move it to another "
+              "state are listed separately, with what is and is not known about that state."
         )
     return out
 
@@ -688,11 +696,35 @@ def _ownership_source_note(xc):
     The enforced gates are gate1 (parcel-id set) and gate2 (declared area) --
     see the check at the top of derive_owned_field_ids(). The land-cost
     comparison is reported, never gated on. Ownership is trusted without it, so
-    the note must not claim otherwise."""
-    two_gates = ("Derived by decoding the map's infoLayer_farmlands.grle and matching each "
-                 "field's world position to a parcel. Trusted because it passes two gates a "
-                 "wrong decode cannot fake: its parcel-id set equals farmland.xml's, and its "
-                 "total area equals the map's declared size.")
+    the note must not claim otherwise.
+
+    BUG-015 (as it stood until TECH-DEBT-095, 2026-09-04): the opening clause
+    claimed "matching each field's world position to a parcel" while the real
+    join was `field_id == farmland_id`, an assumption -- overstating the
+    mechanism. TECH-DEBT-095 (HIGH) then retired that assumption: it was
+    measured FALSE on the base game map (MapUS/savegame3, 64/77 field-id
+    overlap with the map's own polygons -- see
+    read_farmland_areas.py's ARCH-R3-06 and its module docstring sec. 3).
+    read_farmland_areas.py now performs the genuine spatial join
+    (resolve_spatial_field_farmland): each field polygon's own area centroid
+    (map.i3d), transformed world->raster via the engine's own
+    convertWorldToLocalPosition formula (cited there), sampled against the
+    same GRLE raster gate1/gate2 already validate. So BUG-015's original
+    opening clause is no longer an overstatement -- it is what this note must
+    now say, correctly attributed to read_farmland_areas.py rather than to a
+    join performed here (this script still composes that script; it does not
+    derive farmland_id itself -- see test_read_fields_module_has_no_
+    farmland_id_derivation_of_its_own)."""
+    two_gates = ("Derived by decoding the map's infoLayer_farmlands.grle for parcel "
+                 "ownership, then joining each field to a parcel by sampling that "
+                 "raster at the field polygon's own area centroid (map.i3d) -- a "
+                 "MEASURED spatial join (ARCH-R3-06), replacing the "
+                 "field_id == farmland_id identity assumption this note used to "
+                 "describe (ARCH-R3-04, retired 2026-09-04 after it was measured "
+                 "false on the base game map). Trusted because it passes two gates "
+                 "a wrong decode cannot fake: its parcel-id set equals "
+                 "farmland.xml's, and its total area equals the map's declared "
+                 "size.")
     match = xc.get("match") if isinstance(xc, dict) else None
     if match is True:
         return two_gates + (" A third, non-gating comparison also agrees: its land cost "
@@ -700,7 +732,8 @@ def _ownership_source_note(xc):
     if match is False:
         return two_gates + (" A third, non-gating comparison DISAGREES: its land cost against "
                             "farms.xml's own <fieldPurchase> (see field_purchase_cross_check "
-                            "for both figures, and BUG-014 for what that disagreement means). "
+                            "for both figures, and the land_value entry in references/blocked-capabilities.json "
+                            "for what that disagreement means). "
                             "Ownership does not depend on it -- the two gates above do.")
     return two_gates + (" The third, non-gating land-cost comparison against farms.xml's "
                         "<fieldPurchase> did NOT run -- neither confirmed nor refuted.")
@@ -875,7 +908,7 @@ def main():
         fail("fields.xml parsed but contained no <field> elements -- schema may "
              "have changed. ⛔ An empty field set is reported as an ERROR, never "
              "as a farm with no fields: absence must be impossible to mistake "
-             "for data (DEC-001).", calibration_needed=True)
+             "for data (the absence rule).", calibration_needed=True)
 
     # ⚠ mods_dir may legitimately be None here (--no-resolve, or a player
     # override). read_game_defs still resolves from --config in that case, so
@@ -1090,7 +1123,7 @@ def main():
             work_list if work_list_available else [],
             {"interpretation_guarantee": [{
                 "kind": "design_ruling",
-                "ruling": "DEC-108",
+                "ruling": "weed-stone-membership-tests",
                 "text": (
                     "Weed and stone capability are MEMBERSHIP TESTS against the "
                     "game's own tables, never thresholds. The weed relation is "
@@ -1114,7 +1147,7 @@ def main():
                  "cannot describe the whole field."),
              "cost_note": (
                  "No cost figure is emitted. D-04's `cost` field is governed by the "
-                 "four-constants hard stop (DEC-107): time and area are sayable, a "
+                 "four-constants hard stop: time and area are sayable, a "
                  "precise money figure is not."),
              "ungated_tools_note": UNGATED_TOOLS_NOTE}),
         "mission_gates": section(

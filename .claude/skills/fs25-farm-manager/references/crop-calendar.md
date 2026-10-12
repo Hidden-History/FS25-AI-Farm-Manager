@@ -11,6 +11,38 @@ what you observe in the save disagrees with this reference, trust the save
 and update your working assumptions accordingly (note the discrepancy in the
 field's dossier).
 
+## Dates come from `project_crop_calendar.py`, never from a script of your own
+
+Planting windows per crop and ready / dead dates per owned field are produced by
+`python3 ".claude/skills/fs25-farm-manager/scripts/project_crop_calendar.py" "<savegame_path>" --config sanctum/config.json`
+(FM-1001 item 8). Quote what it prints, with its limits:
+
+- **Every date is a window.** `from_day` to `by_day`, with `likely_day` inside it and, for death,
+  `alive_through_day` (the last day the crop is certainly alive — plan harvests against that). The
+  engine's growth tick is native code, so the script simulates both readings of when a period's
+  update rows fire and says which one the game's own data favours. Say "most likely day N, between
+  N and M", never a bare day.
+- **A crop that needs a step from the player is not "ready on day N".** Potato's harvest-ready flag
+  sits on the state after the haulm is cut, which growth never reaches. The script reports
+  `needs_player_step` with when it becomes preparable and when it dies; give that window and say the
+  cut is the player's job. This is the mistake the manager's own hand-made script made.
+- **`unknown` with a reason is the answer** when the crop file has no seasonal block, a state is
+  not reached within two years of periods, or the crop file could not be read. Do not fill it in
+  from the prose below.
+- **Only a SEASONAL save follows the seasonal table.** The save's `growthMode` is named the way the
+  game's own log names it: **1 = SEASONAL, 2 = DAILY** (paired from the game's own log lines and the
+  saves' own files; any other value has no known name). On SEASONAL the script projects windows. On
+  **DAILY, or any other or missing mode, it gives no planting window and no ready or dead date** —
+  every one is `unknown` with the reason and the top-level status is `partial`. Then say plainly:
+  "seasonal growth is off on this save, so the seasonal calendar does not apply here". Players
+  report that with seasons off crops can be planted at any time and that how fast they grow per
+  day is a game setting the player chooses; the save files this skill reads do not record that
+  speed, so do not state a days-to-ready figure, do not assert whether a ready crop later withers,
+  and do not quote windows from the period table below or from memory. Ask the player how his
+  crops are timing, or read the game's own field info. How daily growth steps is not modelled.
+  If the player's own field info disagrees with a window on a SEASONAL save, believe the game and
+  note the discrepancy in the field's dossier.
+
 ## The growth model, underneath the seasonal-pattern table
 
 The table below is a human-readable summary. What the game actually tracks

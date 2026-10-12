@@ -17,7 +17,7 @@ python3 ".claude/skills/fs25-farm-manager/scripts/notify_farm_manager.py" --path
 
 Then check for `FS25_AIFarmManager25.zip` in the profile's `mods/` folder. If it is there, confirm it
 is actually **sound** — a present-but-broken zip means notifications are not really available, and
-reading exit `2` at send time would look identical to "the game is closed" (F-029/F-030):
+reading exit `2` at send time would look identical to "the game is closed":
 
 ```bash
 python3 ".claude/skills/fs25-farm-manager/scripts/check_mods.py" "<mods_dir>" --mod AIFarmManager25
@@ -36,7 +36,7 @@ unreadable.
 
 Optional, not every onboarding: dropping the `--mod` filter runs `check_mods.py` over the whole
 `mods/` folder, which catches *any* structurally broken mod before a long session discovers it (its
-purpose, F-122). Offer it if the player suspects a mod isn't loading; `read_game_log.py` reports
+purpose). Offer it if the player suspects a mod isn't loading; `read_game_log.py` reports
 which mods the game actually failed to load.
 
 ## Absence never blocks onboarding

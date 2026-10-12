@@ -508,23 +508,27 @@ def _check_config_json(path):
     nbytes = len(_read(path))
     over_cap = nbytes > cap_kb * KB
     if CONFIG_CONDITIONAL_KEY not in data:
-        # No-loan farm (or rate unknown): cannot verify the conditional key -> not FRESH,
-        # but explicitly NOT a defect. UNVERIFIABLE / N-A per schema Section 2.
+        # The conditional key is absent, so it cannot be verified -> not FRESH, and the
+        # verdict is UNVERIFIABLE (schema Section 2), never STALE.
+        # [[TECH-DEBT-156]] / F-409: this used to say "N/A for a no-loan farm" and
+        # carry `not_a_defect`, which asserted a FACT ABOUT THE FARM (it has no loan)
+        # that this check never measures -- it read a farm with a $111M loan as a
+        # no-loan farm. State only what was observed: the key is absent, and this
+        # check does not read the loan. (check_sanctum_freshness.py does.)
         result = {"file": path, "verdict": UNVERIFIABLE,
-                  "reason": f"{CONFIG_CONDITIONAL_KEY} absent -- N/A for a no-loan farm "
-                            "(conditionally required only once a loan's rate is known)",
-                  "not_a_defect": True}
+                  "reason": f"{CONFIG_CONDITIONAL_KEY} absent -- rate not recorded; "
+                            "this check does not read the loan, so it cannot say "
+                            "whether the farm has one"}
     else:
         result = {"file": path, "verdict": FRESH, "reason": "all required keys present"}
     if unanswered:
-        # BUG-025. Overrides FRESH *and* the no-loan UNVERIFIABLE: a config whose required
-        # keys were never answered is stale regardless of whether it carries a loan rate,
-        # and it is emphatically not "not_a_defect".
+        # BUG-025. Overrides FRESH *and* the rate-absent UNVERIFIABLE: a config whose required
+        # keys were never answered is stale regardless of whether it carries a loan rate.
         result = {"file": path, "verdict": STALE,
                   "reason": f"always-required key(s) present but never answered: "
                             f"{', '.join(unanswered)}. A template placeholder, \"\", or "
                             "\"unknown\" means onboarding did not ask -- which must not "
-                            "read the same as an answer (DEC-001).",
+                            "read the same as an answer (the absence rule: an absent value must never be read as data).",
                   "unanswered_keys": unanswered}
     result["over_cap"] = over_cap
     if over_cap:
@@ -533,6 +537,12 @@ def _check_config_json(path):
     if override_issues:
         result["cap_override_issue"] = "; ".join(override_issues)
     return result
+
+
+def _field_plan_error(text, name):
+    """None if read_field_plan.py can read this field-plan.md, else why it cannot."""
+    import read_field_plan
+    return read_field_plan.parse(text, name).get("error")
 
 
 def check_file(path):
@@ -578,9 +588,17 @@ def check_file(path):
     }
     # DEC-105 part 1: over cap NEVER blocks (no STALE for this alone) -- only a missing
     # required section does. DEC-105 part 2: over cap ALWAYS carries a warning, every run.
+    # The field plan is a machine-read store (the FIELDS tab publishes it), so a table the
+    # reader cannot parse is STALE here, not a file that merely carries its headings.
+    plan_error = None
+    if name == "field-plan.md":
+        plan_error = _field_plan_error(text, name)
     if missing:
         result["verdict"] = STALE
         result["reason"] = f"missing required section(s): {', '.join(missing)}"
+    elif plan_error:
+        result["verdict"] = STALE
+        result["reason"] = plan_error
     else:
         result["verdict"] = FRESH
         result["reason"] = ("frontmatter present, all required sections present, over its "
@@ -1788,7 +1806,7 @@ MANIFEST = [
         "to_version": 1,
         "description": "Fold identity/directives.md into plans/PLAN.md (## Standing "
                        "directives) + the ad-hoc plan body into ## Current focus; archive "
-                       "the old directives.md whole (item 7 / DEC-259).",
+                       "the old directives.md whole (item 7).",
         "guard": _migration_1_guard,
         "apply": _migration_1_apply,
     },
@@ -1887,7 +1905,7 @@ def build_parser():
     c.set_defaults(func=cmd_check)
 
     r = sub.add_parser("reconcile", help="migrate a farm to the current templates")
-    r.add_argument("path", help="the sanctum directory to migrate")
+    r.add_argument("path", help="the sanctum directory to reconcile")
     r.add_argument("--templates-dir", default=TEMPLATES_DIR_DEFAULT)
     r.add_argument("--apply", action="store_true", help="apply changes (default: dry run)")
     r.set_defaults(func=cmd_reconcile)

@@ -27,7 +27,7 @@ THREE MECHANISMS, and the first is the one that makes the other two possible.
      tests/test_item9_aggregate_render.py.
 
 NEVER PERSISTED, GENERATED WHOLESALE, FLAT AND ONE LEVEL (§ 9.5, ruled by
-William 2026-08-01d and independently required by DEC-048 ①). A persisted
+the owner 2026-08-01d and independently required by DEC-048 ①). A persisted
 aggregate is a second copy of the truth that can drift from the first; this one
 lives exactly as long as the process that printed it.
 
@@ -63,6 +63,7 @@ module never reads it from config and never defaults it.
 """
 import json
 import os
+import shlex
 
 # A list longer than this is summarised with a pointer, never silently cut.
 MAX_INLINE_ITEMS = 5
@@ -116,22 +117,43 @@ def build_header(config, farm_id):
     return {"farm_name": farm_name, "farm_id": farm_id}, None
 
 
-def summarise(value, pointer):
+def summarise(value, pointer, command=None):
     """§ 9.4. A long list becomes a count plus where to read it. Never a silent
-    truncation: the reader must be able to tell that something was elided."""
+    truncation: the reader must be able to tell that something was elided.
+
+    ⛔ F10 / BUG-033. `read_the_rest_at` IS A COMMAND whenever the caller
+    supplies one (read_state.py always does): `read_state.py --list
+    DOMAIN.SECTION.KEY`, which re-runs every gate and prints the whole list.
+    It used to be a cache location with a note saying "NOT a command", so the
+    rest of every long list -- 3 of 8 herds on the live farm -- was unreadable
+    by design."""
     if isinstance(value, list) and len(value) > MAX_INLINE_ITEMS:
+        if command:
+            return {
+                "_elided": True,
+                "item_count": len(value),
+                "shown": value[:MAX_INLINE_ITEMS],
+                "read_the_rest_at": command,
+                "note": "%d items elided, not truncated. read_the_rest_at is a "
+                        "command: run it exactly as printed and its `items` "
+                        "holds all item_count items, read through the same "
+                        "gate. Never open the cache file directly."
+                        % (len(value) - MAX_INLINE_ITEMS),
+            }
         return {
             "_elided": True,
             "item_count": len(value),
             "shown": value[:MAX_INLINE_ITEMS],
             "read_the_rest_at": pointer,
-            "note": "%d items elided, not truncated -- the full list is at the "
-                    "path above." % (len(value) - MAX_INLINE_ITEMS),
+            "note": "%d items elided, not truncated. read_the_rest_at names the "
+                    "verified cache file and json_path this list was rendered "
+                    "from; read it with read_state.py --list, never by opening "
+                    "the cache file." % (len(value) - MAX_INLINE_ITEMS),
         }
     return value
 
 
-def render(view_sections, records, config, farm_id, cache_root):
+def render(view_sections, records, config, farm_id, cache_root, list_command=None):
     """Build the aggregate and its claims manifest.
 
     Returns (rendered, claims, None) or (None, None, error). NOTHING is emitted
@@ -171,7 +193,11 @@ def render(view_sections, records, config, farm_id, cache_root):
                         })
                         fields[key] = value
                     else:
-                        fields[key] = summarise(value, "%s :: %s" % (source, path))
+                        fields[key] = summarise(
+                            value, "%s :: %s" % (source, path),
+                            "%s %s" % (list_command,
+                                       shlex.quote("%s.%s.%s" % (domain, name, key)))
+                            if list_command else None)
                 rendered_sections[name] = fields
 
         domains[domain] = {
