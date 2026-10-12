@@ -124,15 +124,20 @@ Output contract:
 import hashlib
 import os
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
-from xml_utils import load_xml, emit, arg_or_exit
+from xml_utils import load_xml, emit, arg_or_exit, resolve_game_xml, MODDIR_RE
+from read_store_prices import load_paths, extract_store_item
 
 SCHEMA_VERSION = 1
 GENERATOR = "read_productions.py"
 GENERATOR_VERSION = "1.0.0"
-USAGE = "read_productions.py <savegame_dir> [--farm-id N]"
+USAGE = (
+    "read_productions.py <savegame_dir> [--farm-id N] "
+    "[--config PATH] [--install-dir DIR] [--mods-dir DIR]")
 
 DOMAIN = "productions"
 SET = "production"
@@ -162,40 +167,65 @@ def fail(message, **extra):
     sys.exit(1)
 
 
-def parse_farm_id_arg(argv):
-    """Pull --farm-id N (or --farm-id=N) out of argv; default 1.
+def parse_args(argv):
+    """Pull --farm-id N (or --farm-id=N) and the store-name resolver's
+    --config/--install-dir/--mods-dir out of argv; default farm_id=1, all
+    three paths None (best-effort name resolution -- see resolve_store_name).
 
-    Returns (farm_id, error_or_None).
+    Returns (farm_id, config, install_dir, mods_dir, error_or_None).
 
-    BOTH SPELLINGS, AND NOTHING SWALLOWED -- the H3 defect read_livestock.py
-    carries a note on. A parser that understands only the space-separated form
-    and drops unrecognised arguments answers `--farm-id=15` with farm 1 and exits
-    0: a confidently reported WRONG FARM. In this domain that would report 16
-    player factories as though they were someone else's, or 13 of the map's as
-    though they were the player's. An unrecognised argument is an error.
+    BOTH --farm-id SPELLINGS, AND NOTHING SWALLOWED -- the H3 defect
+    read_livestock.py carries a note on, kept exactly as it was when this
+    parser only knew --farm-id. A parser that understands only the
+    space-separated form and drops unrecognised arguments answers
+    `--farm-id=15` with farm 1 and exits 0: a confidently reported WRONG FARM.
+    In this domain that would report 16 player factories as though they were
+    someone else's, or 13 of the map's as though they were the player's. An
+    unrecognised argument is an error -- including a typo in one of the three
+    new path flags.
     """
     farm_id = 1
+    config = install_dir = mods_dir = None
     args = argv[2:]  # argv[0] = script, argv[1] = savegame_dir (already consumed)
     i = 0
     while i < len(args):
         arg = args[i]
         if arg == "--farm-id":
             if i + 1 >= len(args):
-                return None, f"usage: {USAGE} -- --farm-id given with no value"
+                return None, None, None, None, (
+                    f"usage: {USAGE} -- --farm-id given with no value")
             raw = args[i + 1]
             i += 2
+            try:
+                farm_id = int(raw)
+            except ValueError:
+                return None, None, None, None, (
+                    f"--farm-id must be an integer, got {raw!r}")
         elif arg.startswith("--farm-id="):
             raw = arg.split("=", 1)[1]
             i += 1
+            try:
+                farm_id = int(raw)
+            except ValueError:
+                return None, None, None, None, (
+                    f"--farm-id must be an integer, got {raw!r}")
+        elif arg in ("--config", "--install-dir", "--mods-dir"):
+            if i + 1 >= len(args):
+                return None, None, None, None, (
+                    f"usage: {USAGE} -- {arg} given with no value")
+            val = args[i + 1]
+            if arg == "--config":
+                config = val
+            elif arg == "--install-dir":
+                install_dir = val
+            else:
+                mods_dir = val
+            i += 2
         else:
-            return None, (
+            return None, None, None, None, (
                 f"unrecognised argument {arg!r} -- refusing to ignore it and "
                 f"report the default farm. usage: {USAGE}")
-        try:
-            farm_id = int(raw)
-        except ValueError:
-            return None, f"--farm-id must be an integer, got {raw!r}"
-    return farm_id, None
+    return farm_id, config, install_dir, mods_dir, None
 
 
 def file_provenance(path):
@@ -269,17 +299,174 @@ def roll_up(sections):
     return "ok", None
 
 
-def placeable_identity(placeable, farm_id):
-    """(uniqueId, display name) for one placeable, or fail loud.
+def resolve_mod_l10n_text(mods_dir, mod_name, bare_key):
+    """The l10n hop (D4): a mod's modDesc.xml <l10n> block, INLINE or via an
+    external translations/*_en.xml named by filenamePrefix=.
+
+    Verified against this install's own mods (2026-09-15): FS25_hydroGreenhouse
+    and the FS25_placeable*ByStevie mods define l10n INLINE --
+    <l10n><text name="KEY"><en>Value</en></text></l10n> directly in modDesc.xml.
+    FS25_Montana_4X instead declares <l10n filenamePrefix="translations/l10n"/>
+    and keeps the text in translations/l10n_en.xml, shaped
+    <l10n><texts><text name="KEY" text="Value"/></texts></l10n> -- a DIFFERENT
+    element shape from the inline case (attribute, not an <en> child). Both are
+    real, both are in this farm's own save, and a resolver that only knows one
+    of them silently fails on the other's placeables.
+
+    Returns (text_or_None, source, reason_or_None). `source` is "l10n_inline"
+    or "l10n_external" and is set even on failure, so a caller can report which
+    hop was attempted. Never raises: a zip that will not open, a modDesc.xml
+    that will not parse, or a key that is genuinely absent are all reasoned
+    refusals, never a crash and never a guess (DEC-001).
+    """
+    if not mods_dir:
+        return None, "l10n_inline", (
+            "no mods directory configured -- pass --mods-dir/--install-dir or "
+            "set sanctum/config.json's paths block")
+    zip_path = os.path.join(mods_dir, mod_name + ".zip")
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            try:
+                desc_data = z.read("modDesc.xml")
+            except KeyError:
+                return None, "l10n_inline", f"{zip_path} has no modDesc.xml"
+            try:
+                desc_root = ET.fromstring(desc_data)
+            except ET.ParseError as exc:
+                return None, "l10n_inline", (
+                    f"modDesc.xml in {zip_path} does not parse: {exc}")
+
+            l10n = desc_root.find("l10n")
+            if l10n is None:
+                return None, "l10n_inline", (
+                    f"{zip_path}'s modDesc.xml has no <l10n> element")
+
+            for text_elem in l10n.findall("text"):
+                if text_elem.attrib.get("name") != bare_key:
+                    continue
+                en = text_elem.find("en")
+                if en is not None and en.text and en.text.strip():
+                    return en.text.strip(), "l10n_inline", None
+                return None, "l10n_inline", (
+                    f"{zip_path}'s modDesc.xml <l10n> defines {bare_key!r} but "
+                    "with no <en> translation")
+
+            prefix = l10n.attrib.get("filenamePrefix")
+            if not prefix:
+                return None, "l10n_inline", (
+                    f"{bare_key!r} is not defined in {zip_path}'s modDesc.xml "
+                    "<l10n> block, and no filenamePrefix= names an external "
+                    "translation file")
+
+            ext_path = f"{prefix}_en.xml"
+            try:
+                ext_data = z.read(ext_path)
+            except KeyError:
+                return None, "l10n_external", (
+                    f"{zip_path}'s modDesc.xml names filenamePrefix={prefix!r} "
+                    f"but {ext_path!r} is not inside the zip")
+            try:
+                ext_root = ET.fromstring(ext_data)
+            except ET.ParseError as exc:
+                return None, "l10n_external", (
+                    f"{ext_path} in {zip_path} does not parse: {exc}")
+
+            texts = ext_root.find("texts")
+            container = texts if texts is not None else ext_root
+            for text_elem in container.findall("text"):
+                if text_elem.attrib.get("name") != bare_key:
+                    continue
+                value = text_elem.attrib.get("text")
+                if value and value.strip():
+                    return value.strip(), "l10n_external", None
+                return None, "l10n_external", (
+                    f"{ext_path} in {zip_path} defines {bare_key!r} with an "
+                    "empty text= attribute")
+            return None, "l10n_external", (
+                f"{bare_key!r} not found in {ext_path} inside {zip_path}")
+    except (zipfile.BadZipFile, OSError) as exc:
+        return None, "l10n_inline", f"could not read {zip_path}: {exc}"
+
+
+def resolve_store_name(filename, install_dir, mods_dir):
+    """The three-hop resolve (D4): savegame `filename` -> that file's own
+    <storeData><name> -> if THAT is an $l10n_ key, the owning mod's modDesc.xml
+    <l10n> block. NEVER returns a raw XML basename -- see the module docstring
+    and PLAN-UI-FIXES-2026-09-15 item 11.
+
+    Returns (name_or_None, source, reason_or_None). `source` is one of
+    "literal", "l10n_inline", "l10n_external", "unresolved" -- always set, so
+    a caller can tally outcomes without re-deriving them from the reason text.
+    """
+    if filename.startswith("$pdlcdir$"):
+        return None, "unresolved", (
+            f"{filename!r} is PDLC-packaged content -- .dlc files are encrypted "
+            "and cannot be opened as a zip from disk (confirmed against this "
+            "install's pdlc/ folder: zipfile raises BadZipFile on every one)")
+
+    root, source_label, kind, err = resolve_game_xml(filename, install_dir, mods_dir)
+    if root is None:
+        return None, "unresolved", err
+
+    item = extract_store_item(root, source_label)
+    if item is None:
+        return None, "unresolved", f"{source_label} has no <storeData>"
+
+    if item["name_literal"]:
+        return item["name_literal"], "literal", None
+
+    key = item["name_l10n_key"]
+    if not key:
+        return None, "unresolved", (
+            f"{source_label} <storeData><name> is present but empty")
+
+    bare_key = key[len("$l10n_"):] if key.startswith("$l10n_") else key
+    if kind != "mod":
+        return None, "unresolved", (
+            f"{source_label} names l10n key {key!r}; base-game l10n text is "
+            "packed (dataS.gar/dataS2.gar) and not readable from this script "
+            "(same limit read_store_prices.py's name_note documents)")
+
+    mod_match = MODDIR_RE.match(filename)
+    mod_name = mod_match.group(1)
+    text, l10n_source, reason = resolve_mod_l10n_text(mods_dir, mod_name, bare_key)
+    if text:
+        return text, l10n_source, None
+    return None, "unresolved", reason
+
+
+def placeable_identity(placeable, farm_id, install_dir, mods_dir):
+    """(uniqueId, display name, name_resolution_source, [reason]) for one
+    placeable, or fail loud.
+
+    ⚠ NAMED `name_resolution_source`, NOT `name_source` -- fix round 2 (F4).
+    emit_productions_xml.py already owns a DIFFERENTLY-VALUED `name_source` /
+    `nameSource` vocabulary ("literal"/"derived", the Lua GUI's own contract at
+    build_points():857 and build_xml():1144/1156). No bug today -- that dict is
+    built fresh and never reads this one -- but D3 (plan item 10, surfacing the
+    reason fields) is the next natural edit to wire this row's fields through,
+    and the moment it does, a same-named key silently colliding with an
+    existing, differently-valued one is exactly this project's founding defect
+    class. Renamed while nothing consumes it yet.
 
     uniqueId is the ONLY placeable-level identity savegame_placeables.xsd:1596
     declares (g_string, "Placeable's unique id"). Measured on the live save: all
     216 placeables carry it and there are zero duplicates.
 
-    The display name is the filename's basename, which is EMPTY for preplaced
-    map objects -- measured: the canned-food factory carries filename="" and is
-    identified only by uniqueId. `or "<unnamed>"` keeps an empty string from
-    becoming a nameless row; the id is what carries identity regardless.
+    THE DISPLAY NAME USED TO BE THE FILENAME'S BASENAME (D4, PLAN-UI-FIXES
+    item 11) -- a raw "hydroGreenhouse.xml" on screen, worse than the id-derived
+    title emit_productions_xml.py already falls back to for preplaced objects
+    with no filename at all. This resolves the REAL store name via
+    resolve_store_name() instead. `filename=""` (preplaced map objects,
+    measured: the canned-food factory is one) still short-circuits to
+    "<unnamed>" with no resolution attempt -- there is nothing to resolve, and
+    emit_productions_xml.py's existing id-derived fallback already handles it
+    correctly. A resolution FAILURE (mod zip missing, l10n key absent, PDLC,
+    base-game packed data, ...) ALSO becomes "<unnamed>", exactly the same
+    sentinel, so the SAME proven fallback renders it -- but unlike the empty-
+    filename case, the reason is carried alongside for a machine reader
+    (DONE WHEN #1: readable name or a STATED reason, never a raw basename,
+    never a bare `unknown`).
     """
     unique_id = placeable.attrib.get("uniqueId")
     if unique_id is None:
@@ -291,8 +478,48 @@ def placeable_identity(placeable, farm_id):
             "placeable (sec. 7.3).",
             calibration_needed=True,
         )
-    name = os.path.basename(placeable.attrib.get("filename", "") or "") or "<unnamed>"
-    return unique_id, name
+
+    filename = placeable.attrib.get("filename", "") or ""
+    if not filename:
+        return unique_id, "<unnamed>", "no_filename", []
+
+    name, source, reason = resolve_store_name(filename, install_dir, mods_dir)
+    if name:
+        return unique_id, name, source, []
+    return unique_id, "<unnamed>", "unresolved", [reason]
+
+
+def disambiguate_names(identities):
+    """D5 -- greenhouse disambiguation, SEPARATE FROM D4 (PLAN-UI-FIXES item
+    12). Two placeables of the same store item (this farm owns two
+    FS25_hydroGreenhouse.xml greenhouses, measured) resolve through D4 to the
+    IDENTICAL literal/l10n name, so D4 alone leaves two indistinguishable rows.
+
+    `identities` is {key: [unique_id, name, source, reason_list]} (a LIST per
+    entry so entries are mutated in place, matching placeable_identity's
+    return shape). Every name that recurs gets a stable " #N" suffix, N
+    assigned in the order `identities` iterates (Python dict order == the
+    order placeables were visited, i.e. document order in placeables.xml) --
+    so re-running against an unchanged save reproduces the same suffixes.
+
+    "<unnamed>" is DELIBERATELY EXCLUDED even when it recurs: it is not a real
+    name collision, it is several placeables that each failed resolution for
+    their own reason, and emit_productions_xml.py's fallback only fires on the
+    LITERAL string "<unnamed>" -- suffixing it to "<unnamed> #2" would silently
+    turn off that fallback and print the sentinel itself on screen.
+    """
+    counts = {}
+    for _, name, _, _ in identities.values():
+        if name != "<unnamed>":
+            counts[name] = counts.get(name, 0) + 1
+
+    seen = {}
+    for entry in identities.values():
+        name = entry[1]
+        if name == "<unnamed>" or counts[name] <= 1:
+            continue
+        seen[name] = seen.get(name, 0) + 1
+        entry[1] = f"{name} #{seen[name]}"
 
 
 def coerce(raw, kind, field, where):
@@ -336,9 +563,38 @@ def main():
         return
 
     savegame_dir = arg_or_exit(USAGE)
-    farm_id, arg_err = parse_farm_id_arg(sys.argv)
+    farm_id, cfg_arg, install_dir_arg, mods_dir_arg, arg_err = parse_args(sys.argv)
     if arg_err:
         fail(arg_err, calibration_needed=False)
+
+    # Store-name resolution (D4/D5) is BEST-EFFORT, unlike every other input
+    # this script requires: a farm with no readable install/mods directory
+    # still has a real production report, just one where every point falls
+    # back to "<unnamed>" with a reason instead of a resolved store name --
+    # never a hard failure of the whole domain. load_paths' own error (no
+    # config.json and no explicit dirs) is deliberately swallowed here; it
+    # resurfaces per-placeable via resolve_store_name's own reason text.
+    install_dir, mods_dir, _paths_err = load_paths(
+        cfg_arg, install_dir_arg, mods_dir_arg)
+
+    # ⛔ MEASURED 2026-09-15 (fix round 1, team-lead's open question 5): load_paths
+    # REQUIRES install_dir AND mods_dir together to skip its own sanctum/config.json
+    # lookup -- a caller passing ONLY --mods-dir (this domain's real orchestration
+    # shape: refresh_state.py threads mods_dir alone through every sibling tab, the
+    # SAME pattern collect_land/publish_farm_tab/publish_fields_tab already use, and
+    # install_dir is never available at those call sites at all) gets BOTH values
+    # silently discarded the moment that config file cannot be found relative to
+    # the caller's cwd -- which is the ordinary case here, not an edge case.
+    # Reproduced from cwd=/tmp: `--mods-dir <real mods dir>` alone resolved 0 of 27
+    # names -- the exact defect this whole feature exists to fix, reintroduced by
+    # a shared helper's stricter gate. install_dir is a genuine nice-to-have here
+    # (it only changes a REFUSAL's wording for base-game placeables -- their l10n
+    # is packed and unreadable either way, see resolve_store_name), never required
+    # for a real name to appear, so an explicitly-passed single flag must not be
+    # thrown away just because the other one is absent.
+    if install_dir is None and mods_dir is None:
+        if install_dir_arg or mods_dir_arg:
+            install_dir, mods_dir = install_dir_arg, mods_dir_arg
 
     placeables_path = os.path.join(savegame_dir, "placeables.xml")
     root, generic = load_xml(placeables_path)
@@ -428,6 +684,9 @@ def main():
     # and reported as "this farm owns none". findall() cannot under-report and
     # needs no assumption about the writer.
     production_points = 0
+    # One row per OWNED <productionPoint> container, whether or not it declares
+    # any <production> children. See the production_points section below.
+    owned_points = []
     lines = []
     costs = []
     costs_absent = 0
@@ -437,16 +696,58 @@ def main():
     storage_levels = []
     watering = []
 
+    # --- D4/D5 name resolution: a PRE-PASS, not inline ------------------------
+    #
+    # D5 needs to see every owned placeable's resolved name BEFORE any of them
+    # is used, to tell a genuine duplicate (two hydroGreenhouse.xml) from a
+    # placeable that merely hasn't been visited yet -- which a single walk
+    # cannot do, since `name` is consumed immediately for that placeable's b3
+    # -- b9 rows in the SAME iteration it is computed. identities is keyed by
+    # id(placeable) (the same Element objects the walk below iterates, not
+    # copies) purely to look the resolved identity back up per placeable; nothing
+    # depends on object identity beyond that.
+    identities = {}
+    disambiguation_input = {}
+    for placeable in owned:
+        points_here = placeable.findall("productionPoint")
+        if points_here or placeable.findall(B9_MOD_ELEMENT):
+            entry = list(
+                placeable_identity(placeable, farm_id, install_dir, mods_dir))
+            identities[id(placeable)] = entry
+            # ⛔ F2 (review-d4d5c-opus): a placeable with ONLY a watering
+            # block and no <productionPoint> produces no point row at all, so
+            # it must not take a D5 numbering slot -- disambiguate_names()
+            # only sees placeables that actually own a productionPoint. Left
+            # unfiltered, a watering-only twin sharing a name with one real
+            # point would number that lone point "X #1" with no "#2" ever
+            # emitted, which reads as a missing second building.
+            if points_here:
+                disambiguation_input[id(placeable)] = entry
+    disambiguate_names(disambiguation_input)
+
     for placeable in owned:
         points = placeable.findall("productionPoint")
         watering_blocks = placeable.findall(B9_MOD_ELEMENT)
 
         if points or watering_blocks:
-            placeable_id, name = placeable_identity(placeable, farm_id)
+            placeable_id, name, name_resolution_source, name_reason = (
+                identities[id(placeable)])
 
         for point in points:
             production_points += 1
             where = f"{name!r} ({placeable_id})"
+            owned_points.append({
+                "placeable_id": placeable_id,
+                "placeable_name": name,
+                "name_resolution_source": name_resolution_source,
+                "name_unresolved_reason": name_reason,
+                # DEC-212: the emitter's fallback for a failed resolution
+                # derives a readable label from the FILE name rather than the
+                # hex uniqueId -- it needs the filename to do that.
+                "filename": placeable.attrib.get("filename", "") or "",
+                "absent_attributes": [],
+                "defaulted_attributes": [],
+            })
 
             # b3 -- one row per production line.
             for line in point.findall("production"):
@@ -586,6 +887,88 @@ def main():
                 })
 
     sections = {}
+
+    # ---- OWNED PRODUCTION POINTS -------------------------------------------
+    #
+    # ⛔ THE COUNT OF POINTS IS NOT DERIVABLE FROM THE LINE ROWS, and the FARM
+    # tab shipped a wrong number for exactly that reason. `production_lines`
+    # emits one row per <production> child, so a placeable that owns a
+    # <productionPoint> with NO children contributes NOTHING to it -- and a
+    # consumer counting distinct placeable_ids over those rows counts only the
+    # points that happen to have lines configured. Measured on the owner's
+    # savegame1 (2026-09-03): 27 owned placeables carry a <productionPoint>,
+    # 23 declare <production> children and 4 do not, so the tab read 23 owned
+    # production points against a farm that owns 27.
+    #
+    # ⚠ NOT A MOD QUIRK. One of the four silent points is a BASE-GAME placeable
+    # (data/placeables/mapEU/potatoProcessingPlant/), and the trigger is
+    # ordinary play: buy a production building, do not configure a line yet.
+    #
+    # ⭐ A RECORD_LIST, NOT A BARE SCALAR. The count is `count`, which every
+    # other section in this envelope already guarantees equals len(data) -- so
+    # the number a consumer reads cannot drift from the rows that justify it.
+    # A first draft published a "scalar" shape carrying the integer twice; it
+    # broke three of this domain's suite-wide invariants (count == len(data),
+    # the per-row provenance lists, and the fixed section set) because those
+    # invariants are what make sections comparable. Naming each point also lets
+    # a reader see WHICH buildings were being dropped, which is how the defect
+    # was diagnosed in the first place.
+    #
+    # The measurement itself is not new: the walk above already visited every
+    # container, and used the total only inside other sections' PROSE.
+    if owned_points:
+        pp_status, pp_reason = "ok", None
+    else:
+        pp_status = "unknown_by_design"
+        pp_reason = (
+            f"farm {farm_id} owns no <productionPoint> placeables. The placeable "
+            "set was read in full and none carries a production point, so the "
+            "count is a MEASURED ZERO -- an observation about a present file, "
+            "not an inference from an absent one. A consumer must render it as "
+            "0, never as `unknown`."
+        )
+    sections["production_points"] = {
+        "status": pp_status,
+        "reason": pp_reason,
+        "shape": "record_list",
+        # The b3 CONTAINERS. No new capability is claimed -- the module's
+        # CAPABILITY_IDS is unchanged -- because this publishes containers the
+        # b3 walk already visited.
+        "capability_ids": ["b3"],
+        "typing": {
+            "placeable_id": "raw",
+            "placeable_name": "raw",
+            # D4/D5: which hop actually produced placeable_name ("literal",
+            # "l10n_inline", "l10n_external", "no_filename", "unresolved") and,
+            # only when it is "<unnamed>" because resolution failed, WHY --
+            # never null (sec. 6.2 one level in: a row never carries a null),
+            # so this is a list, empty when resolution was not needed.
+            # ⚠ NAMED name_resolution_source, NOT name_source -- fix round 2
+            # (F4): emit_productions_xml.py already owns a differently-valued
+            # name_source/nameSource vocabulary the Lua GUI reads. See
+            # placeable_identity()'s docstring.
+            "name_resolution_source": "raw",
+            "name_unresolved_reason": "raw",
+            # DEC-212: the placeable's own filename, so a failed resolution
+            # can be labelled from the file name instead of the hex uniqueId.
+            # "" for preplaced points, which carry no filename at all.
+            "filename": "raw",
+            "absent_attributes": "raw",
+            "defaulted_attributes": "raw",
+        },
+        # Nothing here is coerced: these are the identities of containers that
+        # were read, not values lifted out of attributes.
+        "typing_guarantee": {},
+        "identity_fields": ["placeable_id"],
+        "empty_means": "farm_has_none",
+        # The containers were READ, not assumed absent -- sec. 6.3.1 rule 4,
+        # the same licence production_lines relies on.
+        "absence_guarantee": None,
+        "source_elements": ["placeables.xml:placeable/productionPoint"],
+        "blocked_by": None,
+        "count": len(owned_points),
+        "data": owned_points,
+    }
 
     # ---- b3 -----------------------------------------------------------------
     if lines:

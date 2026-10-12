@@ -6,7 +6,7 @@ cap_lines: 90
 cap_kb: 4
 rotation_trigger: none
 archive_target: N/A
-reconciliation: "identity and durable history only — never a cached live-state figure (F-028)"
+reconciliation: "identity and durable history only — never a cached live-state figure"
 format_version: 1
 parity_spec:
   required_sections:

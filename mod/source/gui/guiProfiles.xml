@@ -1,48 +1,1006 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
-<!-- Settings-dialog profiles (S158). Deliberately minimal: every one extends a
-     stock base-game fs25_* / baseReference profile and overrides only spacing,
-     size or text metrics, the exact idiom AutoDrive's guiProfiles.xml uses
-     (ad_common_dialog*). A new dialog needs almost no custom profile surface
-     because the base game already ships the dialog chrome and button styles. -->
+<!-- fm25_* profiles for the in-game menu page (InGameMenuFarmManager25).
+     Deliberately minimal: every one extends a stock base-game fs25_* /
+     baseReference profile and overrides only spacing, size or text metrics.
+
+     fm25_settingsRow and fm25_settingButton predate this page (S158's now-
+     retired FarmManagerSettingsGui modal) and are REUSED here unchanged: the
+     modal's stepper-row idiom (a stock fs25_multiTextOptionContainer holding
+     a fs25_settingsMultiTextOption) is exactly what the SETTINGS tab clones
+     per FarmManager25.SETTINGS_ROWS entry. The modal's other four profiles
+     (fm25_dialogContentContainer, fm25_dialogTitle, fm25_dialogTitleSeparator,
+     fm25_dialogButtonBox: dialog chrome, title bar, separator, button box)
+     had no other consumer and are removed here as a direct consequence of
+     deleting FarmManagerSettingsGui.xml, its only user.
+
+     The rest are adapted from FS25_FarmOperationsDashboard's guiProfiles.xml
+     (read-only reference, verified shipping). That file defines 13 profiles
+     under its own ingameMenuFarmOps*/farmOpsPro* prefixes; only 2 of the
+     ingameMenuFarmOps* ones are actually referenced by its own GUI XML
+     (ingameMenuFarmOpsMenuHeaderIcon, ingameMenuFarmOpsTabContainer); the
+     other 9 are dead. Copied here: only what InGameMenuFarmManager25.xml
+     actually uses, prefixed fm25_ (this file's existing 6 profiles already
+     use that prefix; zero overlap with the reference's 21). -->
 <GUIProfiles>
-    <Profile name="fm25_dialogContentContainer" extends="fs25_dialogContentContainer">
-        <flowDirection value="vertical" />
-        <elementSpacing value="10px" />
-        <alignmentX value="center" />
-    </Profile>
-
-    <Profile name="fm25_dialogTitle" extends="baseReference" with="anchorTopStretchingX">
-        <textBold value="true"/>
-        <textLayoutMode value="resize" />
-        <textMaxNumLines value="1" />
-        <textSize value="24px"/>
-        <textUpperCase value="true"/>
-        <size value="100% 40px"/>
-    </Profile>
-
-    <Profile name="fm25_dialogTitleSeparator" extends="fs25_lineSeparatorTop">
-        <absoluteSizeOffset value="100px 0" />
-    </Profile>
-
-    <!-- A native settings row: title (left) + a ‹value› MultiTextOption stepper
-         (right) + tooltip, the exact idiom Distribution Redux uses
-         (DistributionSettingsPage.xml). The row container / stepper / title /
-         tooltip profiles are all stock base-game (fs25_multiTextOption*), so
-         this is the only local profile the redesign needs; it just constrains
-         the stock container (tuned for the wide in-game menu frame) to the
-         740px dialog's content width. -->
+    <!-- ⛔ R5: 740px, matching settingsBox (InGameMenuFarmManager25.xml:252).
+         BOTH of these are cloned into that box, stepperRowTemplate at
+         InGameMenuFarmManager25.lua:407 and actionRowTemplate at :409, and a
+         size is resolved EXACTLY ONCE against the parent the template had at
+         load; clone() never re-resolves it. So the width written here is the
+         width that renders.
+         ⚠ THESE WERE 1320px, AND THAT WAS CORRECT WHEN WRITTEN. Commit 6dd88c3
+         set both explicitly to fix a real overflow; commit fc84e7a then shrank
+         settingsBox from 1320px to 740px and left both behind. This is a
+         constant that outlived its container, not a rule that was never
+         applied, and the fix is to re-measure it against the container rather
+         than to re-derive the rule.
+         ⛔ FIX BOTH OR NEITHER. fm25_settingButton is actionRowTemplate, the
+         `Reset panel position` row; leaving it at 1320px means that one row
+         still runs off screen while the nine steppers look fixed, which reads
+         as a partial fix rather than a missed one. -->
+    <!-- ⛔ BUG-029: THESE TWO INHERIT BASE-GAME CHROME AND MUST BE TINTED.
+         Both extend a stock fs25_* profile written for the base game's own
+         settings screens, which are LIGHT. Neither set an imageColor, so both
+         drew their stock bitmap at full white inside our dark page: measured
+         literally (255,255,255) in the owner's settings4.png, with the stock
+         light-grey label text on top of it, i.e. illegible.
+         ⚠ NOT item 5. Item 5 was a WIDTH overflow (1320px in a 740px box) and
+         is applied and gated; the left list fits correctly. This is colour,
+         on the DETAIL pane, and the two are independent; the sizes below
+         are item 5's and are deliberately left exactly as they were.
+         $preset_fs25_colorGrey is the same tint fm25_messageListItem already
+         uses for a list row (measured 43,43,43 on the same screenshot), so
+         the detail control now matches the list it belongs to rather than
+         introducing a third row colour. -->
     <Profile name="fm25_settingsRow" extends="fs25_multiTextOptionContainer" with="anchorTopStretchingX">
-        <size value="100% 56px"/>
+        <size value="740px 56px"/>
+        <!-- M5: the VALUE is chosen.html's: `.srow{background:-rowA}`. Round 1
+             used $preset_fs25_colorGrey "to match the list"; the spec names it. -->
+        <!-- rowA: input.fieldBg #0a0a0a, linearised -->
+        <imageColor value="0.003096 0.003096 0.003096 1"/>
     </Profile>
 
-    <!-- The one remaining button: Reset panel position (an action, not a value,
-         so it stays a button rather than a stepper). Extends the stock dialog
-         button; only size + text metrics overridden. -->
     <Profile name="fm25_settingButton" extends="buttonActivate" with="anchorTopStretchingX">
-        <size value="100% 42px"/>
+        <size value="740px 42px"/>
         <textSize value="18px"/>
+        <!-- `.btn{background:-stp;color:-brt}` -->
+        <!-- stp: input.fieldBg #0a0a0a, linearised -->
+        <imageColor value="0.003096 0.003096 0.003096 1"/>
+        <!-- brt: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1"/>
     </Profile>
 
-    <Profile name="fm25_dialogButtonBox" extends="fs25_dialogButtonBox">
+    <!-- BUG-029, the INNER box. The stepper draws its own background inside
+         fm25_settingsRow and it was the second white rectangle in the
+         screenshot (the one holding "&#9664; ON"). Extending the stock profile
+         rather than replacing it keeps every base-game metric and arrow. -->
+    <Profile name="fm25_settingsStepper" extends="fs25_settingsMultiTextOption">
+        <!-- `.stp{background:-stp}` and `.stp b{color:-brt}` -->
+        <!-- stp: input.fieldBg #0a0a0a, linearised -->
+        <imageColor value="0.003096 0.003096 0.003096 1"/>
+        <!-- brt: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1"/>
     </Profile>
+
+    <!-- BUG-029, the label. Stock light-grey on the stock light box; on our
+         dark row it needs the theme's body colour like every other label. -->
+    <Profile name="fm25_settingsLabel" extends="fs25_settingsMultiTextOptionTitle">
+        <textColor value="0.8481 0.8481 0.8481 1"/>
+    </Profile>
+
+    <!-- From ingameMenuFarmOpsTabContainer (FOD guiProfiles.xml:26-29). Wraps
+         each of the two tab-content panels; unrelated to tab count. -->
+    <Profile name="fm25_tabContainer" extends="emptyPanel" with="anchorStretchingYStretchingX pivotTopLeft">
+        <position value="0px -90px" />
+        <absoluteSizeOffset value="0px 90px" />
+    </Profile>
+
+    <!-- From farmOpsProPanel (FOD guiProfiles.xml:73-75). A plain GuiElement:
+         the page's layout frame, NOT its background (see fm25_pageBg). -->
+    <Profile name="fm25_panel" extends="baseReference" with="anchorTopLeft" />
+
+    <!-- ⛔ F3 (SPEC-livetest-fixes-2026-09-18 §1, U3): THE PAGE BACKGROUND.
+         It used to be an imageColor on fm25_panel, and that was never drawn:
+         fm25_panel is a plain GuiElement, and GuiElement:draw
+         (gameSource GuiElement.lua:815-860) draws only its children - an
+         overlay is rendered by BitmapElement (BitmapElement.lua:247). So every
+         tab showed the game's stock grey (34,34,34) instead of #0f1212.
+         Now a Bitmap, declared as the FIRST child of every fm25_panel so all
+         the page's content paints over it, on the SAME tinted-rectangle
+         mechanism fm25_cardBorder / fm25_sectionBar render live with
+         (fm25_barFill = the stock fs25_contractsProgressBar texture, tinted).
+         Adapted from fm25_cardBorder: only the colour and the size differ. -->
+    <Profile name="fm25_pageBg" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- M4 page background, chosen.html .mock.B -bg: input.bg #0f1212, linearised -->
+        <imageColor value="0.004896 0.005981 0.005981 0.95" />
+    </Profile>
+
+    <!-- ⛔ C3 / item 15: THE LITERALS BELOW ARE THEME COLOURS, LINEARISED.
+         A GUI profile cannot call Lua, so it cannot read FarmManagerTheme.lua.
+         These are therefore written out - but they are NOT new colours and NOT
+         a second palette. Each one is a THEME value converted from the display
+         (sRGB) space the theme is authored in into the LINEAR space the engine
+         paints in, exactly as InGameMenuFarmManager25.engineTheme() does for
+         the Lua-set colours. The authored value and the hex it comes from are
+         named on every line so the pair stays checkable by eye and by grep.
+
+         ⚠ WHY THIS WAS NEEDED AT ALL, AND IT IS NOT THE SAME BUG AS THE LUA
+         ONE. The dim class measured ~189 UNIFORMLY, and that single symptom
+         had TWO causes: the Lua-set text was the colour-space error, but the
+         column headers were never a theme colour in the first place - they
+         were $preset_colorWhite_50, a base-game preset that happens to render
+         at 189 too. Fixing only the colour space would have left every column
+         header at 189 and read as "the fix did not work".
+         ⚠ And $preset_fs25_colorGrey on fm25_cellFresh rendered at 54 against
+         a 34 background - the freshness marker the profile's own comment calls
+         READABLE was very nearly invisible, an error in the OPPOSITE
+         direction that the "too bright" framing hid completely.
+         Measured off the owner's 2026-09-17 screenshots, not inferred.
+
+         tests/test_c3_dim_class.py pins each literal to the theme value it
+         claims to be, so a hand-edited digit here fails rather than ships. -->
+    <!-- From farmOpsProSectionTitle (FOD guiProfiles.xml:77-84). -->
+    <Profile name="fm25_sectionTitle" extends="baseReference" with="anchorTopLeft">
+        <size value="420px 32px" />
+        <textSize value="20px" />
+        <textBold value="true" />
+        <textUpperCase value="true" />
+        <!-- ⛔ CORRECTED 2026-09-17 (review M4). Round 2 made this the ACCENT on
+             the strength of the theme table's prose, "section titles ->
+             cards.ok.accent". The rendered mockup CSS says otherwise: `.st` (the
+             page title) and `.st2` (a detail title) are -title #f2f5f0; only
+             `.sec` - the SECTIONS-3 heading, a separate element - is accent.
+             The prose meant SECTIONS-3. A mechanical sweep of the CSS found it. -->
+        <!-- st/st2: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+        <textAlignment value="left" />
+    </Profile>
+
+    <!-- DEC-214: the FIELDS detail crop subtitle. chosen.html .bt2 .sub is
+         18px at NORMAL weight. Its colour there is the dim class; DEC-199
+         reserves dim for "we cannot tell", so a known crop takes text.body
+         and the runtime sets the dim class only for an unknown crop. -->
+    <Profile name="fm25_detailSubtitle" extends="fm25_sectionTitle">
+        <textSize value="18px" />
+        <textBold value="false" />
+        <!-- text.body #ededed = authored {0.93,0.93,0.93}, linearised -->
+        <textColor value="0.8481 0.8481 0.8481 1" />
+    </Profile>
+
+    <!-- From farmOpsProHeader (FOD guiProfiles.xml:86-94). Every use site sets
+         its own <size>, so the default here is cosmetic only. -->
+    <Profile name="fm25_columnHeader" extends="baseReference" with="anchorTopLeft">
+        <size value="220px 32px" />
+        <textSize value="16px" />
+        <textBold value="true" />
+        <textUpperCase value="true" />
+        <!-- text.placeholder #858282 = authored {0.52,0.51,0.51}, linearised.
+             chosen.html: "Column headers, freshness, unknown  text.placeholder". -->
+        <textColor value="0.2330 0.2234 0.2234 1" />
+        <textSelectedColor value="0.2330 0.2234 0.2234 1" />
+        <textAlignment value="left" />
+    </Profile>
+
+    <!-- From farmOpsProListFixed (FOD guiProfiles.xml:100-104). -->
+    <Profile name="fm25_messageList" extends="emptyPanel" with="anchorTopLeft">
+        <isHorizontalList value="false" />
+        <listItemSpacing value="2px" />
+        <wrapAround value="false" />
+    </Profile>
+
+    <!-- From farmOpsProListItem (FOD guiProfiles.xml:108-113).
+         ⛔⛔ F4 (SPEC-livetest-fixes-2026-09-18 §1; U4, U5 = BUG-045; DEC-222
+         D-7): A PROFILE <height> BEATS THE ELEMENT'S size. GuiElement:loadProfile
+         reads heightStr from the profile and resolveSizeString applies it AFTER
+         the size string (gameSource GuiElement.lua:321, :443-444). So while all
+         nine row uses shared this one profile at 42px, EVERY list drew 42px rows
+         whatever its ListItem declared - FARM's 56, FIELDS' 38, the fill list's
+         40 were all ignored, and the FARM glyph and selection fill (sized for
+         56) overhung the real row.
+         So: ONE PROFILE PER LIST, each carrying its chosen.html height. This
+         profile is the MESSAGES row (38); the others below extend it and change
+         only the height, inheriting the colours and the traits (GuiProfile
+         copies trait values into the profile, and getValue falls through to the
+         parent: gameSource GuiProfile.lua:56-74, :118-144).
+         ⚠ Do NOT delete a <height> to "let the element decide": messageRow
+         declares no size and the engine default is 100% 100% (GuiElement.lua:158),
+         so the MESSAGES row would take the list's full height.
+         Heights: chosen.html (sha256 d9f47cbfb70921ed), each `.r` row's inline
+         height, per list. tests/test_livetest0918_step2.py pins them. -->
+    <Profile name="fm25_messageListItem" extends="baseReference" with="anchorTopStretchingX alternating">
+        <!-- chosen.html MESSAGES `.lst` rows: height:38px -->
+        <height value="38px"/>
+        <!-- M4: chosen.html `.r{background:-rowA}` and
+             `.r:nth-child(even){background:-rowB}`. The engine alternates with
+             setAlternating(i % 2 == 0) (gameSource SmoothListElement), so row 1
+             takes imageColor and row 2 the alternate - the same parity. -->
+        <!-- rowA: input.fieldBg #0a0a0a, linearised -->
+        <imageColor value="0.003096 0.003096 0.003096 1" />
+        <!-- M4: `.r.sel{background:-sel;box-shadow:inset 0 0 0 2px -selB}`.
+             The ROW draws the BORDER colour when selected and a child fill
+             (fm25_rowSelFill, first child of every row) draws -sel inset 2px
+             over it, so what shows is the 2px ring. The child receives the
+             row's selected state because GuiElement.updateChildrenState
+             defaults to true (gameSource GuiElement.lua). -->
+        <!-- selB: cards.ok.border #669e33, linearised -->
+        <imageSelectedColor value="0.132868 0.342392 0.033105 1" />
+        <!-- rowB: bar.track #212424, linearised -->
+        <alternateBackgroundColor value="0.015325 0.017389 0.017389 1" />
+    </Profile>
+
+    <!-- F4: the other eight row uses, one profile each (see above). -->
+    <!-- chosen.html SETTINGS `.lst` rows: height:40px -->
+    <Profile name="fm25_settingsListItem" extends="fm25_messageListItem">
+        <height value="40px"/>
+    </Profile>
+    <!-- chosen.html FARM master `.lst` rows: height:56px -->
+    <Profile name="fm25_farmListItem" extends="fm25_messageListItem">
+        <height value="56px"/>
+    </Profile>
+    <!-- chosen.html FARM detail `.det` rows (Balance, Loan, ...): height:42px.
+         farmRowTemplate draws these label/value/as-of rows, NOT the 56px master
+         rows, so it stays 42. -->
+    <Profile name="fm25_farmDetailRow" extends="fm25_messageListItem">
+        <height value="42px"/>
+    </Profile>
+    <!-- chosen.html FIELDS master `.lst` rows: height:38px -->
+    <Profile name="fm25_fieldListItem" extends="fm25_messageListItem">
+        <height value="38px"/>
+    </Profile>
+    <!-- chosen.html FIELDS detail `.det` rows (Ground, Planned next crop, Field
+         notes): height:40px. fieldDetailRowTemplate draws these. -->
+    <Profile name="fm25_fieldDetailRow" extends="fm25_messageListItem">
+        <height value="40px"/>
+    </Profile>
+    <!-- chosen.html PRODUCTIONS master `.lst` rows: height:38px -->
+    <Profile name="fm25_prodListItem" extends="fm25_messageListItem">
+        <height value="38px"/>
+    </Profile>
+    <!-- chosen.html PRODUCTIONS fill-type `.lst` (906px) rows: height:40px -->
+    <Profile name="fm25_prodFillListItem" extends="fm25_messageListItem">
+        <height value="40px"/>
+    </Profile>
+    <!-- chosen.html PRODUCTIONS production-lines `.lst` (906px) rows: height:38px -->
+    <Profile name="fm25_prodLineListItem" extends="fm25_messageListItem">
+        <height value="38px"/>
+    </Profile>
+
+    <!-- From farmOpsProRowCellLeft (FOD guiProfiles.xml:115-123). Default size
+         is cosmetic only; every column overrides it explicitly in the XML. -->
+    <Profile name="fm25_cellLeft" extends="baseReference" with="anchorStretchingYLeft">
+        <size value="150px 42px" />
+        <textBold value="false" />
+        <textSize value="15px" />
+        <textAlignment value="left" />
+        <!-- text.body #ededed = authored {0.93,0.93,0.93}, linearised -->
+        <textColor value="0.8481 0.8481 0.8481 1" />
+        <!-- C1: accent on the dark selected card (see fm25_messageListItem).
+             cards.ok.accent #b2e34f = authored {0.70,0.89,0.31}, linearised
+             (six decimals, not four: at 4dp the red channel round-trips to
+             179 rather than 178 and the tile is a shade off its own design) -->
+        <textSelectedColor value="0.447988 0.767769 0.078288 1" />
+        <textDisabledColor value="$preset_colorDisabled" />
+    </Profile>
+
+    <!-- From farmOpsProRowCellLeftBright (FOD guiProfiles.xml:125-127). Used
+         for the ANSWERED column so an unanswered row's status reads clearly. -->
+    <Profile name="fm25_cellLeftBright" extends="fm25_cellLeft">
+        <size value="340px 42px" />
+        <textBold value="true" />
+        <!-- M4: `.c.br{font-weight:700;color:-brt}`. -->
+        <!-- brt: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+    </Profile>
+
+    <!-- ⛔⛔ F1 / Option D (SPEC-livetest-fixes-2026-09-18 §1; BUG-035, 037,
+         038, 040 layout, 042 S7): THE FREE-FLOATING TEXT ROOTS.
+         fm25_cellLeft is a LIST-ROW cell: anchorStretchingYLeft is right for a
+         cell at y=0 as tall as its row. Used as stand-alone text at a y-offset
+         inside a taller parent, the engine centres the box on the parent's
+         middle and then pushes it down by |y| - a drop of (parentH - ownH)/2,
+         which put 29 elements 20-366px from where the XML declares them, some
+         off-screen. These twins restate fm25_cellLeft / fm25_cellLeftBright
+         VERBATIM on anchorTopLeft - the anchor DEC-215/218 proved live on the
+         tile values - so every stand-alone profile is re-extended onto them and
+         the in-row cells stay exactly as they are.
+         Why a root on baseReference rather than `with=` on each derived
+         profile: whether a derived `with` merges or replaces is unexercised,
+         and test_no_profile_overrides_an_inherited_with forbids it.
+         ⛔ KEEP THE RESTATED VALUES EQUAL to the source profiles:
+         tests/test_bug035_float_anchor_class.py compares them. -->
+    <Profile name="fm25_floatLeft" extends="baseReference" with="anchorTopLeft">
+        <size value="150px 42px" />
+        <textBold value="false" />
+        <textSize value="15px" />
+        <textAlignment value="left" />
+        <!-- text.body #ededed = authored {0.93,0.93,0.93}, linearised -->
+        <textColor value="0.8481 0.8481 0.8481 1" />
+        <!-- cards.ok.accent #b2e34f = authored {0.70,0.89,0.31}, linearised -->
+        <textSelectedColor value="0.447988 0.767769 0.078288 1" />
+        <textDisabledColor value="$preset_colorDisabled" />
+    </Profile>
+    <Profile name="fm25_floatLeftBright" extends="fm25_floatLeft">
+        <size value="340px 42px" />
+        <textBold value="true" />
+        <!-- brt: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+    </Profile>
+
+    <!-- ⛔ F5 S8 (BUG-042 S8): the status word inside its chip. statusText and
+         messageStripStatus started at exactly their chip's x, so the word sat
+         flush against the ring. chosen.html `.chipS{padding:3px 14px}`: a 14px
+         inset (screen-opus's reading; the column widths stay untouched, so the
+         MESSAGES row still tiles to 1296).
+         ⛔⛔ EXTENDS fm25_floatLeftBright, NOT fm25_cellLeftBright (spec §4,
+         architect V-6). messageStripStatus is STAND-ALONE text; on the
+         cellLeftBright family (anchorStretchingYLeft) it drops back off-screen
+         and silently undoes F1. The in-row statusText sits at y 0 and is as
+         tall as its 38px row, so the top-left anchor places it identically. -->
+    <Profile name="fm25_chipText" extends="fm25_floatLeftBright">
+        <textOffset value="14px 0px" />
+    </Profile>
+
+    <!-- ⛔⛔ DEC-215 (owner ruling 2026-09-17, "lets apply all and get this
+         done"): the FIELDS tile figure. Item 6's anchor fix - anchorTopLeft
+         instead of the fm25_cellLeft family's anchorStretchingYLeft, which
+         put tile values ~63px below their labels where the XML declares ~33px
+         - is applied to ALL SIX tiles, and the one-tile R6 experiment profile
+         is retired. ⚠ Ruled from SCREENSHOT evidence, not an in-game check:
+         the owner reviews it in his live test.
+         Size, weight and colour are chosen.html .tv2: 28px, bold, brt.
+         WHY IT EXTENDS baseReference AND RESTATES EVERY PROPERTY (kept from
+         the experiment): whether `with` on a derived profile REPLACES or
+         MERGES the parent's is a rule this codebase has never exercised. If
+         it merged, a stretching anchor inherited from fm25_cellLeftBright
+         would survive underneath and the fix would silently not apply. -->
+    <Profile name="fm25_fieldTileValue" extends="baseReference" with="anchorTopLeft">
+        <size value="340px 42px" />
+        <textBold value="true" />
+        <textSize value="28px" />
+        <textAlignment value="left" />
+        <!-- brt: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+        <!-- C1: accent on the dark selected card (see fm25_messageListItem).
+             cards.ok.accent #b2e34f = authored {0.70,0.89,0.31}, linearised -->
+        <textSelectedColor value="0.447988 0.767769 0.078288 1" />
+        <textDisabledColor value="$preset_colorDisabled" />
+    </Profile>
+
+    <!-- From farmOpsProRowCellDetail (FOD guiProfiles.xml:129-134), re-sized
+         for the MESSAGE column (600px here vs. the reference's 650px "detail").
+         20px narrower than the column's original 620px so a 20px gutter opens
+         before statusText's 970px origin. textAutoWidth caps the scrolling
+         marquee at textMaxWidth (TextElement:updateSize), so this value is the
+         one that actually bounds the render; keep it equal to the size above
+         and to messageText's size override in InGameMenuFarmManager25.xml. -->
+    <!-- ⛔ BUG-031: WAS textLayoutMode="scrolling". In SCROLLING mode
+         TextElement:draw() clips the run to scrollingClipArea with
+         setTextClipArea - a hard pixel cut with NO ellipsis - which is why the
+         owner's messages4.png ends "Pig Food-soybean(5" mid-word. TRUNCATE is
+         the mode that appends one: TextElement:setTextInternal does
+         `text = utf8Substr(text, 0, max(len-3,0)) .. "..."` under it
+         (fs25-lookup corpus 24afb18e, docs/script/GUI/TextElement.md).
+         chosen.html wants exactly this: the row is "Message 786 (one line)"
+         and the whole string goes to the full-text strip below, so a marquee
+         in the row was solving a problem the strip already solves.
+         ⛔ textAutoWidth / textMaxWidth REMOVED, not re-pointed. Together they
+         pinned the wrap width to 600px while the element is 786px wide, so the
+         cut landed 186px early and would drift again the next time the column
+         is rebalanced. With neither set, setTextInternal falls back to
+         `maxWidth = self.absSize[1]` - the element's own width, whatever it
+         becomes. The stale 600px also contradicted this profile's own comment
+         telling the reader to keep the two equal. -->
+    <Profile name="fm25_cellDetail" extends="fm25_cellLeft">
+        <size value="786px 42px" />
+        <textLayoutMode value="truncate" />
+    </Profile>
+
+    <!-- A WRAPPING block of text: the MESSAGES full-text strip and the
+         SETTINGS help line. Both were on fm25_cellDetail, so both inherited a
+         one-line marquee capped at 600px - the strip is 1320px and the help
+         text 740px, and both are meant to WRAP over several lines. Their
+         textMaxNumLines stays on the element, which is where the two differ. -->
+    <Profile name="fm25_cellWrap" extends="fm25_floatLeft">
+        <textLayoutMode value="truncate" />
+        <textVerticalAlignment value="top" />
+    </Profile>
+
+    <!-- From farmOpsProFixedListSliderBox (FOD guiProfiles.xml:106). -->
+    <Profile name="fm25_listSliderBox" extends="fs25_listSliderBox" with="anchorTopLeft pivotTopRight">
+        <!-- sl: bar.track #212424, linearised -->
+        <imageColor value="0.015325 0.017389 0.017389 1" />
+        <startImageColor value="0.015325 0.017389 0.017389 1" />
+        <endImageColor value="0.015325 0.017389 0.017389 1" />
+    </Profile>
+
+    <!-- New: no FOD equivalent (its dashboard has no arbitrary-count vertical
+         settings list). A plain vertical BoxLayout that
+         InGameMenuFarmManager25.lua fills by cloning stepperRowTemplate /
+         actionRowTemplate once per FarmManager25.SETTINGS_ROWS entry. -->
+    <Profile name="fm25_settingsBox" extends="emptyPanel" with="anchorTopLeft">
+        <flowDirection value="vertical" />
+        <elementSpacing value="4px" />
+    </Profile>
+
+    <!-- The FARM tab's two static columns. Same vertical BoxLayout idea as
+         fm25_settingsBox above; tighter spacing because a FARM row is a read-only
+         label/value pair, not an interactive stepper that needs a touch target. -->
+    <Profile name="fm25_farmBox" extends="emptyPanel" with="anchorTopLeft">
+        <flowDirection value="vertical" />
+        <elementSpacing value="2px" />
+    </Profile>
+
+    <!-- ⛔ R3: the column-header strip, anchored TOP-LEFT like everything else
+         on these panels. The five strips previously used stock
+         fs25_statisticsHeaderBox, which centres its box in the parent, so a
+         strip declared at "28px" did not start at 28px while every sibling on
+         the same panel (fm25_sectionTitle, fs25_lineSeparatorBottom, the lists)
+         did. That mismatch is the whole defect: the headers drifted off the
+         columns they label.
+         ⚠ THE STOCK PROFILE CANNOT BE READ ON THIS MACHINE. It is not in
+         guiProfiles.xml, not in any installed mod, and not in gameSource.zip
+         (951 .lua files and no GUI profile XML). So the CENTRING is inferred
+         from the observed displacement, not read. What is NOT inferred is the
+         replacement: emptyPanel + anchorTopLeft is the same pair already used
+         by fm25_settingsBox, fm25_farmBox, fm25_messageList and
+         fm25_prodListBlock, all of which land where they are declared.
+         Rather than compensate for a mechanism we cannot read, this moves the
+         strips onto one we can.
+         ⚠ FS25_ProductionAdvisor survives the stock profile because it gives
+         its box NO size override and nudges it by "-60px 0px", so its content
+         nearly fills the container. We copied the profile without that
+         condition, then declared explicit sizes, which is why it bit us and
+         not them.
+         This is a CONTAINER, not chrome: every one of these strips holds only
+         Buttons and Texts carrying their own profiles, so nothing visual is
+         inherited from the stock box. Card fills and borders are item 13. -->
+    <Profile name="fm25_headerBox" extends="emptyPanel" with="anchorTopLeft" />
+
+    <!-- The LIVE / AS-OF marker (guard 7). Dimmer and smaller than the value it
+         qualifies: it must be READABLE, because presenting a live figure and a
+         session-old one identically is the failure F-117 and F-410 both caught,
+         but it must not compete with the figure itself. -->
+    <Profile name="fm25_cellFresh" extends="fm25_cellLeft">
+        <size value="150px 42px" />
+        <textSize value="12px" />
+        <!-- text.placeholder #858282 = authored {0.52,0.51,0.51}, linearised.
+             WAS $preset_fs25_colorGrey, measured at 54 on a 34 background. -->
+        <textColor value="0.2330 0.2234 0.2234 1" />
+    </Profile>
+    <!-- F1: fm25_cellFresh's STAND-ALONE twin. cellFresh is used BOTH in-row
+         (the FARM row template's freshText, y=0 in its row) and stand-alone
+         (tile marks, tile hints, the contract mark), so re-extending it would
+         move the in-row use. The stand-alone marks move here; the row keeps
+         cellFresh. Values restated verbatim from fm25_cellFresh. -->
+    <Profile name="fm25_freshFloat" extends="fm25_floatLeft">
+        <size value="150px 42px" />
+        <textSize value="12px" />
+        <!-- text.placeholder #858282 = authored {0.52,0.51,0.51}, linearised -->
+        <textColor value="0.2330 0.2234 0.2234 1" />
+    </Profile>
+    <!-- F1: the page as-of STAMP, chosen.html `.tr .stamp` - the title row is
+         `justify-content:space-between`, so the stamp sits at the row's RIGHT
+         edge. Left-aligned on the top-left anchor it would start mid-row. -->
+    <Profile name="fm25_stampText" extends="fm25_freshFloat">
+        <textAlignment value="right" />
+    </Profile>
+    <!-- From ingameMenuFarmOpsMenuHeaderIcon (FOD guiProfiles.xml:3-7). The
+         glyph in the page header, sitting inside a stock fs25_menuHeaderIconBg.
+         NO IMAGE ASSET IS INVOLVED: imageSliceId draws from the base game's own
+         UI slice atlas, so this costs nothing to ship and cannot go stale.
+
+         ON THE SLICE ID. This is a pick from an INCOMPLETE inventory, and the
+         limit is worth stating. The authoritative list lives inside the game's
+         packed dataS.gar, which is not readable (a plain-text scan of all
+         3.4 GB returns no slice names), so the full set of gui.icon_ingameMenu_*
+         ids CANNOT be enumerated here. What can be enumerated is what shipping
+         mods actually use. Sweeping all 461 installed mods plus dev-mods for
+         imageSliceId/icon_ingameMenu_ attests exactly four:
+           icon_ingameMenu_animals, icon_ingameMenu_prices,
+           icon_ingameMenu_productionChains, icon_ingameMenu_statistics.
+         Of those four, three are bound to a game domain this page does not
+         cover. `statistics` is chosen as the nearest fit for a management /
+         reporting surface AND because it is the one attested by the reference
+         mod we adapted, whose header renders correctly in-game: it is
+         the only candidate with both semantic and rendering evidence behind it.
+         A better-fitting id may well exist in the atlas we cannot read; if the
+         owner spots one, swapping it is this one line. Guessing an id from the
+         naming pattern was deliberately NOT done: an unresolved slice draws
+         nothing, and a blank header would cost a live test to discover. -->
+    <!-- ⛔ R2: anchorTopLeft, NOT anchorMiddleCenter. This profile was written
+         for the ONE page-header glyph (InGameMenuFarmManager25.xml:44), where
+         centring inside fs25_menuHeaderIconBg is right. It was then reused by
+         13 further Bitmaps that position themselves explicitly ("0px 0px",
+         "20px -20px", "16px -16px") are offsets that only mean anything from a
+         TOP-LEFT origin. Under anchorMiddleCenter each one re-centred on its
+         parent and the offset measured from the middle, which put the FARM
+         glyph column across the list/detail boundary at screen 508 (measured
+         490-530). ⚠ The panels themselves do NOT overlap: they have the
+         designed 20px gutter, so this centred glyph column was the only
+         thing crossing it. Fixing geometry there would have changed correct
+         code and left this standing.
+         ⚠ NAME IS HISTORICAL: after this split the page header uses
+         fm25_menuHeaderIconCentered below, and THIS profile is the generic
+         glyph used by the 13 runtime-populated sites. Renaming it would touch
+         13 call sites for no behaviour change, so the name stays and this
+         comment carries the truth. -->
+    <Profile name="fm25_menuHeaderIcon" extends="baseReference" with="anchorTopLeft">
+        <size value="50px 50px" />
+        <imageSliceId value="gui.icon_ingameMenu_statistics" />
+        <!-- C1: cards.ok.accent #b2e34f = authored {0.70,0.89,0.31}, linearised
+             (six decimals, not four: at 4dp the red channel round-trips to
+             179 rather than 178 and the tile is a shade off its own design).
+             chosen.html's theme table: "Accent text, glyphs, section titles ->
+             cards.ok.accent". The glyphs sat on a base-game dark preset, which
+             is why the page read as monochrome however much Theme B was
+             applied to its text. -->
+        <imageColor value="0.447988 0.767769 0.078288 1" />
+    </Profile>
+    <!-- The page-header glyph, and the ONLY centred one: it sits inside
+         fs25_menuHeaderIconBg and is meant to centre in it. It is also the one
+         glyph setGlyph never touches, so its imageSliceId is what actually
+         renders rather than a pre-paint default.
+         ⚠ Extends baseReference rather than fm25_menuHeaderIcon on purpose:
+         whether `with` on a derived profile REPLACES or MERGES the parent's is
+         not something this codebase has ever exercised, and an inherited
+         anchorTopLeft silently winning would put us back where we started.
+         The cost is one repeated slice id; the alternative was an untested
+         inheritance rule on the element the owner sees first. -->
+    <Profile name="fm25_menuHeaderIconCentered" extends="baseReference" with="anchorMiddleCenter">
+        <size value="50px 50px" />
+        <imageSliceId value="gui.icon_ingameMenu_statistics" />
+        <!-- C1: cards.ok.accent #b2e34f = authored {0.70,0.89,0.31}, linearised
+             (six decimals, not four: at 4dp the red channel round-trips to
+             179 rather than 178 and the tile is a shade off its own design).
+             chosen.html's theme table: "Accent text, glyphs, section titles ->
+             cards.ok.accent". The glyphs sat on a base-game dark preset, which
+             is why the page read as monochrome however much Theme B was
+             applied to its text. -->
+        <imageColor value="0.447988 0.767769 0.078288 1" />
+    </Profile>
+    <!-- ===== PRODUCTIONS tab (SPEC Block D) ================================
+         Four new profiles, each extending a stock base-game one. Nothing here
+         invents a colour: the bar's track and fill are tinted at runtime from
+         FarmManager25.THEME.bar, the same way a message row's status is tinted
+         from THEME.cards[severity].accent. -->
+
+    <!-- A right-aligned numeric column. Every figure on the PRODUCTIONS tab is
+         a magnitude (litres, litres/hour, hours, a percentage), and a column of
+         magnitudes that is not right-aligned cannot be compared down the page
+         without reading every digit. Same metrics as fm25_cellLeft otherwise,
+         so a label and its figure share one baseline. -->
+    <!-- ⛔ R4: the 24px gutter is TEXT INSET, not box geometry.
+         A right-aligned column paints against its own right edge and the
+         left-aligned column after it paints against its own left edge, so
+         where those edges coincide the two values read as one token:
+         AREAOWNED, 26.50Yes, unknownunknown.
+         ⛔ THE BOXES MUST KEEP TILING. tests/test_tiles.py pins the FIELDS
+         columns to [28, 80, 80, 64, 94] and asserts each cell starts where
+         the previous one ends. Narrowing the right-aligned box to open a
+         gap fixes the collision and breaks that contract; it was tried
+         first and reddened three tests. So the box is unchanged and only
+         the TEXT moves.
+         TextElement:loadProfile reads this value
+         (self.textOffset = GuiUtils.getNormalizedScreenValues(
+         profile:getValue("textOffset"), self.textOffset)), and
+         ButtonElement carries getTextOffset too, so it applies to the
+         clickable sort headers as well as the plain cells.
+         ⚠ THE SIGN IS THE ONE THING THE LIVE TEST MUST CONFIRM. Negative x
+         is left, matching how every position in the GUI XML reads. If the
+         figures move the WRONG way the tokens will touch harder, not less,
+         and that is the signal to flip the sign rather than to re-plan the
+         columns. 24px is measured from the one right-to-left boundary that
+         never collided, the PRODUCTIONS lines header. -->
+    <Profile name="fm25_cellRight" extends="fm25_cellLeft">
+        <textAlignment value="right" />
+        <textOffset value="-24px 0px" />
+    </Profile>
+
+    <!-- The right-aligned column HEADER, so a heading sits over its own
+         figures rather than over the column to its left.
+         ⛔ Same 24px text inset as fm25_cellRight: a heading's box shares its
+         column's right edge, so the TEXT inset must match too, or the heading
+         ends 24px right of its own figures. Every right-aligned profile here
+         carries it; tests/test_ui_render_r1_r6.py test_r4b measures the pair. -->
+    <Profile name="fm25_columnHeaderR" extends="fm25_columnHeader">
+        <textAlignment value="right" />
+        <textOffset value="-24px 0px" />
+    </Profile>
+
+    <!-- SORT-2 clickable column headers. Adapted from
+         FS25_ProductionAdvisor/gui/guiProfiles.xml `paColumnHeader`, which
+         ships and works; what changed is that ours extends our own
+         fm25_columnHeader so the clickable and static headers cannot drift
+         apart in size, weight or colour.
+         imageColor 0 0 0 0 makes the Button's own background invisible: it is
+         a hit target over a label, not a visible control. Copied from the
+         reference for that reason, not by habit. -->
+    <Profile name="fm25_columnHeaderBtn" extends="fm25_columnHeader">
+        <imageColor value="0 0 0 0" />
+        <textVerticalAlignment value="middle" />
+    </Profile>
+
+    <!-- ⛔ F5 S9 (BUG-042 S9): the MESSAGES filter labels. They were
+         fm25_columnHeaderBtn - LEFT aligned with no inset - on a Button 5px
+         wider than its pill each side, so "ALL 5" started 6px OUTSIDE its box
+         (screen-sonnet zoomed crop). chosen.html `.fb{padding:8px 16px}` puts the
+         label inside the pill. Centred instead: every button's centre equals
+         its pill's centre (mfAll 0+150/2 = 5+140/2 = 75, and so on for all
+         five), so a centred label sits in its pill whatever the count's width.
+         Adds no colour: the transparent hit target is inherited. -->
+    <Profile name="fm25_filterBtn" extends="fm25_columnHeaderBtn">
+        <textAlignment value="center" />
+    </Profile>
+
+    <!-- Unused today; carries the inset so its first user cannot reintroduce
+         a heading that drifts off its figures. -->
+    <Profile name="fm25_columnHeaderBtnR" extends="fm25_columnHeaderBtn">
+        <textAlignment value="right" />
+        <textOffset value="-24px 0px" />
+    </Profile>
+
+    <!-- The 13px master-list header (chosen.html FIELDS: "Master column
+         headers use a SMALLER header profile (13 px ...). At the stock 16 px
+         the headers do not fit a 346 px row and clip mid-word ('REA (HA)',
+         'OWNE'), which is what today's build already shows"). -->
+    <Profile name="fm25_columnHeaderSm" extends="fm25_columnHeaderBtn">
+        <textSize value="13px" />
+    </Profile>
+
+    <!-- The clickable right-aligned header. Same 24px text inset as
+         fm25_cellRight above, so a heading sits over its own figures rather
+         than drifting off them. -->
+    <Profile name="fm25_columnHeaderSmR" extends="fm25_columnHeaderSm">
+        <textAlignment value="right" />
+        <textOffset value="-24px 0px" />
+    </Profile>
+
+    <!-- The wrapper each list + its own slider sits in. Adopted from
+         FS25_Distribution_Redux's in-block slider idiom
+         (DistributionProductionsPage.xml:32-46) IN PLACE OF OUR OWN precedent:
+         the MESSAGES slider sits outside its list at x=1372, which cannot work
+         beside a 370px master list on a four-region page. Costs ~24px of row
+         width, paid deliberately. -->
+    <Profile name="fm25_prodListBlock" extends="emptyPanel" with="anchorTopLeft" />
+
+    <!-- The in-block slider box. fm25_listSliderBox pivots TOP-RIGHT against a
+         parent it is positioned outside of; this one is anchored top-right
+         INSIDE its block, which is the whole difference. -->
+    <!-- chosen.html `.sl`: the list slider's thumb is -thumb #669e33
+         (cards.ok.border) in every interactive state, and its own image the
+         track colour. Keys verified in gameSource.zip: SliderElement:loadProfile
+         loads the thumb as GuiOverlay.loadOverlay(..., "sliderImage", ...),
+         and GuiOverlay.loadProfileColors reads name .. state .. "Color".
+         start/endImage are set too, in case the stock thumb is three-part. -->
+    <Profile name="fm25_listSlider" extends="fs25_listSlider">
+        <!-- thumb: cards.ok.border #669e33, linearised -->
+        <sliderImageColor value="0.132868 0.342392 0.033105 1" />
+        <sliderImageFocusedColor value="0.132868 0.342392 0.033105 1" />
+        <sliderImageHighlightedColor value="0.132868 0.342392 0.033105 1" />
+        <sliderImagePressedColor value="0.132868 0.342392 0.033105 1" />
+        <sliderImageSelectedColor value="0.132868 0.342392 0.033105 1" />
+        <startImageColor value="0.132868 0.342392 0.033105 1" />
+        <startImageFocusedColor value="0.132868 0.342392 0.033105 1" />
+        <startImageHighlightedColor value="0.132868 0.342392 0.033105 1" />
+        <startImagePressedColor value="0.132868 0.342392 0.033105 1" />
+        <startImageSelectedColor value="0.132868 0.342392 0.033105 1" />
+        <endImageColor value="0.132868 0.342392 0.033105 1" />
+        <endImageFocusedColor value="0.132868 0.342392 0.033105 1" />
+        <endImageHighlightedColor value="0.132868 0.342392 0.033105 1" />
+        <endImagePressedColor value="0.132868 0.342392 0.033105 1" />
+        <endImageSelectedColor value="0.132868 0.342392 0.033105 1" />
+        <!-- sl: bar.track #212424, linearised -->
+        <imageColor value="0.015325 0.017389 0.017389 1" />
+    </Profile>
+
+    <Profile name="fm25_listSliderBoxInline" extends="fs25_listSliderBox" with="anchorTopRight">
+        <!-- sl: bar.track #212424, linearised -->
+        <imageColor value="0.015325 0.017389 0.017389 1" />
+        <startImageColor value="0.015325 0.017389 0.017389 1" />
+        <endImageColor value="0.015325 0.017389 0.017389 1" />
+    </Profile>
+
+    <!-- ===== THE PROPORTIONAL BAR (D3) ====================================
+         Adapted from [ModMixer] SwitchboardFrame.xml:87-91 + its guiProfiles
+         :131-139, whose own comment reads "stock contracts progress-bar widget
+         — real engine textures; fill nested in track, its width driven per-row
+         in populateCell". Extending the stock contracts profiles means NO image
+         asset ships and no white-quad guessing: the textures are the base
+         game's own.
+
+         ⭐ ThreePartBitmapElement IS engine-documented
+         (docs/script/GUI/ThreePartBitmapElement.md, fs25-lookup corpus commit
+         24afb18e7cfb788b7686b9ec791671e0dcba32b9) — the rare Stage-5 widget
+         that satisfies "verify against fs25-lookup" outright. Its draw() reads
+         self.absSize[1] every frame, which is why a runtime setSize on the fill
+         actually changes what is rendered; GuiElement:setSize(x, y) takes nil
+         for y and keeps the current height, which is the call
+         populateCellForItemInSection makes.
+
+         ⚠ The colours below are placeholders overwritten on every populated
+         cell from FarmManager25.THEME.bar via setImageColor(nil, r, g, b, a)
+         — the same call ThreePartBitmapElement:loadFromXML makes on itself. A
+         cell that is never populated is never visible. -->
+    <!-- ===== C1 (item 13): THE CARD LAYER ================================
+         chosen.html builds every tile as "Bitmap (THEME.cards.ok.bg) + border
+         Bitmap (cards.ok.border, 2 px, stacked)". These two draw that.
+
+         ⛔ NO NEW IMAGE ASSET AND NO WHITE-QUAD GUESSING. Both extend
+         fm25_barFill, i.e. the stock fs25_contractsProgressBar texture, which
+         is ALREADY used in this page as a plain tinted rectangle for the
+         MESSAGES severity bar (sevBar, 6x38) and the four legend swatches
+         (lgOk/lgInfo/lgWarn/lgCritical, 14x14) - and those render in the
+         owner's messages4.png. So this is the one fill mechanism on this page
+         with rendering evidence behind it, which is why it was copied rather
+         than a fresh Bitmap profile invented.
+
+         HOW THE RING IS MADE: the border bitmap is the full tile, the fill
+         bitmap is inset 2px on every side, and the fill is drawn AFTER, so
+         what is left showing is a 2px border. Both are declared BEFORE the
+         tile's text children so they paint behind them.
+         Colours are theme values, linearised, like every other literal here. -->
+    <Profile name="fm25_cardBorder" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- cards.ok.border #669e33 = authored {0.40,0.62,0.20}, linearised -->
+        <imageColor value="0.1329 0.3424 0.0331 1" />
+    </Profile>
+    <Profile name="fm25_cardFill" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- cards.ok.bg #0f2408 = authored {0.06,0.14,0.03}, linearised -->
+        <imageColor value="0.0049 0.0174 0.0023 1" />
+    </Profile>
+
+    <!-- ===== C1: THE STATUS CHIP (chosen.html MESSAGES) =================
+         "Status 190 (RoundCorner fs25_shopMoneyBoxBg + Text, tinted by
+         severity)". The stock money-box background is the base game's own
+         rounded plate, so the chip ships no asset and cannot go stale - the
+         same reason the page header already sits on fs25_menuHeaderIconBg.
+         The FILL is tinted per row in the populator from
+         THEME.cards[severity].accent, exactly as the severity bar beside it
+         already is; the placeholder here is never seen on a populated row. -->
+    <!-- C1 / chosen.html SETTINGS: "allowed-value chips (Text on tinted
+         Bitmaps)". A horizontal strip, one chip per preset the setting
+         accepts, so the player can see the whole range without stepping
+         through it. Same BoxLayout idea as fm25_settingsBox, laid out across
+         instead of down. -->
+    <Profile name="fm25_allowedBox" extends="emptyPanel" with="anchorTopLeft">
+        <flowDirection value="horizontal" />
+        <elementSpacing value="8px" />
+    </Profile>
+
+    <!-- ⛔ REBUILT 2026-09-17 (review M4): chosen.html `.chipS{border:2px solid;
+         border-radius:14px;background:var(-bg)}` with border-color AND color
+         set per row to the SEVERITY accent (e.g. style="border-color:#e8c217;
+         color:#e8c217" for Live). Round 2 filled the plate with cards[sev].bg -
+         a different element's colour. Now: this plate is the BORDER, tinted the
+         severity accent per row; fm25_statusChipFill, inset 2px, supplies the
+         page background over it; the word takes the accent.
+         The value below is the OK severity's border, the placeholder a
+         populated row always overwrites. -->
+    <Profile name="fm25_statusChip" extends="fs25_shopMoneyBoxBg" with="anchorTopLeft">
+        <!-- chipS border (ok): cards.ok.accent #b2e34f, linearised -->
+        <imageColor value="0.447988 0.767769 0.078288 1" />
+    </Profile>
+    <Profile name="fm25_statusChipFill" extends="fs25_shopMoneyBoxBg" with="anchorTopLeft">
+        <!-- chipS background: input.bg #0f1212, linearised -->
+        <imageColor value="0.004896 0.005981 0.005981 0.95" />
+    </Profile>
+
+    <!-- ===== C1: THE SECTIONS-3 ACCENT BAR ==============================
+         chosen.html PRODUCTIONS: "Detail heading: SECTIONS-3 (6 px Bitmap
+         tinted THEME.bar.fill + glyph + Text in cards.ok.accent)"; MESSAGES
+         day groups are "drawn as SECTIONS-3 (accent bar + ICONS.schedule +
+         accent text)". One 6px rule that marks where a section starts.
+         Extends fm25_barFill for the same reason the cards do: it is the one
+         tinted-rectangle mechanism on this page with rendering evidence. -->
+    <Profile name="fm25_sectionBar" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- bar.fill #b2e34f = authored {0.70,0.89,0.31}, linearised
+             (six decimals: at 4dp the red channel round-trips to 179, not 178) -->
+        <imageColor value="0.447988 0.767769 0.078288 1" />
+    </Profile>
+
+    <!-- M4: `.lg{font-size:13px;font-weight:700;color:-title}`. The legend
+         labels were fm25_cellFresh (dim, 12px), the class for freshness marks. -->
+    <!-- M4 SECTIONS-3 text: `.sec{font-size:18px;font-weight:700;
+         text-transform:uppercase;color:-secT}`. Two uses with one colour:
+         the list section headers extend the stock header title (keeping its
+         metrics), the FARM detail heading extends our own title. -->
+    <Profile name="fm25_sectionHeaderTitle" extends="fs25_subCategoryListSectionHeaderTitle">
+        <textSize value="18px" />
+        <textBold value="true" />
+        <!-- secT: cards.ok.accent #b2e34f, linearised -->
+        <textColor value="0.447988 0.767769 0.078288 1" />
+    </Profile>
+    <Profile name="fm25_secTitle" extends="fm25_sectionTitle">
+        <textSize value="18px" />
+        <!-- secT: cards.ok.accent #b2e34f, linearised -->
+        <textColor value="0.447988 0.767769 0.078288 1" />
+    </Profile>
+
+    <!-- M4 `.pv{background:-rowB;border-radius:14px}` / `.pv.on{background:
+         -tabOn;color:-tabOnT}`: the allowed-value chips. Round 2 drew these on
+         fm25_statusChip, which is now the STATUS chip's accent BORDER. The
+         value is the resting -rowB; the current value is tinted per chip. -->
+    <Profile name="fm25_valueChip" extends="fs25_shopMoneyBoxBg" with="anchorTopLeft">
+        <!-- rowB: bar.track #212424, linearised -->
+        <imageColor value="0.015325 0.017389 0.017389 1" />
+    </Profile>
+
+    <!-- M4 `.fb{background:-rowB;border-radius:6px}` and `.fb.on{background:
+         -sel;box-shadow:inset 0 0 0 2px -selB;color:-tabOnT}`: the MESSAGES
+         filters. A Button draws its own overlay AFTER its children (gameSource
+         ButtonElement:draw), so the pill cannot be a child of the button - it
+         would be painted over. It is a SIBLING declared before it: the plate
+         (resting -rowB, border colour when active) and an inset fill shown
+         only when active. -->
+    <Profile name="fm25_pillBg" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- rowB: bar.track #212424, linearised -->
+        <imageColor value="0.015325 0.017389 0.017389 1" />
+    </Profile>
+
+    <!-- M4 `.tag{background:-rowB;font-size:12px;font-weight:700;color:-brt}`
+         and `.tag.out{background:#b2e34f;color:#111}`: the IN/OUT tag. -->
+    <Profile name="fm25_tagPill" extends="fs25_shopMoneyBoxBg" with="anchorTopLeft">
+        <!-- rowB: bar.track #212424, linearised -->
+        <imageColor value="0.015325 0.017389 0.017389 1" />
+    </Profile>
+    <Profile name="fm25_tagText" extends="fm25_cellLeft">
+        <textSize value="12px" />
+        <textBold value="true" />
+        <!-- brt: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+    </Profile>
+
+    <!-- M4 `.ecard{background:#05171c;box-shadow:inset 0 0 0 2px #4799b2;
+         color:-title;font-size:18px}`, the EMPTY-3 card. chosen.html: "Info
+         card: Bitmap THEME.cards.info.bg + border Bitmap cards.info.border
+         (2 px) + ICONS.report glyph tinted cards.info.accent + Text in
+         THEME.text.title". Same ring technique as the tiles. -->
+    <Profile name="fm25_infoCardBorder" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- ecard border: cards.info.border #4799b2, linearised -->
+        <imageColor value="0.063724 0.318547 0.447988 1" />
+    </Profile>
+    <Profile name="fm25_infoCardFill" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- ecard fill: cards.info.bg #05171c, linearised -->
+        <imageColor value="0.001548 0.008540 0.011645 1" />
+    </Profile>
+    <Profile name="fm25_emptyText" extends="fm25_floatLeft">
+        <textSize value="18px" />
+        <textBold value="true" />
+        <!-- title: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+    </Profile>
+
+    <Profile name="fm25_legendLabel" extends="fm25_cellLeft">
+        <textSize value="13px" />
+        <textBold value="true" />
+        <!-- title: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+    </Profile>
+
+    <!-- M4: the INSIDE of the selected-row ring. Fully transparent until its
+         row is selected, then -sel. Declared as the FIRST child of every
+         fm25_messageListItem so the row's own cells paint over it. -->
+    <Profile name="fm25_rowSelFill" extends="fm25_barFill" with="anchorTopLeft">
+        <imageColor value="0 0 0 0" />
+        <!-- sel: cards.ok.bg #0f2408, linearised -->
+        <imageSelectedColor value="0.004896 0.017389 0.002322 1" />
+    </Profile>
+
+    <!-- M4: separators. chosen.html `.rule{height:2px;background:-rule}` is
+         rgba(107,112,84,.6) = input.fieldBorder, and `.rule.hi` is -ruleHi.
+         ⛔⛔ F2 (SPEC-livetest-fixes-2026-09-18 §1; U1, U2 = BUG-043): the rules
+         WERE ThreePartBitmaps on the stock fs25_lineSeparatorBottom/Top. Those
+         carry their own (packed, unreadable) anchors - apparently bottom-centre
+         and top-centre - so `y -70px` put every title rule 70px BELOW the panel,
+         off-screen, and the footer rules centred on the panel ignoring their x.
+         Both analysts measured it (pixel scan against the fm25_ruleHi control).
+         Now a plain 2px Bitmap on fm25_barFill with anchorTopLeft - the
+         tinted-rectangle mechanism fm25_cardBorder / fm25_sectionBar render
+         live with - so a rule lands exactly where its XML puts it. ONE profile
+         for title and footer rules alike: with a top-left anchor they no longer
+         differ (fm25_ruleTop retired). A Bitmap has one overlay, so only
+         imageColor is read; the start/end cap colours went with the
+         ThreePartBitmap. -->
+    <Profile name="fm25_rule" extends="fm25_barFill" with="anchorTopLeft">
+        <!-- rule: input.fieldBorder #6b7054 a0.6, linearised -->
+        <imageColor value="0.147319 0.162647 0.088982 0.6" />
+    </Profile>
+    <!-- fm25_ruleHi (the tab-strip rule) is NOT moved: it renders where
+         declared - it is the control the analysts' pixel scan found at
+         y=227-228 on farm5 and messages5. ⛔ ALL THREE PARTS: a
+         ThreePartBitmap's caps read startImageColor and endImageColor, not
+         imageColor (gameSource GuiOverlay.loadProfileColors builds
+         overlayName..state.."Color" per overlay). -->
+    <Profile name="fm25_ruleHi" extends="fs25_lineSeparatorTopHighlighted">
+        <!-- ruleHi: cards.ok.border #669e33, linearised -->
+        <imageColor value="0.132868 0.342392 0.033105 1" />
+        <startImageColor value="0.132868 0.342392 0.033105 1" />
+        <endImageColor value="0.132868 0.342392 0.033105 1" />
+    </Profile>
+
+    <!-- M4: the page header. `.plate{background:-plate}` behind the header
+         glyph and `.chip{background:-chip}` behind the balance. -->
+    <Profile name="fm25_headerPlate" extends="fs25_menuHeaderIconBg">
+        <!-- plate: cards.ok.bg #0f2408, linearised -->
+        <imageColor value="0.004896 0.017389 0.002322 1" />
+    </Profile>
+    <Profile name="fm25_headerChip" extends="fs25_shopMoneyBoxBg">
+        <!-- chip: input.fieldBg #0a0a0a, linearised -->
+        <imageColor value="0.003096 0.003096 0.003096 1" />
+    </Profile>
+
+    <!-- M4: `.tv{font-size:30px;font-weight:700;color:-title}`, the FARM
+         tile figure. FARM ONLY: the FIELDS figure is `.tv2`, built as
+         fm25_fieldTileValue under DEC-215.
+         ⛔⛔ DEC-218 (owner ruling, review round 2 N2): DEC-215's anchor fix,
+         extended to these four figures. They extended fm25_cellLeftBright and
+         so sat on anchorStretchingYLeft, the anchor DEC-215 blames for the
+         value drop; farm4.png shows the same drop (label to value ~76px,
+         ~47 intended). ⚠ Ruled from screenshot evidence; the owner's live
+         test is the check. Built exactly as fm25_fieldTileValue is: extends
+         baseReference with anchorTopLeft and restates every property,
+         because whether a derived `with` merges or replaces is unexercised. -->
+    <Profile name="fm25_tileValue" extends="baseReference" with="anchorTopLeft">
+        <size value="340px 42px" />
+        <textBold value="true" />
+        <textSize value="30px" />
+        <textAlignment value="left" />
+        <!-- brt: text.title #f2f5f0, linearised -->
+        <textColor value="0.890005 0.911408 0.868899 1" />
+        <!-- C1: accent on the dark selected card (see fm25_messageListItem).
+             cards.ok.accent #b2e34f = authored {0.70,0.89,0.31}, linearised -->
+        <textSelectedColor value="0.447988 0.767769 0.078288 1" />
+        <textDisabledColor value="$preset_colorDisabled" />
+    </Profile>
+
+    <!-- chosen.html `.tl`, every tile's label (FARM and FIELDS): 13px bold
+         uppercase in the head colour - fm25_columnHeader at 13px. -->
+    <Profile name="fm25_tileLabel" extends="fm25_columnHeader">
+        <textSize value="13px" />
+    </Profile>
+
+    <!-- chosen.html `.bt2`, the FIELDS detail title: 28px bold brt. -->
+    <Profile name="fm25_detailTitleLarge" extends="fm25_sectionTitle">
+        <textSize value="28px" />
+    </Profile>
+
+    <!-- MESSAGES `.strip2` header: `.bt` sender 26px bold brt; `.when`
+         18px; `.body.sm` full text 16px. `.when` is the head colour in
+         chosen.html, but its colour is set at runtime like the row's when
+         cell: body for a real time, the dim class only for `unknown`
+         (DEC-199, by DEC-214's reasoning). -->
+    <Profile name="fm25_stripFrom" extends="fm25_floatLeftBright">
+        <textSize value="26px" />
+    </Profile>
+    <Profile name="fm25_stripWhen" extends="fm25_floatLeft">
+        <textSize value="18px" />
+    </Profile>
+    <Profile name="fm25_stripBody" extends="fm25_cellWrap">
+        <textSize value="16px" />
+    </Profile>
+
+    <!-- FIELDS `.ctr`: a -rowB box (the value chip's fill, rowB exactly),
+         CONTRACT in bold uppercase 16px brt, the contract 16px (colour set at
+         runtime: brt when read, the dim class for `unknown`). -->
+    <Profile name="fm25_contractBox" extends="fm25_valueChip" />
+    <Profile name="fm25_ctrLabel" extends="fm25_floatLeftBright">
+        <textSize value="16px" />
+        <textUpperCase value="true" />
+    </Profile>
+    <Profile name="fm25_ctrText" extends="fm25_floatLeft">
+        <textSize value="16px" />
+    </Profile>
+
+    <!-- FOOTER-2, chosen.html `.fo`: 16px bold. The first span ("TOTAL") is
+         in the head colour - exactly fm25_columnHeader; the figures are brt.
+         The figures RESIZE rather than truncate: TextElement shrinks a single
+         line in 5% steps until it fits (setTextInternal, LAYOUT_MODE.RESIZE),
+         so a long sentence - PRODUCTIONS's DEC-198 wording - stays whole. -->
+    <Profile name="fm25_footerLabel" extends="fm25_columnHeader" />
+    <Profile name="fm25_footerText" extends="fm25_floatLeftBright">
+        <textSize value="16px" />
+        <textLayoutMode value="resize" />
+    </Profile>
+
+    <Profile name="fm25_barTrack" extends="fs25_contractsProgressBarBg" with="anchorTopLeft" />
+    <Profile name="fm25_barFill" extends="fs25_contractsProgressBar" />
 </GUIProfiles>

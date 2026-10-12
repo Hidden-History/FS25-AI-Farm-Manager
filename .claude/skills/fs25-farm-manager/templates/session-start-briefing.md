@@ -26,7 +26,7 @@ needs a decision, say so plainly — an empty urgent section is a correct briefi
 {{Only fields with a state change or action needed; rest link to their dossier, not restated. Never
 call a field harvest-ready without checking it isn't already cut — cross-reference
 `growthState`/`lastGrowthState` against `groundType` (a bare `groundType` read gave a 20% false
-positive, F-117). If they disagree, surface it as UNRESOLVED, never a clean "go harvest." List
+positive). If they disagree, surface it as UNRESOLVED, never a clean "go harvest." List
 `unknown_crop_state_on_owned_land` fields as unknown — never silently drop them.}}
 
 ## 🚜 Equipment
@@ -38,7 +38,7 @@ contract mechanic.}}
 
 ## 💰 Finances
 {{Cash/loan headline + one-line trend note pulled from `state/finances-ledger.md`'s row history (not
-recomputed). Loan interest bills once per calendar month (F-124) — never imply a daily tick.}}
+recomputed). Loan interest bills once per calendar month — never imply a daily tick.}}
 
 ## Standing directives check-in
 {{Only directives due or relevant today, from `plans/PLAN.md` (its Standing directives, read in

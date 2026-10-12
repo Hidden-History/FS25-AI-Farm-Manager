@@ -3,7 +3,7 @@
 An offline, source-cited reference for Farming Simulator 25 game mechanics, extracted from two
 official manual PDFs. This resource exists so the skill's own references (`crop-calendar.md`,
 `time-mechanics.md`, etc.) can *cite* game mechanics instead of asserting or inferring them (root
-cause of frictions F-117/F-120/F-115).
+cause of earlier friction).
 
 **Sourcing history, kept for context:** this guide was originally built from the base
 `FS25-manual_EN.pdf` (24pp) plus the FS25 Academy website. The Academy was subsequently found to
@@ -44,7 +44,7 @@ repeating this on every page.
 
 | Topic | File | Primary source | Status |
 |---|---|---|---|
-| Finances, Loans, Contracts, Passive Income | `finances.md` | FS25HF p.8 (base p.8 agrees) | ✅ done (incl. F-124 interest-accrual verdict) |
+| Finances, Loans, Contracts, Passive Income | `finances.md` | FS25HF p.8 (base p.8 agrees) | ✅ done (incl. the interest-accrual verdict) |
 | Ground Working (liming, plow/cultivate, sow/plant, weeds, rolling, mulching, stones, fertilizing) | `fields.md` | FS25HF pp.11-12 (base agrees) | ✅ done |
 | Crops (26-crop data table incl. Onions, storing, greenhouse, seasonal/weather) | `crops.md` | FS25HF pp.9-10, 13, 26 (base agrees except Onions + Oilseed Radish, see punch list) | ✅ done |
 | Animal Husbandry (per-animal food/product, feed types, silage, TMR) | `animals.md` | FS25HF pp.14-15 (base agrees except Cows→"Cows & Highland Cattle") | ✅ done — Highland Cattle resolved (folded into Cows, not a separate animal) |

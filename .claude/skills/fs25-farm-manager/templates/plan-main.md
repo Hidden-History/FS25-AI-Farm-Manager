@@ -3,7 +3,7 @@ class: register
 load: B
 owns: "this farm's single living plan — the current-focus narrative plus the standing directives (open, paused, recently-closed) it is built from"
 # cap_lines/cap_kb: sized from ONE measured live session (294 ln / 21,213 B = 72.2 B/line,
-# Montana4X_Farm_Manager, session_count 1, 2026-08-15) -- growth rate across sessions is
+# the developer's own test farm, session_count 1, 2026-08-15) -- growth rate across sessions is
 # UNMEASURED, this is a judgement, not a derivation. cap_kb is set >= cap_lines x measured
 # B/line so the byte cap never silently binds ahead of the line cap. cap_lines kept lower
 # than friction-log.md's: this is a rewritten-in-place register, not an OPEN-only
@@ -29,6 +29,11 @@ plan-behind-the-plan to fall out of sync with._
 
 _Empty to start. The first briefing and the first decisions fill it; until then this is shape,
 not content._
+
+_The per-field crop plan — the next crop and plant window for each owned field — is **not** kept
+here. It lives in `state/field-plan.md` (written only by `scripts/record_field_plan.py`; format
+`references/field-plan-format.md`). This file points to it and keeps the directives; do not
+restate field rows here, or two copies will drift._
 
 ## Current focus
 

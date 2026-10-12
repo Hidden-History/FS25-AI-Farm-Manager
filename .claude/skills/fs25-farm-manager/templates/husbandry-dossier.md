@@ -25,7 +25,7 @@ output accumulated are the barn's own container fill state — `read_placeables.
 carries no husbandry section, so run `read_livestock.py` on its own for that half. All of it
 changes between sessions and is answered authoritatively every session; this file does **not**
 carry those numbers: a cached copy goes stale the moment it's written and reads as current when
-it isn't (friction-log F-117, F-106). A "current state"
+it isn't. A "current state"
 figure written here is an error in the file, not this session's answer.
 
 ## Durable facts (the reason this file exists)

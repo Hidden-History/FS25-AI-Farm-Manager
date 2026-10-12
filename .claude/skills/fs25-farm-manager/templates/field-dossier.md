@@ -14,16 +14,16 @@ parity_spec:
 
 # Field {{FIELD_ID}}
 
-**Size / notes:** {{SIZE_OR_MAP_NOTES — durable; a field's size only changes on a plow-merge, which is itself a History entry}}
-**Last ownership re-verified:** {{DATE — dates the anchor so a session knows whether "we own this" is this morning's fact or three sessions old (F-106); the ownership list itself lives in config.json, not here}}
+**Size / notes:** {{SIZE_OR_MAP_NOTES — an ordinary field starts this line with `Single field — not merged.` and then any durable size or map note; a merged field is written only by `record_field_merges.py`. A field's size only changes on a plow-merge, which is itself a History entry}}
+**Last ownership re-verified:** {{DATE — dates the anchor so a session knows whether "we own this" is this morning's fact or three sessions old; the ownership list itself lives in config.json, not here}}
 
 ## Read live — don't trust a cached figure here
 
 Crop, growth state, ground type, weeds, lime/spray/water levels — all of it changes between
 sessions and all of it is answered authoritatively by `read_fields.py` / `farm_snapshot.py`
 every session. This file does **not** carry those numbers: a cached copy goes stale the moment
-it's written and reads as current when it isn't (friction-log F-117 read `HARVEST_READY` on two
-already-harvested fields; F-106 nearly missed a land purchase off a stale count). If you find a
+it's written and reads as current when it isn't (a past session read `HARVEST_READY` on two
+already-harvested fields; another nearly missed a land purchase off a stale count). If you find a
 "current state" figure written into this file, treat it as an error in the file, not this
 session's answer.
 

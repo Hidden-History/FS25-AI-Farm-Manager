@@ -17,7 +17,7 @@ python3 ".claude/skills/fs25-farm-manager/scripts/check_sanctum_freshness.py" "<
 It probes the handful of current-state claims a sanctum legitimately makes (the interest rate,
 owned land, the offset, directive premises) and fails when the save contradicts one. **Fix what it
 flags before briefing on it** — you are about to speak in the creed's voice, and a stale creed
-briefs the player on a farm that no longer exists (F-028). An `unverifiable` verdict is NOT a
+briefs the player on a farm that no longer exists. An `unverifiable` verdict is NOT a
 pass; read it.
 
 **Migrate the sanctum forward if the mod restructured it.** A mod upgrade can change the
@@ -50,8 +50,68 @@ nothing is lost, then advances the `sanctum_schema_version` marker. Read the JSO
 ## Then — take delivery. You do not assemble THE CACHE's view yourself
 
 ```bash
-python3 ".claude/skills/fs25-farm-manager/scripts/read_state.py" --config sanctum/config.json
+python3 ".claude/skills/fs25-farm-manager/scripts/refresh_state.py" session-start --config sanctum/config.json
 ```
+
+**One call, three documents, and it refreshes nothing.** `session-start` drives `read_state.py`,
+`farm_snapshot.py` and `read_game_log.py` — the three reads that are **99.6% of this step's token
+cost** — and renders them under `aggregate_render.py`'s published size rule (`MAX_INLINE_ITEMS = 5`,
+**a pointer, never a truncation**), applied at every depth. Measured on a real save 2026-09-09:
+**230,422 tokens → 60,870, a 73.6% cut.** ⚠ The *ratio* is farm-dependent — the dominant terms are
+the mod inventory and the vehicle list, so a farm with fewer of either sees a smaller cut. They
+arrive at:
+
+| What you used to run | Where it is now |
+|---|---|
+| `read_state.py` | `documents.read_state.document` |
+| `farm_snapshot.py` | `documents.farm_snapshot.document` |
+| `read_game_log.py` | `documents.read_game_log.document` |
+
+Every path named further down this step is relative to those roots — so `derived` is at
+`documents.read_state.document.derived`, and a domain's figures at
+`documents.read_state.document.aggregate.domains.<domain>.sections`.
+
+**⚠ A LIST YOU MEET AS AN ENVELOPE HAS NOT BEEN CUT — IT HAS BEEN POINTED AT.** `{"_elided": true,
+"item_count": 122, "shown": [...5...], "read_the_rest_at": ...}` means the farm has **122**, not 5.
+**Report `item_count`, never `len(shown)`** — do not infer the remainder and do not describe the five
+as though they were all of them. **`read_the_rest_at` is always a command. When the answer needs
+members past the fifth, run it** — a herd, a field, a production point you did not read is not one
+the farm lacks. It has one of two shapes, and both stay on the gate:
+
+- **`python3 '…/read_state.py' --config '…' --list <domain>.<section>.<key>`** — run it exactly as
+  printed. It re-runs every gate and prints `{list, domain_status, item_count, items}`: `items` is
+  the whole list.
+- **`python3 '…' :: ["aggregate", "domains", …]`** — written by this call. Run the part before
+  ` :: ` exactly as printed; the rest of the list is at the JSON array of path segments after it
+  (keys and list indices — walk it, never re-split it on dots).
+
+**Never open a cache file directly** — `read_state.py` is the only way the cache is read (below).
+
+**Signals are never elided by this call — in the document as read.** An elision is always *flagged* — `_elided`, a true `item_count`, a
+pointer — but the envelope alone cannot tell you **what** went behind the pointer, so you could not
+distinguish 117 routine rows from a dropped `blocked_by`. That is why every `status`, `error`,
+`calibration_needed` and `blocked_by` in each document **as read** is preserved verbatim and
+re-resolved in the emitted document *before it is printed*; one that lands inside an elided list
+member is lifted onto that envelope as `elided_signals`, carrying its original `json_path`. A signal that could not be re-found is `{"error": "SIGNAL DROPPED: ..."}` and
+**no document at all** — so the four-signal rule below still binds, unchanged, and still has everything
+it needs to bind on.
+
+⚠ **The limit, stated where you meet the promise.** A list that was *already* an envelope when
+`read_state.py` printed it — the `--list` form above — lost its members 6+ before this call saw
+the document, so a signal in one of them is not in the document as read and **cannot** be lifted: such
+an envelope carries no `elided_signals`; run its `--list` command to read them. The document says so itself, in
+`signal_preservation.limit`, and counts those lists in `signal_preservation.envelopes_elided_upstream`.
+
+**Where a refusal lands.** When the cache gate refuses, its words arrive at the **top-level `error`**
+(with `error_source` naming where they came from) as well as inside `documents.read_state.document`;
+a refusal of this call's own is a top-level `error` with no documents at all. So every refusal is at
+the top-level `error` — read that key. The other two documents' in-band errors are degradations, in
+`documents_degraded`.
+
+**⛔ THIS CALL DOES NOT FINISH THE STEP.** It deliberately does **not** run
+`check_sanctum_freshness.py` (above), `sanctum_maintain.py migrate` (above) or `check_fleet_alerts.py`
+(below) — the first gates the briefing and the other two **write**. The document names all three in
+`this_call_does_not_replace`; run them as this step says.
 
 **This step runs none of the domain parsers itself to build the cached view.** `read_state.py` is
 the cache gate and the only way the CACHE is read; verification is inseparable from that read. Your
@@ -62,10 +122,9 @@ to hold that state to a contract.**
 
 **The live position — cash, loan, owned land, fleet — is the one named exception, and it comes from
 `farm_snapshot.py`, not from hand-picking fields out of the cache above** (s1-orient.md: *"the live
-position arrives in S2 and nowhere else"*):
-```bash
-python3 ".claude/skills/fs25-farm-manager/scripts/farm_snapshot.py" "<savegame_path>" --farm-id <config.farm_id>
-```
+position arrives in S2 and nowhere else"*). It is already in hand, at
+`documents.farm_snapshot.document` — `session-start` ran it above; do **not** run it again.
+
 This is not an exception to "you do not assemble state" — `farm_snapshot.py` is itself a single,
 already-vetted composer with its own never-imply-false-by-omission contract (every section states
 its own `status`; a missing/errored source is a visible `unavailable`, never a silent gap), read the
@@ -114,6 +173,36 @@ carries the per-section signals rule ① above asks you to check. Open the domai
 telling the player what it has or lacks — the verification entry was never the place that answer
 could live.
 
+**⛔ `derived` is a TOP-LEVEL SIBLING of `aggregate`, not a path inside it.** The path named above is
+where the *cached domains'* own figures render; it is **not** the whole of the farm figures in this
+document. `read_state.py` prints `derived` beside `aggregate` on both of its emit paths, and it holds two
+blocks: `production_input_demand` — the input-demand join (`derive_production_demand`): per
+production line, per input fill type, the burn rate and the hours of stock left — and
+`owned_land_crop_state` — the fresh-crop-state join (`derive_owned_land_crop_state`): which owned
+fields are ready, growing, harvested, dead, bare (`no_crop`), or in an unknown crop state — the
+buckets sum to `owned_field_count` — re-derived from the verified cache on every read. **A Cyrus who looks only under `aggregate` finds no demand or crop-state section and
+correctly concludes there is nothing to report — about the wrong subtree.** Open `derived` as well.
+
+**A rate you work out yourself from two readings is not in that document, and has its own rule.**
+`hours_to_empty` and the other `derived` figures come from the game's recipes; a burn rate or
+"days of cover" built by comparing two saves (or two cache generations) does not, and must carry
+its window in game time and the "a delivery or refill inside this window would change it" sentence
+— or be withheld — as `references/what-we-cannot-know.md` § "A rate, or \"days of cover\", built
+from two saves" sets out. Prefer the game's own rate whenever one exists.
+
+**It is a section in its own right, and rule ① applies to it as one.** It states its own `status` and
+carries its own currency marks — `source_domains`, `source_freshness_check`, and a
+`staleness_warning` when one is owed — because the top-level `freshness_check` is collapsed across
+every domain in the run and says nothing about which sources *this* section rested on. **Never infer
+its currency from a neighbour.** Its `status` takes more values than `ok`/`stale`, and they are not
+interchangeable: `unverified` (a source's currency was never established), `unavailable` (the join
+did not run, so there are no figures to distrust), and `unknown_by_design` with `empty_means: "you
+own no production points"` — a farm with no productions, **not** an unreadable recipe graph. Where a
+downgrade fired, `status_before_staleness_mark` holds what the body said before it. **The section is
+never absent and never empty**: a line with no matching recipe, an input with no stock row, and a
+rate whose definitions disagree all arrive as rows that say so and carry their reason — reported,
+never dropped.
+
 **③ A `blocked_by` marker is NOT an error — and its absence of an error does NOT make it
 trustworthy.** A block records that a read is **wrong**, which is not the same as a read that
 **failed**, and not the same as figures disagreeing. It will arrive with no `error` key at all, so
@@ -145,13 +234,23 @@ the ones that verified clean — `stale`, with a reason. Use it only when the pl
 the view is not current and has asked for it anyway. **A half-marked view invites trusting the
 unmarked half**, which is precisely why the flag marks all of it.
 
+## Then — is the merged-fields question still open?
+
+If `field_merge_assessment.pending` is `true` in the `session-start` document, this farm was never
+asked about merged fields and **its FIELDS tab is refused on every refresh**. Ask O3's merged-fields
+question now (`references/onboarding-steps/o3-profile.md`) and record the answer with
+`record_field_merges.py` — do not let a second session skip it.
+
 ## Then — what the game itself recorded
 
 The parsers read the save; the engine log records what the save never will (a mod that failed to
-load, a crash last session):
-```bash
-python3 ".claude/skills/fs25-farm-manager/scripts/read_game_log.py" "<savegame_path from config.json>"
-```
+load, a crash last session). It is already in hand, at `documents.read_game_log.document` —
+`session-start` ran it above; do **not** run it again.
+
+**Its `mods_available` list is the single largest thing in this step (measured at 462 mods, 26,539 tokens, on one heavily modded farm) and this
+step tells you not to surface it** — which is exactly why it now arrives as an envelope. `item_count`
+is the honest mod count; the names are one command away if a mod-load failure ever needs chasing.
+
 Surface it only when it bears on the farm: any `errors` (especially a **mod-load failure** — a mod
 they think is running that silently didn't), or `log_complete: false`, which means the last run
 **crashed, was killed, or is still open** — worth a plain word, not a caveat dump. **Zero errors is
@@ -160,8 +259,10 @@ never "nothing went wrong."**
 
 ## And catch up on fuel/repair alerts
 
-House rule set 2026-07-24 — see `sanctum/config.json` → `house_rules.fuel_and_repair_alerts`. Run
-this once here so anything that crossed a threshold while the game was closed gets pushed as an
+Fuel and repair alerts are on for every farm. Run this every session, unless the player turned them
+off: the script reads `fleet_alerts_enabled` in `sanctum/config.json` itself and prints
+`"status": "disabled"` if it is `false`. A config with no such key means on — never skip the run for
+a missing key. Run this once here so anything that crossed a threshold while the game was closed gets pushed as an
 in-game card now (it pre-sends and shows when the player next loads in):
 ```bash
 python3 ".claude/skills/fs25-farm-manager/scripts/check_fleet_alerts.py" "<savegame_path>" --config sanctum/config.json

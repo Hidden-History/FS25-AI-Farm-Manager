@@ -368,14 +368,60 @@ def probe_directive_premises(sg, sanctum, farm_id=1):
 
     problems = []
     # Only claims that are checkable from the fleet's own runtime state (F-026: never
-    # infer a machine's role from its name).
-    for spec, phrase in (("sower", r"no seeder"), ("cultivator", r"no tillage"),
-                         ("plow", r"no tillage"), ("sprayer", r"no sprayer")):
+    # infer a machine's role from its name). F9a: `sower`, `cultivator` and
+    # `sprayer` are gone -- no specialisation persists under `sower`, and
+    # Cultivator/Sprayer have no saveToXMLFile, so those tags never appear in a
+    # real vehicles.xml and the probes could never fire. `plow` persists always.
+    for spec, phrase in (("plow", r"no tillage"),):
         if spec in specs and re.search(phrase, d, re.I):
             problems.append(f"plans/PLAN.md says {phrase!r} but the fleet has a {spec}")
     if problems:
         return "stale", "; ".join(sorted(set(problems)))
     return "fresh", "no directive premise contradicted by the fleet"
+
+
+def probe_field_plan(sg, sanctum, farm_id=1):
+    """The per-field crop plan (state/field-plan.md) against the save and the merge table.
+
+    `farm_id` is accepted for the probe signature but NOT used: ownership needs the slow
+    farmland-raster read this briefing-time check avoids. Ownership is enforced where the row is
+    written (record_field_plan.py), so a row for an unowned field cannot enter the file.
+
+    STALE: a row names a field the save's map does not have, or a parcel of a completed
+    merge instead of its canonical id (the tab would show it on no field). UNVERIFIABLE:
+    no plan file, or one that does not parse, or no readable fields.xml -- never fresh.
+    An empty plan is FRESH: nothing planned is a true statement about the plan."""
+    plan = run_parser("read_field_plan.py", [sanctum])
+    if not plan:
+        return "unverifiable", "read_field_plan.py produced no readable output"
+    if "error" in plan:
+        return "unverifiable", plan["error"]
+    root_path = os.path.join(sg, "fields.xml")
+    try:
+        root = ET.parse(root_path).getroot()
+    except (OSError, ET.ParseError) as e:
+        return "unverifiable", f"fields.xml could not be read: {e}"
+    known = {int(f.get("id")) for f in root.iter("field") if (f.get("id") or "").isdigit()}
+    if not known:
+        return "unverifiable", "fields.xml lists no <field> ids, so no plan row can be checked"
+    merges = run_parser("read_field_merges.py", [os.path.join(sanctum, "state", "field-dossiers")])
+    if not merges or "error" in merges:
+        return "unverifiable", ("the merge table cannot be read, so a row's canonical id "
+                                f"cannot be checked: {(merges or {}).get('error', 'no output')}")
+    canonical_of = {int(sub): int(canon) for canon, subs in (merges.get("completed") or {}).items()
+                    for sub in subs}
+    rows = {int(k) for k in plan["rows"]}
+    unknown = sorted(rows - known)
+    parcels = sorted(r for r in rows if canonical_of.get(r, r) != r)
+    problems = []
+    if unknown:
+        problems.append(f"plan rows for field(s) {unknown} which this save's map does not have")
+    if parcels:
+        problems.append(f"plan rows for parcel(s) {parcels} of a completed merge; "
+                        "the plan is keyed by the canonical id")
+    if problems:
+        return "stale", "; ".join(problems)
+    return "fresh", (f"{plan['count']} plan row(s), {len(plan['unreviewed'])} not yet reviewed")
 
 
 def main():
@@ -427,6 +473,7 @@ def main():
         ("creed carries no live state", probe_no_live_state_in_creed),
         ("notional offset", lambda sg_, sanctum_: probe_notional_offset(sg_, sanctum_, farm_id)),
         ("directive premises", lambda sg_, sanctum_: probe_directive_premises(sg_, sanctum_, farm_id)),
+        ("field plan", lambda sg_, sanctum_: probe_field_plan(sg_, sanctum_, farm_id)),
     ]
 
     stale, unverifiable, fresh = [], [], []
@@ -467,7 +514,7 @@ def main():
 
     if unverifiable:
         print("\n  COULD NOT CHECK -- this is NOT a pass. An unchecked claim is unknown,")
-        print("  not fine. That distinction is the whole point (F-001).")
+        print("  not fine. That distinction is the whole point.")
         for n, d in unverifiable:
             print(f"    [?] {n}: {d}")
 
@@ -479,7 +526,7 @@ def main():
             print(f"\n  {n.upper()}\n    {d}")
         print("\n  Fix the SANCTUM, not the probe -- the probe just read the save.")
         print("  And ask whether the claim should live in a permanent file at all: if it")
-        print("  could be different tomorrow, it belongs in farm_snapshot.py (F-028).")
+        print("  could be different tomorrow, it belongs in farm_snapshot.py.")
 
     print("\n" + "-" * 74)
     print(f"  {len(fresh)} fresh · {len(stale)} stale · {len(unverifiable)} unverifiable")

@@ -36,6 +36,17 @@ gets dropped because its input was blocked — a block is escalated *as a block*
 prevents. Consult `identity/decision-making.md` for how this player wants to be presented with a
 decision; that file, not this one, sets the shape.
 
+## The crop plan is shown every session until it is reviewed
+
+D-02 keeps `sanctum/state/field-plan.md` current on its own (see its row in the register). What
+reaches the player from it is **what is unreviewed and what is missing**: the rows with
+`reviewed: no`, each put as a decision with a request for his approval, and every owned field that
+has no row yet, named as a gap with the reason. Mark a row reviewed with
+`record_field_plan.py sanctum --reviewed <FIELD>` only after the player has said yes to it — never
+on your own say, unless `identity/decision-making.md` carries his instruction not to ask (D-02
+step 4; no such line means ask). A reviewed row is not asked again unless you change it. Do not drop the plan from the briefing because the farm "has crops in every
+field": that was the old answer and it is not one.
+
 ## Compose the briefing
 
 Use `templates/session-start-briefing.md` as the **shape**, but **write it in your own voice as

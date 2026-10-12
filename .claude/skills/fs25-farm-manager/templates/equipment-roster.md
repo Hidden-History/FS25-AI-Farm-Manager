@@ -20,7 +20,7 @@ parity_spec:
 **Operating time, wear/damage, age, and fuel are LIVE** — `read_vehicles.py` answers them fresh
 every session. This file's own list of owned machines is only touched when equipment is
 bought/sold/repaired, so a **Condition** row can sit unrevised session after session while the
-real numbers drift underneath it (the F-117 stale-but-confident shape). **A Condition row
+real numbers drift underneath it (the stale-but-confident shape). **A Condition row
 without its own `Last confirmed` date is not this session's answer** — re-run `read_vehicles.py`
 before trusting a number in the Condition table below that's more than a session or two old.
 
@@ -85,7 +85,7 @@ writing any condition line:
 
 Operating time, wear, age, and fuel are **live** — `read_vehicles.py` answers them fresh every
 session, and this file is only touched when equipment is bought/sold/repaired, so a Condition
-row can sit unrevised while the real numbers drift (the F-117 stale-but-confident shape). **A
+row can sit unrevised while the real numbers drift (the stale-but-confident shape). **A
 Condition row without its own `Last confirmed` date is not this session's answer** — re-run
 `read_vehicles.py` before trusting a number here that's more than a session or two old.
 

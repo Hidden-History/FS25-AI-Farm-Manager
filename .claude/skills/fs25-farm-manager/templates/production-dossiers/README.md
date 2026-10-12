@@ -15,7 +15,7 @@ efficiency — fill state is answered fresh every session by `read_placeables.py
 `read_productions.py`, run on its own — `farm_snapshot.py` carries no
 production-line section. A dossier holds durable facts (typical consumption rate, best
 sell point, a chain quirk) and an append-only History table, never a cached
-"current state" (friction-log F-117).
+"current state".
 
 **History sidecars:** when a dossier's History table would push it over cap, the
 oldest rows relocate verbatim into a sibling `production-{{id}}-history.md` in this

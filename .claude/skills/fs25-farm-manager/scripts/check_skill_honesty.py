@@ -66,6 +66,14 @@ SCRIPTS_DIR = os.path.join(SKILL_DIR, "scripts")
 REFERENCES_DIR = os.path.join(SKILL_DIR, "references")
 SKILL_MD = os.path.join(SKILL_DIR, "SKILL.md")
 
+# Imported by path, not by cwd. tests/test_skill_doc_parity.py loads THIS module
+# with importlib from an absolute path, so sys.path[0] is the caller's directory
+# rather than scripts/ -- a bare import would work when run by hand and fail
+# inside the build gate, which is the half that matters.
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
+import state_inventory
+
 
 def run_parser(script, args):
     """Run a parser and return its parsed JSON, or None if it failed."""
@@ -216,7 +224,7 @@ def probe_digest_is_a_digest(sg):
     return False, (f"digest {digest:,}B is {ratio:.1%} of the unabridged dump ({full:,}B), over "
                    f"the {CEILING:.0%} ceiling. A briefing that carries this much of everything "
                    f"has stopped choosing. Trim to what is ACTIONABLE and gate the rest behind "
-                   f"--verbose (the pattern collect_state.py proved -- F-006).")
+                   f"--verbose (the pattern collect_state.py proved).")
 
 
 def probe_wired_inventory(sg):
@@ -550,29 +558,251 @@ def _mentioned(name, skill_text):
     return re.search(pattern, skill_text) is not None
 
 
+def shipped_scripts():
+    """Every script this skill ships, as the filesystem has it.
+
+    Scope comes from `state_inventory.IGNORED_SCRIPTS` rather than a second
+    hand-written list, because that module declares the exclusions precisely so
+    "the two halves of the parity gate cannot disagree about what is in scope."
+    """
+    return sorted(
+        f for f in os.listdir(SCRIPTS_DIR)
+        if f.endswith(".py") and f not in state_inventory.IGNORED_SCRIPTS)
+
+
+def rendered_inventory():
+    """The script inventory AS IT IS ACTUALLY EMITTED -> (text, error).
+
+    ⭐ THE DOCUMENT, NEVER THE REGISTRY BEHIND IT. This gate used to ask
+    `state_inventory.undocumented_scripts()`, which certified "this string is in
+    a tuple" while the failure message claimed "a session will never surface
+    it" -- two different properties, and the message named the one that was not
+    checked. Importing SETS passes even when the renderer prints nothing and no
+    reader could ever receive the listing, so the one path a script's
+    reachability actually travels was the one path unasserted.
+
+    So the entry point is RUN and its stdout is what gets searched, mirroring
+    tests/test_f125_skill_honesty_wired.py. A broken renderer, a non-zero exit
+    or empty output is a FAILURE here, never a quiet pass: an inventory nobody
+    receives is exactly the orphaning defect this check exists to catch.
+
+    ⚠ `registry_defects()` still consults the registry directly, deliberately.
+    It answers a different question -- does SETS name a file twice, or name a
+    file that does not exist -- which the rendered text cannot answer, because a
+    name absent from disk is still happily printed.
+    """
+    proc = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "refresh_state.py"), "--help"],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None, (
+            "refresh_state.py --help exited %d, so the generated inventory "
+            "cannot be produced AT ALL and every shipped script is unreachable "
+            "through it: %s" % (proc.returncode, (proc.stderr or "")[:400]))
+    if not proc.stdout.strip():
+        return None, (
+            "refresh_state.py --help printed NOTHING. An empty inventory is a "
+            "broken renderer, never a clean pass.")
+    return proc.stdout, None
+
+
+def reference_docs():
+    """Every shipped reference, RECURSIVELY, relative to references/.
+
+    ⛔ THE OLD WALK WAS `os.listdir(REFERENCES_DIR)` -- one level deep. It
+    checked 13 files and silently ignored 29, every one of them nested:
+    session-steps/, onboarding-steps/, closeout-steps/, dev-steps/,
+    game-guide/. Those are the files a workflow actually loads, so the gate
+    against orphaned references was blind to precisely the references most
+    likely to be orphaned. A check that covers less than it appears to is the
+    same liability as a test that cannot fail.
+    """
+    out = []
+    if not os.path.isdir(REFERENCES_DIR):
+        return out
+    for root, _dirs, files in os.walk(REFERENCES_DIR):
+        for f in files:
+            if f.endswith(".md"):
+                rel = os.path.relpath(os.path.join(root, f), REFERENCES_DIR)
+                out.append(rel.replace(os.sep, "/"))
+    return sorted(out)
+
+
+def doc_corpus(skill_text):
+    """Every document a session can be handed -> {relative path: text}.
+
+    ⚠ WHY THE CORPUS IS WIDER THAN SKILL.md, AND WHY THAT IS NOT A WEAKENING.
+    The old check demanded a reference be named in SKILL.md itself. That is
+    false as a model of how this skill is read: SKILL.md points at
+    workflow-*.md, those point at their step files, and templates/ point at
+    game-guide/. Measured: 8 game-guide references are cited only from
+    templates/, so a SKILL.md-only rule applied to all 42 files would have
+    produced 8 false REDs against files that are plainly reachable -- and a
+    gate that cries wolf gets deleted.
+
+    The property asserted is the one the historical defect actually had:
+    reading-the-save.md and farm_snapshot.py sat shipped with ZERO mentions
+    anywhere. So: named by no shipped document at all == orphan. Self-mentions
+    do not count, or a file could vouch for itself.
+    """
+    corpus = {"SKILL.md": skill_text}
+    for sub in ("references", "templates"):
+        base = os.path.join(SKILL_DIR, sub)
+        if not os.path.isdir(base):
+            continue
+        for root, _dirs, files in os.walk(base):
+            for f in files:
+                if not f.endswith(".md"):
+                    continue
+                path = os.path.join(root, f)
+                key = os.path.relpath(path, SKILL_DIR).replace(os.sep, "/")
+                try:
+                    corpus[key] = open(path, encoding="utf-8").read()
+                except OSError as exc:
+                    corpus[key] = ""
+                    print("WARN: could not read %s: %s" % (key, exc),
+                          file=sys.stderr)
+    return corpus
+
+
 def check_reachability(skill_text):
-    """Every script and reference must be reachable from SKILL.md, and every path
-    SKILL.md names must exist. Half this skill was orphaned -- reading-the-save.md
-    and farm_snapshot.py had ZERO mentions -- so a session would never load them."""
+    """Every script and reference must be reachable, and every path SKILL.md
+    names must exist. Half this skill was orphaned once -- reading-the-save.md
+    and farm_snapshot.py had ZERO mentions -- so a session would never load them.
+
+    ⚠ WHERE "REACHABLE" MEANS CHANGED FOR SCRIPTS (plan item 12), AND WHY.
+    SKILL.md used to carry a seven-set table naming 44 of the 45 shipped
+    scripts. DEC-049 (3) and DEC-131 took it out on purpose: the generator fires
+    automatically and the manager READS GENERATED ARTIFACTS rather than running
+    anything. Stripping that table breaks this gate BY DESIGN, so the gate moved
+    with the inventory instead of being deleted with it.
+
+    ⛔ A SKILL.md MENTION NO LONGER SATISFIES A SCRIPT, deliberately. Accepting
+    either source would let hand-maintained prose satisfy the gate again -- and
+    prose drifting from the tree is the entire defect item 12 removed.
+
+    ⭐ BUT THE GATE ASSERTS THE EMITTED DOCUMENT, NOT THE REGISTRY. Re-pointing
+    it at `state_inventory.SETS` changed the certified property from "a session
+    will encounter this script" to "this string is in a tuple", while the
+    failure message went on claiming the first. Those come apart the moment the
+    renderer breaks: SETS can be perfect and `refresh_state.py --help` print
+    nothing, and every script is then unreachable with the gate green. So
+    reachability is decided by SEARCHING WHAT THE ENTRY POINT PRINTS. Same
+    discipline as tests/test_f125_skill_honesty_wired.py.
+
+    ⚠ REFERENCES CHANGED TOO, in scope rather than in kind. The walk was one
+    level deep -- 13 files checked, 29 nested ones silently skipped -- and
+    demanded a mention in SKILL.md specifically, which is not how this skill is
+    read (SKILL.md -> workflow-*.md -> step files; templates/ -> game-guide/).
+    Now: every reference recursively, orphaned when NO shipped document names
+    it. See reference_docs() and doc_corpus().
+    """
     failures, notes = [], []
 
-    ignore_scripts = {"__init__.py", "xml_utils.py", "check_skill_honesty.py"}
-    for f in sorted(os.listdir(SCRIPTS_DIR)):
-        if not f.endswith(".py") or f in ignore_scripts:
-            continue
-        if not _mentioned(f, skill_text):
-            failures.append(f"scripts/{f} is never mentioned in SKILL.md -- a session will never run it")
-        else:
-            notes.append(f"  [ok]   scripts/{f} reachable")
+    for f in state_inventory.registry_defects():
+        failures.append(f)
 
-    if os.path.isdir(REFERENCES_DIR):
-        for f in sorted(os.listdir(REFERENCES_DIR)):
-            if not f.endswith(".md"):
-                continue
-            if not _mentioned(f, skill_text):
-                failures.append(f"references/{f} is never mentioned in SKILL.md -- a session will never load it")
-            else:
-                notes.append(f"  [ok]   references/{f} reachable")
+    # ⭐ TWO ANSWERS, DERIVED INDEPENDENTLY, AND BOTH MUST HOLD.
+    #
+    # The emitted-document check below is the stronger one, but on its own it
+    # can be made vacuous, and the mutation that shows it is not hypothetical:
+    # a render() that GLOBS scripts/ instead of rendering SETS prints every
+    # name on disk unconditionally, so "every script on disk is named in the
+    # output" becomes a tautology and a script no group claims sails through.
+    # Measured -- that mutation left this gate GREEN with only the emitted
+    # check in place. state_inventory's own docstring names the hazard: "a
+    # registry derived by globbing scripts/*.py could never disagree with the
+    # filesystem, and a gate that cannot disagree cannot fail."
+    #
+    # So the hand-written registry is asked SEPARATELY. disk-minus-registry is
+    # the orphaning defect itself; disk-minus-emitted is whether the answer
+    # survives to a reader. One instrument cannot cover both, because the
+    # second is computed FROM the first.
+    unclaimed = set(state_inventory.undocumented_scripts())
+    for f in sorted(unclaimed):
+        failures.append(
+            f"scripts/{f} is on disk but NO state_inventory.SETS group claims "
+            f"it, so nothing documents that it exists -- the orphaning defect "
+            f"itself, whatever the renderer happens to print")
+
+    rendered, render_error = rendered_inventory()
+    if render_error:
+        failures.append(render_error)
+    for f in shipped_scripts():
+        if rendered is None:
+            # One verdict per script, always. Skipping them here would leave
+            # the build-gate half reconciling 0 script properties against 46
+            # derived and reporting a count mismatch -- a true failure wearing
+            # the wrong name. Each script genuinely IS unproven when the
+            # inventory cannot be produced, so say that, once each.
+            if f not in unclaimed:
+                failures.append(
+                    f"scripts/{f} cannot be shown reachable: the generated "
+                    f"inventory could not be produced at all (see above)")
+            continue
+        # ONE DEFECT, ONE LINE. A script the registry does not claim is also
+        # absent from the rendered output -- necessarily, because the output is
+        # generated from the registry. Reporting both would count one fault
+        # twice and leave the totals irreconcilable, which state_inventory's own
+        # registry_defects() docstring calls out as the reason it is kept
+        # separate from undocumented_scripts(). The registry line is the
+        # actionable one; the missing print is its consequence.
+        if f in unclaimed:
+            continue
+        if not _mentioned(f, rendered):
+            failures.append(
+                f"scripts/{f} is named nowhere in the inventory that "
+                f"`refresh_state.py --help` actually PRINTS, so neither the "
+                f"generated inventory nor a session will ever surface it")
+        else:
+            notes.append(
+                f"  [ok]   scripts/{f} named in the emitted inventory")
+
+    ref_docs = reference_docs()
+    corpus = doc_corpus(skill_text)
+    seen_base = {}
+    for rel in ref_docs:
+        seen_base.setdefault(os.path.basename(rel), []).append(rel)
+    for base, rels in sorted(seen_base.items()):
+        if len(rels) > 1:
+            failures.append(
+                "duplicate reference basename: %d files named %s (%s) -- a bare-basename "
+                "citation cannot say which one is meant, so one could satisfy "
+                "this gate on behalf of the other. Rename or cite by path."
+                % (len(rels), base, ", ".join(rels)))
+    for rel in ref_docs:
+        self_key = "references/" + rel
+        names = (rel, os.path.basename(rel), self_key)
+        cited_by = [k for k, text in corpus.items()
+                    if k != self_key and any(_mentioned(n, text) for n in names)]
+        if not cited_by:
+            failures.append(
+                f"references/{rel} is named by NO document this skill ships -- "
+                f"not SKILL.md, not another reference, not a template -- so no "
+                f"session can ever be told to load it")
+        else:
+            notes.append(f"  [ok]   references/{rel} cited by {cited_by[0]}")
+
+    # ⭐ SECTION REFERENCES RESOLVE TOO -- doctrine lists them beside paths
+    # ("every ID, path and section reference resolves"), and only paths were
+    # ever checked. That gap shipped a real defect the same night this gate was
+    # last touched: the commits that deleted SKILL.md's script table left
+    # SKILL.md:208 citing "the `## Data sources` summary table above", pointing
+    # at a heading with zero matches. Nothing caught it, because a heading is
+    # not a path.
+    #
+    # ⚠ THERE ARE ZERO SUCH CITATIONS IN SKILL.md TODAY, so this check cannot
+    # fail against the current file and its teeth rest entirely on the mutation
+    # that re-introduces that exact citation. Recorded here rather than left for
+    # a reader to assume otherwise: a check with no live subject is a guard on
+    # the next edit, not evidence about this one.
+    for m in re.finditer(r"`(#{1,4} [^`\n]+)`", skill_text):
+        cited = m.group(1).strip()
+        if not any(line.strip() == cited for line in skill_text.splitlines()):
+            line = skill_text[:m.start()].count("\n") + 1
+            failures.append(
+                f"SKILL.md:{line} cites the section \"{cited}\", which is not a "
+                f"heading in this file -- a reader sent there finds nothing")
 
     # The class includes '/' so a multi-segment path (references/dev-steps/
     # step-99-x.md) is captured whole, not truncated at the first '/' (H3).

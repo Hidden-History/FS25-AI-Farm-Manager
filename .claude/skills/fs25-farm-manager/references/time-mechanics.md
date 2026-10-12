@@ -42,7 +42,7 @@ Told to us by the player, 2026-07-16. Not derivable from any savegame file.
 ## The real-time conversion — OPEN, and here's why it's hard
 
 **Unresolved.** What's established:
-- `dayTime` = minutes-of-day (0–1440). `playTime` = minutes. Both proven (F-002, F-022).
+- `dayTime` = minutes-of-day (0–1440). `playTime` = minutes. Both proven.
 - At `timeScale 1.0` they advanced by **identical** deltas (+9.408623 vs +9.408630) — which is
   exactly why 1× can never settle it: *real* minutes and *game* minutes are the same thing at
   1×, so the two fields are indistinguishable.
@@ -78,7 +78,7 @@ The test, which needs ×≠1 (baseline captured at ×3: dayTime 650.463745, play
 - **Weather matters when skipping**: hail/rain in the forecast can damage or block work.
 - **Idle in-game days on a leveraged farm are not free, but not the way you'd guess** — loan
   interest is charged once at each **month-end**, on the balance (see `sanctum/identity/creed.md`), not
-  accrued per day (F-124). Skipping days *within* the current month adds no extra interest;
+  accrued per day. Skipping days *within* the current month adds no extra interest;
   the cost only bites if the skip **crosses a month-end** — count month-ends crossed, not days
   skipped, and show that cost rather than assuming a per-day one.
 
@@ -90,4 +90,4 @@ player next opens the map/menu. A save can be arbitrarily stale mid-session with
 and nobody idle.
 
 **Never infer player activity from write patterns.** The lead did exactly that — saw no writes,
-announced "the player has paused", and was wrong; they were farming the whole time (F-023).
+announced "the player has paused", and was wrong; they were farming the whole time.

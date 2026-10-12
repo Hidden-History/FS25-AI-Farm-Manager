@@ -47,4 +47,4 @@ one crop category on the same map (`references/crop-calendar.md`)._
 **Not yet checked:** {{list crops this farm grows that haven't had their grace period confirmed —
 treat as unknown. Before recommending a fast-forward or sleep past a `HARVEST_READY` field, THIS
 file (not memory, not a base-game assumption) answers whether that's safe; if the crop isn't in
-the table yet, treat it as zero grace (fail safe) rather than assuming there's time (F-117).}}
+the table yet, treat it as zero grace (fail safe) rather than assuming there's time.}}

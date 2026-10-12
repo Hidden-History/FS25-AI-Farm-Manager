@@ -1,0 +1,399 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!-- AUTHORITATIVE. English is this mod's fallback, not merely its default:
+     the owner's ruling is "the game language settings determine what
+     language is loaded; if a mod has french, and the user game is set to
+     french, then the french translations we add will be used. The mod
+     should always be in English, with the other languages as secondary."
+     Every other translation_*.xml in this directory must carry EXACTLY this
+     key set (parity enforced by .claude/skills/fs25-farm-manager/tests/
+     test_stage1_l10n_parity.py). Add a key here, add it everywhere. -->
+<l10n>
+    <texts>
+        <text name="fm25_menu_title" text="AI Farm Manager 25" />
+        <text name="fm25_tab_messages" text="Messages" />
+        <text name="fm25_tab_settings" text="Settings" />
+        <text name="fm25_tab_farm" text="Farm" />
+        <text name="fm25_tab_fields" text="Fields" />
+        <!-- ⛔ TWO empty-state lines, worded DIFFERENTLY on purpose, because the
+             two blanks mean opposite things and one string for both would tell
+             the player a lie about one of them.
+             MESSAGES empty is a working feature with nothing to report yet.
+             FIELDS empty is a feature that does not exist yet (Stage 4).
+             ⚠ fm25_fields_empty deliberately does NOT say "no fields": the
+             player almost certainly HAS fields, and reporting our missing
+             feature as their empty farm is absence dressed as data, which is
+             the confusion DEC-001 exists to prevent. It names OUR gap. -->
+        <text name="fm25_messages_empty" text="No messages yet." />
+        <text name="fm25_fields_empty" text="Field reporting is not available yet." />
+        <!-- ===== FIELDS tab (items C1/C2/C3/C5) =========================
+             ⛔ TWO empty-state lines, exactly as PRODUCTIONS carries two.
+             fm25_fields_empty (above) names OUR gap and deliberately does not
+             say "no fields"; fm25_fields_none is the other case — a farm that
+             genuinely owns none. One string for both would put "you own no
+             fields" in front of a man who owns twenty-six. -->
+        <text name="fm25_fields_none" text="You own no fields." />
+        <text name="fm25_field_h_name" text="Field" />
+        <text name="fm25_field_h_area" text="Area (ha)" />
+        <text name="fm25_field_h_owned" text="Owned" />
+        <text name="fm25_field_h_contract" text="Contract" />
+        <text name="fm25_field_yes" text="Yes" />
+        <text name="fm25_field_no" text="No" />
+        <text name="fm25_field_d_crop" text="Crop" />
+        <text name="fm25_field_d_growth" text="Growth stage" />
+        <text name="fm25_field_d_ground" text="Ground" />
+        <text name="fm25_field_no_crop" text="No crop" />
+        <text name="fm25_field_no_contract" text="No contract" />
+        <text name="fm25_ground_none" text="None" />
+        <text name="fm25_ground_stubble_tillage" text="Stubble tillage" />
+        <text name="fm25_ground_cultivated" text="Cultivated" />
+        <text name="fm25_ground_plowed" text="Ploughed" />
+        <text name="fm25_ground_sown" text="Sown" />
+        <text name="fm25_ground_direct_sown" text="Direct sown" />
+        <text name="fm25_ground_ridge" text="Ridged" />
+        <text name="fm25_ground_ridge_sown" text="Ridge sown" />
+        <text name="fm25_ground_planted" text="Planted" />
+        <text name="fm25_ground_roller_lines" text="Roller lines" />
+        <text name="fm25_ground_grass" text="Grass" />
+        <text name="fm25_ground_seedbed" text="Seedbed" />
+        <text name="fm25_ground_rolled_seedbed" text="Rolled seedbed" />
+        <text name="fm25_ground_grass_cut" text="Cut grass" />
+        <text name="fm25_ground_harvest_state" text="Harvest-state ground" />
+        <text name="fm25_ground_harvest_state_other" text="Harvest-state ground (other)" />
+        <text name="fm25_field_d_weeds" text="Weeds" />
+        <!-- ⭐ 0 = NEEDS PLOUGHING and 0 = NEEDS LIME. The labels are phrased as
+             the QUESTION the number answers, so a bare "0" beside "Plough level"
+             cannot be read as "nothing to do". -->
+        <text name="fm25_field_d_plow" text="Plough level (0 = needs ploughing)" />
+        <text name="fm25_field_d_lime" text="Lime level (0 = needs lime)" />
+        <!-- ⛔ A merged row reports the AGREEING value, and reports disagreement
+             AS DISAGREEMENT — never by picking the canonical sub-id's answer.
+             The house rule says a merged field carries exactly one crop across
+             all its sub-parcels, so a disagreement means something. -->
+        <text name="fm25_field_differs" text="differs —" />
+        <text name="fm25_field_d_merged" text="Merge" />
+        <text name="fm25_field_merged_fmt" text="Sums %d savegame parcels: %s" />
+        <!-- ⛔ OUR GAP, NAMED — never `unknown`. `unknown` means "we asked and
+             could not find out"; here we CAN ask, because the rotation directive
+             is authored and sits in the owner's plan. What is missing is that we
+             never built the pipe, and blaming the data for our omission is the
+             confusion DEC-001 exists to prevent. Same register as
+             fm25_fields_empty above. -->
+        <text name="fm25_field_d_planned" text="Planned next crop" />
+        <text name="fm25_field_planned_unavailable" text="Not available yet." />
+        <!-- ⛔ NOT "No dossier". That is a correct answer for the 97 fields with
+             none — but no dossier content crosses for ANY field yet, so printing
+             it on the seven that DO have one would be false about them. Naming
+             the missing transport is true of all of them. -->
+        <text name="fm25_field_d_notes" text="Field notes" />
+        <text name="fm25_field_notes_unavailable" text="Not available yet." />
+        <!-- Item 3 (SPEC-livetest-fixes-2026-10-01): the four plan states and three notes states.
+             `none` is a statement about the FIELD; `unknown` (…_unknown_fmt) is about OUR reach and
+             carries its reason. "Not available yet." above survives only for a document with no
+             plan/notes element at all (an older emitter). English text in the four non-English files,
+             as for every other FIELDS string. -->
+        <text name="fm25_field_plan_reviewed_fmt" text="%s, plant %s (reviewed)" />
+        <text name="fm25_field_plan_unreviewed_fmt" text="%s, plant %s (not yet reviewed with you)" />
+        <text name="fm25_field_plan_none" text="No next crop planned yet" />
+        <text name="fm25_field_plan_unknown_fmt" text="Plan could not be read (%s)" />
+        <text name="fm25_field_notes_none" text="No notes for this field" />
+        <text name="fm25_field_notes_unknown_fmt" text="Notes could not be read (%s)" />
+        <!-- ===== PRODUCTIONS tab (SPEC Block D) =========================
+             ⛔ TWO empty-state lines again, and for the SAME reason FIELDS and
+             MESSAGES carry two: the blanks mean opposite things.
+             fm25_productions_none is a statement about the PLAYER'S FARM — he
+             owns no production buildings, which is a real answer.
+             fm25_productions_unavailable names OUR GAP — the document was never
+             published, could not be read, or belongs to another savegame. One
+             string for both would tell the player he owns nothing when what
+             actually happened is that we could not ask. -->
+        <text name="fm25_tab_productions" text="Productions" />
+        <text name="fm25_productions_none" text="You own no production buildings." />
+        <text name="fm25_productions_unavailable" text="Production reporting is not available yet." />
+        <!-- The second as-of stamp. Definition data (recipes, storage sizes)
+             comes from a cache regenerated only by a full install-tree walk, so
+             it can be WEEKS older than the savegame read beside it. Rendering
+             one stamp would let the older half borrow the fresher half's
+             credibility. -->
+        <text name="fm25_prod_defsasof" text="definitions as of" />
+        <text name="fm25_prod_header_point" text="Production" />
+        <text name="fm25_prod_header_runway" text="Runway (h)" />
+        <text name="fm25_prod_header_inputs" text="Input" />
+        <text name="fm25_prod_header_held" text="Held (L)" />
+        <text name="fm25_prod_header_burn" text="Burn (L/h)" />
+        <text name="fm25_prod_header_lines" text="Production lines" />
+        <text name="fm25_prod_header_enabled" text="Enabled" />
+        <text name="fm25_prod_header_output" text="Output (L/h)" />
+        <text name="fm25_prod_header_limiting" text="Limiting input" />
+        <text name="fm25_prod_header_outputs" text="Output" />
+        <text name="fm25_prod_header_capacity" text="Capacity (L)" />
+        <text name="fm25_prod_header_fill" text="Fill" />
+        <!-- ⛔ On / Off, NEVER Running / Idle. These render `is_enabled`, read
+             from placeables.xml: "is this line switched on". "Is it producing
+             right now" is a different fact and is killed by owner ruling; a
+             lane copying another mod's STATUS column will bring Running/Idle
+             across, and that is the line to refuse. -->
+        <text name="fm25_prod_on" text="On" />
+        <text name="fm25_prod_off" text="Off" />
+        <text name="fm25_header_when" text="When" />
+        <text name="fm25_header_from" text="From" />
+        <text name="fm25_header_message" text="Message" />
+        <text name="fm25_header_status" text="Status" />
+        <text name="fm25_settings_allowed" text="Allowed values" />
+        <!-- Header balance chip (the fs25_shopMoneyBox mirrored from
+             FS25_FarmOperationsDashboard). The LABEL is ours; the VALUE
+             beside it is formatted by the engine at runtime, so no
+             currency symbol or number belongs in this string. -->
+        <text name="fm25_balance" text="Balance" />
+        <!-- Contract keys, confirmed by dev-fm-core via team-lead 2026-09-01:
+             getMessageLog()'s statusText field is one of these six l10n KEYS
+             (core cannot call g_i18n:getText itself; zero engine calls by
+             design), resolved by InGameMenuFarmManager25.lua before display. -->
+        <text name="fm25_status_live" text="Live" />
+        <text name="fm25_status_answered" text="Answered" />
+        <text name="fm25_status_dismissed" text="Dismissed" />
+        <text name="fm25_status_expired" text="Expired" />
+        <text name="fm25_status_evicted" text="Evicted" />
+        <!-- Marks a card shown through the game's native-notification
+             fallback during a render failure, then retained: the record of
+             what went wrong and what the player saw anyway. -->
+        <text name="fm25_status_native" text="Native fallback" />
+
+        <!-- SETTINGS_ROWS l10nName keys (10), confirmed by dev-fm-core via
+             team-lead 2026-09-01, in SETTINGS_ROWS order. UNITS LIVE IN THE
+             VALUE KEYS BELOW, NOT HERE. Superseding ruling, 2026-09-01: the
+             first ruling put the unit in the row name because the values
+             were thought to be bare numerals; core's actual stepper values
+             are their own l10n keys carrying the unit ("330 px"), so a unit
+             here too would read the unit twice ("Panel width (px)" next to
+             a value of "330 px"). Do not re-add units here. -->
+        <text name="fm25_setting_overlay" text="Overlay panel" />
+        <text name="fm25_setting_scale" text="Panel size" />
+        <text name="fm25_setting_width" text="Panel width" />
+        <text name="fm25_setting_text_size" text="Text size" />
+        <text name="fm25_setting_card_alpha" text="Card background opacity" />
+        <text name="fm25_setting_linger" text="Off-mode linger" />
+        <text name="fm25_setting_max_ttl" text="Maximum card lifetime" />
+        <text name="fm25_setting_retention" text="Message retention" />
+        <text name="fm25_setting_min_severity" text="Minimum severity" />
+        <text name="fm25_setting_reset_position" text="Reset panel position" />
+
+        <!-- SETTINGS_ROWS stepper texts. fm25_toggle_* backs
+             fm25_setting_overlay's ON/OFF stepper; fm25_severity_* backs
+             fm25_setting_min_severity's stepper, matching the FarmManagerTheme
+             severity family names (ok/warn/info/critical). Every texts entry
+             is an l10n key, unconditionally; core removed the "bare
+             numeral" escape hatch: "a rule with an exception is a rule
+             someone gets wrong." -->
+        <text name="fm25_toggle_off" text="OFF" />
+        <text name="fm25_toggle_on" text="ON" />
+        <text name="fm25_severity_ok" text="OK" />
+        <text name="fm25_severity_info" text="Info" />
+        <text name="fm25_severity_warn" text="Warning" />
+        <text name="fm25_severity_critical" text="Critical" />
+
+        <!-- The 36 stepper VALUE keys, derived at runtime as prefix..number
+             from FarmManager25.lua's preset lists (stepKeys, :1490-1493;
+             presets :205, :254-265), confirmed by dev-fm-core via
+             team-lead 2026-09-01. The unit lives HERE now, per the
+             superseding ruling above. fm25_retention_0 is "Off", not
+             "0 messages": 0 means retention disabled, a fact team-lead
+             confirmed rather than let be guessed. -->
+        <text name="fm25_scale_50" text="50 %" />
+        <text name="fm25_scale_60" text="60 %" />
+        <text name="fm25_scale_72" text="72 %" />
+        <text name="fm25_scale_85" text="85 %" />
+        <text name="fm25_scale_100" text="100 %" />
+        <text name="fm25_scale_125" text="125 %" />
+        <text name="fm25_width_260" text="260 px" />
+        <text name="fm25_width_300" text="300 px" />
+        <text name="fm25_width_330" text="330 px" />
+        <text name="fm25_width_380" text="380 px" />
+        <text name="fm25_width_440" text="440 px" />
+        <text name="fm25_width_520" text="520 px" />
+        <text name="fm25_text_size_11" text="11 px" />
+        <text name="fm25_text_size_12" text="12 px" />
+        <text name="fm25_text_size_13" text="13 px" />
+        <text name="fm25_text_size_15" text="15 px" />
+        <text name="fm25_text_size_17" text="17 px" />
+        <text name="fm25_text_size_20" text="20 px" />
+        <text name="fm25_card_alpha_50" text="50 %" />
+        <text name="fm25_card_alpha_65" text="65 %" />
+        <text name="fm25_card_alpha_80" text="80 %" />
+        <text name="fm25_card_alpha_92" text="92 %" />
+        <text name="fm25_card_alpha_100" text="100 %" />
+        <text name="fm25_linger_10" text="10 s" />
+        <text name="fm25_linger_15" text="15 s" />
+        <text name="fm25_linger_30" text="30 s" />
+        <text name="fm25_linger_60" text="60 s" />
+        <text name="fm25_max_ttl_30" text="30 s" />
+        <text name="fm25_max_ttl_60" text="60 s" />
+        <text name="fm25_max_ttl_120" text="120 s" />
+        <text name="fm25_max_ttl_300" text="300 s" />
+        <text name="fm25_retention_0" text="Off" />
+        <text name="fm25_retention_25" text="25 messages" />
+        <text name="fm25_retention_50" text="50 messages" />
+        <text name="fm25_retention_100" text="100 messages" />
+        <text name="fm25_retention_200" text="200 messages" />
+
+        <!-- Input-rebind labels for the three GLOBAL keybinds declared in
+             modDesc.xml's <actions>/<inputBinding>. Moved here from an
+             inline <l10n><text> block in modDesc.xml so filenamePrefix
+             stops mixing inline and external l10n sources, matching the
+             4-of-4 precedent in this workspace (FS25_FarmOperationsDashboard,
+             FS25_FieldsOfStories, FS25_NXProductions, FS25_Montana_4X all
+             self-close <l10n filenamePrefix=... /> with zero inline
+             children). English text preserved verbatim from the removed
+             inline block. -->
+        <text name="input_FM25_TOGGLE_OVERLAY" text="AIFM: toggle panel" />
+        <text name="input_FM25_TOGGLE_CURSOR" text="AIFM: toggle cursor" />
+        <text name="input_FM25_TOGGLE_SETTINGS" text="AIFM: settings" />
+
+        <!-- FARM tab (plan item 11). English text in every file, which is
+             this mod's existing pattern: the five translations carry an
+             identical KEY SET (gated) and English strings until a
+             translator supplies the rest. `unknown` is guard 8's word and
+             is localisable on purpose: core publishes the FLAG, never
+             the prose. -->
+        <text name="fm25_farm_unknown" text="unknown" />
+        <!-- D3 (DEC-210 as amended by DEC-211): a REFUSED PRODUCTIONS figure shows
+             one of these INSTEAD of the unknown word. Keep them short: the
+             cells are 140px and the engine truncates longer text. -->
+        <text name="fm25_prod_refused_rate" text="rate refused" />
+        <text name="fm25_prod_refused_capacity" text="capacity refused" />
+        <text name="fm25_prod_unreadable_stock" text="stock unreadable" />
+        <text name="fm25_farm_live" text="LIVE" />
+        <text name="fm25_farm_asof" text="as of" />
+        <text name="fm25_farm_group_money" text="Money" />
+        <text name="fm25_farm_group_land" text="Land" />
+        <text name="fm25_farm_group_productions" text="Productions" />
+        <text name="fm25_farm_group_contracts" text="Contracts" />
+        <text name="fm25_farm_group_fleet" text="Fleet" />
+        <text name="fm25_farm_a1_balance" text="Balance" />
+        <text name="fm25_farm_a2_loan" text="Loan" />
+        <text name="fm25_farm_a3_equity" text="Equity" />
+        <text name="fm25_farm_a4_interest" text="Daily loan interest" />
+        <text name="fm25_farm_b1_parcels" text="Farmlands owned" />
+        <text name="fm25_farm_b2_area" text="Owned area (ha)" />
+        <text name="fm25_farm_b3_value" text="Land value" />
+        <text name="fm25_farm_c1_points" text="Production points" />
+        <text name="fm25_farm_c2_fill" text="Storage fill" />
+        <text name="fm25_farm_c3_atcap" text="Points at capacity" />
+        <!-- ⛔ RELABELLED 2026-09-03. This key read "Active contracts" and that
+             was wrong in a way a player would act on. Core sets
+             values.d1 = #missions from g_missionManager:getMissionsByFarmId
+             (FarmManager25.lua:2059-2066), and that engine call filters on
+             `mission.farmId == nil or mission.farmId == farmId`
+             (verified in gameSource.zip dataS/scripts/missions/
+             MissionManager.lua:525-530, whose own comment reads "All
+             missions, but only for active it needs to match the farm").
+             The `== nil` arm admits contracts that are merely OFFERED and
+             were never accepted, so the figure is offered + active. A player
+             reading "Active contracts: 12" would believe they had twelve jobs
+             underway.
+             ⚠ The key NAME still says d1_active: renaming it is a row-contract
+             change owned by another lane, and the id d1 is what traces the row
+             to its research citation. Only the TEXT is ours to fix.
+             ⭐ The same mixture is why d2/d3/d4 can read `unknown`: the offered
+             missions lack the fields those getters reach into. The label and
+             that behaviour have one cause, so this text is not cosmetic. -->
+        <text name="fm25_farm_d1_active" text="Contracts offered or active" />
+        <text name="fm25_farm_d2_reward" text="Outstanding reward" />
+        <text name="fm25_farm_d3_deadline" text="Nearest deadline" />
+        <text name="fm25_farm_d4_completion" text="Overall completion" />
+        <text name="fm25_farm_e1_vehicles" text="Machines owned" />
+        <text name="fm25_farm_e2_repair" text="Needing repair" />
+        <text name="fm25_farm_e3_hours" text="Operating hours" />
+        <text name="fm25_farm_e4_fuel" text="Low fuel" />
+        <text name="fm25_farm_e5_pallets" text="Pallets owned" />
+        <text name="fm25_farm_e6_bales" text="Bales owned" />
+        <!-- MESSAGES day-group headings (chosen.html:631,:649,:656). DAY carries a
+             %d that InGameMenuFarmManager25:messageGroupTitle substitutes; the
+             substitution is pcall-guarded there, so a translation that loses the
+             %d degrades to the bare word instead of throwing inside a GUI
+             callback. EARLIER is the heading for every card whose day could not
+             be read, including every card written before the day field existed.
+             These three are the only NEW keys this change adds. -->
+        <text name="fm25_msg_group_today" text="TODAY" />
+        <text name="fm25_msg_group_day" text="DAY %d" />
+        <text name="fm25_msg_group_earlier" text="EARLIER" />
+        <!-- SETTINGS group headings (chosen.html SETTINGS, "Group per row").
+             Three dividers over the ten settings rows; the list is sectioned on
+             these. A setting in no group is APPENDED rather than dropped (see
+             buildSettingsGroups), so these headings never hide a control. -->
+        <text name="fm25_settings_group_overlay" text="OVERLAY PANEL" />
+        <text name="fm25_settings_group_cards" text="CARDS &amp; MESSAGES" />
+        <text name="fm25_settings_group_position" text="POSITION" />
+        <!-- FOOTER-2 strings (chosen.html; DEC-198 for the runway wording).
+             ⛔ THE DENOMINATOR IS A %d, NEVER A LITERAL. DEC-198 warns it moves
+             with DEC-197 (13/6 becomes 16/11), so baking today's 13 into these
+             strings would need a code edit in five languages to correct. Two
+             runway forms ship: the plain one, and the one naming the
+             unmeasurable count, because "0 unmeasurable" is noise on a farm
+             where every point could be read. -->
+        <text name="fm25_footer_total" text="TOTAL" />
+        <text name="fm25_footer_fields" text="%d fields" />
+        <text name="fm25_footer_area_ha" text="%s ha" />
+        <text name="fm25_footer_area_unknown" text="%s ha + %d unknown" />
+        <text name="fm25_footer_points" text="%d points" />
+        <text name="fm25_footer_runway" text="%d of %d under %d h" />
+        <text name="fm25_footer_runway_unmeasurable" text="%d of %d under %d h &#183; %d unmeasurable" />
+        <text name="fm25_footer_messages" text="%d messages" />
+        <text name="fm25_footer_unstated" text="%d unstated" />
+        <!-- The merged IN/OUT fill-type list (chosen.html PRODUCTIONS).
+             ⛔ THE TAG IS NOT DECORATION. One list holds both halves, so three
+             columns carry two meanings each: rate is L/h for an IN row and
+             capacity for an OUT row, and the trailing column is hours-left
+             against percent-full. The tag is what tells a reader which units
+             he is looking at, so keep these SHORT and keep them distinct. -->
+        <text name="fm25_prod_tag_in" text="IN" />
+        <text name="fm25_prod_tag_out" text="OUT" />
+        <text name="fm25_prod_full" text="full" />
+        <text name="fm25_prod_h_rate" text="L/h or cap. (L)" />
+        <text name="fm25_prod_h_trail" text="Runway / fill" />
+        <!-- U6 (BUG-046): the merged list holds IN and OUT rows, so its first
+             header is "Fill type" (chosen.html), never "Input". -->
+        <text name="fm25_prod_h_filltype" text="Fill type" />
+        <!-- FIELDS tile labels (chosen.html FIELDS, "NEW TEXT: tile labels
+             split from today's single strings"). The two hints are separate
+             keys, not appended to the label, so a translation can drop the
+             hint without losing the label. -->
+        <text name="fm25_field_t_area" text="AREA" />
+        <text name="fm25_field_t_owned" text="OWNED" />
+        <text name="fm25_field_t_growth" text="GROWTH STAGE" />
+        <text name="fm25_field_t_weeds" text="WEEDS" />
+        <text name="fm25_field_t_plow" text="PLOUGH LEVEL" />
+        <text name="fm25_field_t_plow_hint" text="0 = needs ploughing" />
+        <text name="fm25_field_t_lime" text="LIME LEVEL" />
+        <text name="fm25_field_t_lime_hint" text="0 = needs lime" />
+        <!-- The SHORT area header for the 346px master list (chosen.html
+             FIELDS: "the short label AREA instead of AREA (HA)"). The unit
+             stays on the detail tile. ⛔ Keep it short in every language: at
+             the stock 16px these headers clipped mid-word ("REA (HA)",
+             "OWNE"), which is what the shipped build already shows, and the
+             13px profile only buys so much room. -->
+        <text name="fm25_field_h_area_short" text="AREA" />
+        <!-- The MESSAGES filter strip. Only ALL is new: chosen.html says the
+             four severity buttons REUSE fm25_severity_ok / info / warn /
+             critical, so a severity renamed in one place cannot end up with
+             two different labels on one page. -->
+        <text name="fm25_msg_filter_all" text="ALL" />
+        <!-- SETTINGS help texts, one per row (chosen.html SETTINGS:
+             "NEW TEXT: a help text for each of the 10 settings").
+             ⛔ These describe what the setting DOES, not what it is called.
+             A help line that restates the title reads as an explanation and
+             teaches nothing, and the detail pane deliberately renders BLANK
+             rather than fall back to the title.
+             ⚠ EN is authoritative; the other four are seeded English and are
+             owed a real translation, exactly like the rest of this file. -->
+        <text name="fm25_help_overlay" text="Show or hide the on-screen card panel while you play." />
+        <text name="fm25_help_scale" text="Overall size of the card panel, as a percentage." />
+        <text name="fm25_help_width" text="How wide the card panel is drawn, in pixels." />
+        <text name="fm25_help_text_size" text="Size of the text inside each card, in pixels." />
+        <text name="fm25_help_card_alpha" text="How opaque the card background is. Lower is more see-through." />
+        <text name="fm25_help_linger" text="How long a card stays on screen after it arrives, in seconds." />
+        <text name="fm25_help_max_ttl" text="The longest a card may stay on screen before it expires, in seconds." />
+        <text name="fm25_help_retention" text="How many past messages the transcript keeps. 0 keeps none." />
+        <text name="fm25_help_min_severity" text="The lowest severity shown on screen. Lower shows more." />
+        <text name="fm25_help_reset_position" text="Move the card panel back to its default position." />
+    </texts>
+</l10n>

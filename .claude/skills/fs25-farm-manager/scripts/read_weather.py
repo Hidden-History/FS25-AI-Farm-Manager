@@ -154,7 +154,7 @@ NO_SCHEMA_GUARANTEE = (
     "savegame <environment> element (only mission00.xsd's map-definition one) "
     "and no file declares currentMonotonicDay/timeSinceLastRain/daysPerPeriod. "
     "sec. 6.5 rule 2 requires a resolvable citation before any coercion and "
-    "there is none, so DEC-047's default applies: raw. Fixed-precision zeros "
+    "there is none, so the default (keep the value raw) applies. Fixed-precision zeros "
     "like wetness=\"0.000000\" additionally MUST stay raw -- 0.0 is a value, "
     "not absence (sec. 6.5 hazard table)."
 )
@@ -163,7 +163,7 @@ NO_SCHEMA_GUARANTEE_MAP = (
     "RAW BY MEASUREMENT. The map's config/environment.xml has no schema "
     "either: no XSD in shared/xml/schema/ declares minTemperature, "
     "maxTemperature or rainfallScale. sec. 6.5 rule 2 therefore licenses no "
-    "coercion and DEC-047's default applies: raw."
+    "coercion and the default (keep the value raw) applies."
 )
 
 # The six attributes every <instance> carries. All six are required: a missing

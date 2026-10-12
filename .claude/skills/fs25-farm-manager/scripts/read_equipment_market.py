@@ -133,7 +133,7 @@ def normalize_sales_filename(filename):
         f"unrecognized filename form {filename!r} -- matches neither '$moddir$...', 'data/...', "
         "nor a host-absolute path containing a '/mods/<ModName>/' or '/data/vehicles/' segment. "
         "NOT falling back to a basename search: several mods here share a basename with an "
-        "unrelated base-game file, so that would return a plausible, wrong price (F-019)."
+        "unrelated base-game file, so that would return a plausible, wrong price."
     )
 
 

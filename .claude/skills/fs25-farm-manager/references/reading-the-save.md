@@ -9,7 +9,7 @@ harder.
 
 ## The rule that subsumes the rest
 
-**Absence must never be allowed to look like data.** An empty list, a `None`,
+**Absence must never be allowed to look like data (the absence rule).** An empty list, a `None`,
 a zero, a silence — every one of these is ambiguous between "I checked, and
 there is nothing" and "I could not find it." A reader cannot tell those apart
 from the output alone, so the parser must: it emits `{"error": "..."}` (or an
@@ -316,36 +316,63 @@ by design, PROVIDED the map's own mod zip can be read.** `read_fields.py` compos
 `read_farmland_areas.py`, which decodes the map's `infoLayer_farmlands.grle` raster for
 per-parcel area, cost, and owner — unlike field-level ownership (below), nothing here is gated
 to one named map. But it is still a parser with a real input: it **hard-errors** if the save's
-map-mod `.zip` isn't found in `mods_dir` (`read_farmland_areas.py:1554-1567`) — check `error`/
+map-mod `.zip` isn't found in `mods_dir` (`read_farmland_areas.py:2188-2197`) — check `error`/
 `calibration_needed` before treating an area/value figure as resolved. Precedence: explicit
 `--owned-fields` (the player's word always wins) → gate-checked derivation → honest `null`.
 It never guesses: it **refuses to emit area/value if either hard gate fails** rather than ship
 a plausible wrong number. ⚠ **The `<fieldPurchase>` cross-check it used to run every run is
-DISABLED** (DEC-057 ⑨) — that read was BUG-014's defect and the field it emitted is still
+DISABLED** — that read was the single-period land-cost read defect and the field it emitted is still
 blocked, so **do not describe the land total as self-checked against `farms.xml`**; the two
 gates are what earn it trust, and they are enough. `farms.xml` does still record
-`fieldPurchase`, `newVehiclesCost`, `constructionCost` and `loanInterest` directly (F-012),
-but note BUG-014's finding before treating it as a second route: `<fieldPurchase>` is a
+`fieldPurchase`, `newVehiclesCost`, `constructionCost` and `loanInterest` directly,
+but note the single-period land-cost read's finding before treating it as a second route: `<fieldPurchase>` is a
 **cash-flow spend** across per-period `<stats>` slots, not a land **valuation**, so the two
 answer different questions and agreeing is not the same as corroborating.
 
-⚠ **And ownership is resolved for PARCELS, not for FIELDS — and never ask which FIELDS are
-theirs off a map other than the one this is ruled for.** Which *parcels* a farm owns is
-read straight from `farmland.xml`, on any map. Which *fields* it owns additionally assumes
-`field_id == farmland_id` — a map-specific rule the savegame cannot confirm, ruled **only for
-`FS25_Montana_4X.MapMontana`** (`read_farmland_areas.py`'s `RULED_MAP_ID`). Off that map the
-parser correctly claims **no** field→farmland ownership at all and says so in `calibration_notes`
-— it does not silently fall back to guessing. On a map whose field ids sit inside its parcel
-ids, the ruling's own falsifiability check cannot refute the assumption either. `read_farmland_areas.py`
-labels every such row and reports that section `partial`. **On the ruled map, field-level
-ownership is ALWAYS assumed — no value of the `ARCH-R3-04` entry's `id_space_overlap.falsifiable` lifts that.**
-(`interpretation_guarantee` is a **list** since DEC-077, so select that entry by its `ruling`
-id — never by position.) That flag reports only whether the check *could* have caught a
-violation, never that the join was measured: `false` means the field ids are a subset of the
-parcel ids, so the guard had no reachable failing input and "0 unmatched" is **not** evidence
-of correctness; `true` means unmatched fields were found and the assumption **demonstrably
-failed** for them; `null` means `fields.xml` was unreadable and nothing was checked. Every
-value is a reason to trust the join less or the same — none is a reason to trust it more.
+⚠ **And ownership is resolved for PARCELS via `farmland.xml`, and for FIELDS via a spatial
+join against `map.i3d` — a HIGH-severity finding, 2026-09-04.** Which *parcels* a farm owns is
+read straight from `farmland.xml`, on any map. Which *fields* it owns is now **measured**: each
+field's own polygon (`map.i3d`'s `fields/field<N>` scene-graph nodes) is reduced to its AREA
+CENTROID, transformed world → raster via the engine's own
+`FarmlandManager:convertWorldToLocalPosition` formula, and sampled against the same
+`infoLayer_farmlands.grle` raster gate 1/gate 2 already validate
+(`read_farmland_areas.py`'s `resolve_spatial_field_farmland`, ruling `ARCH-R3-06`).
+
+**This replaces the retired `ARCH-R3-04` identity assumption** (`field_id == farmland_id`,
+ruled only for `FS25_Montana_4X.MapMontana`), which was measured FALSE on MapUS/
+savegame3: the map's own field polygons and the save's own field ids overlap only 64 of 77,
+with 13 field ids on each side the other lacks. A field with no map-side polygon still reports
+`farmland_id: null` with a reason in `calibration_notes` — the "never silently guess" discipline
+carries over unchanged, just per FIELD now instead of per MAP. A field whose own polygon
+vertices sample more than one farmland id (`straddles_farmland: true`) still reports its
+centroid's answer — dropping it would be less honest, not more — but the crossing is now
+visible instead of silently absorbed into one id.
+
+**The AREA is corroborated per save. The JOIN'S POSITION is not** — read these as two separate
+claims, because the `ARCH-R3-06` entry carries two measurements alongside itself and only one of
+them can refute anything about position.
+
+- `shoelace_label_check` — does this parser's own polygon-area formula reproduce the map author's
+  own printed `<Note text="fieldN\nN.NN ha"/>` label? 0 mismatches across all three savegames this
+  build has real files for. A **mismatch here is a real refutation** of the join too: the sample is
+  taken at the polygon's area centroid, so a polygon whose area is provably wrong has a provably
+  wrong centroid. ⚠ **Agreement, though, is silent about position** — the shoelace sum is invariant
+  under rotation and translation, which are exactly the two degrees of freedom the world-space
+  transform consists of. `checked: N` means *N fields had an area label to compare*, never *N fields
+  had their position corroborated*.
+- `field_coverage` — do the map's and the save's field ids form the same set?
+  (`map_only_count`/`save_only_count`/`overlap_count`). This compares **id sets, never geometry**,
+  and documents itself as a measured count rather than a falsifiability check.
+
+So the join's **position** rests on a **build-time cross-map regression** against the retired
+identity result (Montana 122/122, LoneStar 53/53) — genuine evidence, but not a per-save falsifier.
+Do not read `field_ownership` as position-verified on the save in front of you.
+
+`field_ownership` reports `status: "ok"` when every field on the save resolved
+cleanly, `"partial"` naming how many did not — no longer permanently `"partial"` the way the
+retired, permanently-unfalsifiable `ARCH-R3-04` forced it to be.
+(`interpretation_guarantee` is a **list**, so select the entry by its `ruling`
+value (a label, not always an id) — never by position.)
 
 ## `groundType` is not crop readiness, and FS25 has no harvest event
 
@@ -355,7 +382,7 @@ crop comes off. It also cannot distinguish `HARVEST_READY` from `HARVEST_READY_O
 is not a readiness distinction at all — the same crop at the same growth stage appears under
 both. **Read `crop_state`**, which `read_fields.py` derives from `growthState` against the
 crop's own `<foliageState>` list. Reading groundType told this farm to go harvest two fields
-it had already harvested (F-039).
+it had already harvested.
 
 **FS25 records no harvest event.** `crop_state: "harvested"` is a STATE, not a timestamp.
 Nothing on disk says *when* — to date it, diff against the previous session's closeout. Never
@@ -369,10 +396,10 @@ abstract rule:
 
 - An empty ownership list, read as "this farm owns no land," when the farm owned 18 parcels —
   forced a rewrite of `config.json`, `identity/creed.md`, and `state/finances-ledger.md` during
-  onboarding (F-001, F-010). A `0`, a `null`, and a missing key are three different claims;
+  onboarding. A `0`, a `null`, and a missing key are three different claims;
   keep them distinct.
 - `calibration_needed` once read `false` while `day` and `time` returned the same wrong number
-  (F-002) — a flag reporting "a tag matched" is not the same claim as "the value is right."
+  — a flag reporting "a tag matched" is not the same claim as "the value is right."
   Sanity-check values even when nothing complained: does the farm appear to own zero land?
   Does `day` equal `time`? Does a count look like the whole map?
 
@@ -380,7 +407,7 @@ abstract rule:
 
 **The savegame's mtime is the only honest freshness signal**, and this skill's own timing
 depends on it: `autoSaveInterval` bounds nothing — FS25 defers the write until the player next
-opens the map, so a save can be arbitrarily stale mid-session with nothing wrong (F-023). Never
+opens the map, so a save can be arbitrarily stale mid-session with nothing wrong. Never
 infer player activity from write patterns.
 
 **`timeScale` may not read live.** Whether `<timeScale>` updates when the player changes speed,

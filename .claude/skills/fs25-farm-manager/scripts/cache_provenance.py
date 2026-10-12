@@ -47,6 +47,8 @@ module never reads config and never defaults: it takes the int it is handed.
 """
 import hashlib
 import os
+import time
+from datetime import datetime, timezone
 
 # Verdicts, in the temporal vocabulary sec. 2.2 assigns to the cache gate.
 # CURRENT is deliberately NOT called "fresh": "fresh" belongs to the structural
@@ -324,3 +326,199 @@ def verify_source_set(sources, recorded_set_hash, mode=FULL):
         "%d of %d source file(s) no longer match what this domain hashed"
         % (len(notes) or 1, len(sources))
     ), performed
+
+
+# --- The settle check (plan item 13a) ----------------------------------------
+#
+# ⛔ THE HAZARD NEITHER mtime NOR THE CONTENT HASH CAN SEE. A save is not one
+# write; it is dozens, spread over seconds. MEASURED on this machine's own
+# saves, by listing each savegame directory and taking the span between its
+# earliest and latest file mtime:
+#
+#     save slot 1   53 files   8.673 s
+#     save slot 2   52 files   8.695 s
+#     save slot 3   53 files   2.213 s
+#
+# A generator firing part-way through reads files belonging to TWO different
+# moments -- a fleet from 14:31:02 beside a ledger from 14:31:09 -- and every
+# individual read is valid. Nothing is corrupt, so `verify_source_set()` sees a
+# clean set and stamps the result "ok". The freshness gate above cannot help:
+# it answers "did these files change since I hashed them?", and the answer here
+# is a truthful yes. The missing question is "have they STOPPED changing?"
+#
+# ⚠ WHY NOT "READ THE FILE THE GAME WRITES LAST". `careerSavegame.xml` was
+# written last on all three saves above -- but that is one sample per save, of
+# an ordering no engine documentation promises, from a writer we do not control
+# and cannot test. A check built on it would silently become a no-op the day a
+# mod or a patch reordered the writes, and nothing would go red. So the check
+# below is ORDERING-INDEPENDENT: it asks only that the NEWEST mtime in the whole
+# set be far enough in the past, which stays correct whatever order the writes
+# landed in. The observed last-written file is still reported, as evidence for
+# whoever revisits this, but nothing depends on it.
+#
+# ⚠ mtime GRANULARITY IS NOT THE PROBLEM, and that was measured too rather than
+# argued: this filesystem records 100 ns ticks, five orders of magnitude finer
+# than the window below.
+#
+# THE DEFAULT: 20 s, against a measured worst case of 8.695 s. Roughly 2x, so a
+# save that runs long on a bigger farm or a slower disk still finishes inside
+# it. It is a floor to raise, never a target to tune down; the cost of waiting
+# is one more poll, and the cost of not waiting is a published artifact that is
+# wrong in a way no downstream check can detect.
+SETTLE_QUIET_SECONDS = 20.0
+
+SETTLED = "settled"
+MOVING = "moving"
+
+
+def settle_scan(paths, quiet_seconds=SETTLE_QUIET_SECONDS, now=None):
+    """Has every path in `paths` stopped being written to?
+
+    Returns (verdict, detail). `verdict` is SETTLED only when every path could
+    be stat'd AND the newest mtime among them is at least `quiet_seconds` in the
+    past. Anything else is MOVING, with `detail["reason"]` saying which fact
+    made it so.
+
+    ⚠ EVERY UNCERTAINTY RESOLVES TO MOVING, never to SETTLED. An empty set, a
+    path that cannot be stat'd, a clock that puts a file in the future -- none
+    of those prove the save has finished, and a check that guessed "settled"
+    from an absence would publish the mixed-moment artifact this exists to
+    prevent. Refusing to read costs one poll interval; reading too early costs
+    a wrong answer that looks right.
+
+    `now` is injectable so a test can place the clock relative to real files
+    rather than sleeping through a 20 s window.
+    """
+    paths = list(paths)
+    if now is None:
+        now = time.time()
+
+    if not paths:
+        return MOVING, {
+            "settle_check": "quiet_window",
+            "quiet_seconds": quiet_seconds,
+            "reason": "no paths to check -- an empty set proves nothing has "
+                      "settled, it proves nothing was looked at",
+            "paths_checked": 0,
+        }
+
+    observed, unreadable = [], []
+    for path in paths:
+        try:
+            st = os.stat(path)
+        except OSError as exc:
+            unreadable.append({"path": path,
+                               "error": exc.strerror or str(exc)})
+            continue
+        observed.append({
+            "path": path,
+            "mtime_ns": st.st_mtime_ns,
+            "age_seconds": round(now - (st.st_mtime_ns / 1e9), 3),
+        })
+
+    if unreadable:
+        return MOVING, {
+            "settle_check": "quiet_window",
+            "quiet_seconds": quiet_seconds,
+            "reason": "%d of %d path(s) could not be stat'd, so the set cannot "
+                      "be proved quiet" % (len(unreadable), len(paths)),
+            "paths_checked": len(paths),
+            "unreadable": unreadable,
+        }
+
+    newest = min(observed, key=lambda o: o["age_seconds"])
+    detail = {
+        "settle_check": "quiet_window",
+        "quiet_seconds": quiet_seconds,
+        "paths_checked": len(observed),
+        "newest_path": newest["path"],
+        "newest_age_seconds": newest["age_seconds"],
+        "measured_worst_case_save_span_seconds": 8.695,
+    }
+
+    if newest["age_seconds"] < 0:
+        detail["reason"] = (
+            "%s carries an mtime %.3f s in the FUTURE. That is a clock or a "
+            "filesystem disagreeing, not a settled save, and guessing which "
+            "would be inventing a fact." % (newest["path"], -newest["age_seconds"]))
+        return MOVING, detail
+
+    if newest["age_seconds"] < quiet_seconds:
+        detail["reason"] = (
+            "%s was written %.3f s ago, inside the %.1f s quiet window -- the "
+            "save may still be in progress, and a read now could mix two "
+            "moments into one artifact that looks coherent."
+            % (newest["path"], newest["age_seconds"], quiet_seconds))
+        return MOVING, detail
+
+    return SETTLED, detail
+
+
+def savegame_files(savegame_dir):
+    """Every file the game writes directly into one savegame folder.
+
+    Non-recursive on purpose: this is the set whose write span was measured
+    above, and it is what a save actually touches. Raises OSError if the
+    directory cannot be listed -- an unlistable savegame is a failure to report,
+    never an empty list to proceed on (DEC-001).
+    """
+    return sorted(
+        os.path.join(savegame_dir, name)
+        for name in os.listdir(savegame_dir)
+        if os.path.isfile(os.path.join(savegame_dir, name))
+    )
+
+
+# --- Self-describing generated artifacts (plan item 14) ----------------------
+#
+# If the manager runs nothing, the FILES carry the whole contract: he opens one
+# and must be able to tell what it holds, how fresh it is, and what is genuinely
+# empty as opposed to failed to generate -- with no reference page explaining
+# it. Otherwise the instruction bulk has MOVED, not gone.
+#
+# ✅ THE AS-OF STAMP STAYS, ruled by the owner 2026-09-03. Item 14's "never stamp a
+# wall-clock timestamp" is SCOPED, not global: it bans a changing timestamp that
+# is pure noise in a diff. It does not touch an artifact whose freshness IS the
+# content. `farm.xml` carries `generatedAt` and `FarmManager25.lua:1995` reads
+# it to render the as-of line the player sees. Once the generator fires by
+# itself and nobody runs anything, that stamp is the ONLY way to tell how fresh
+# what you are reading is -- and item 13c's marker audit needs a timestamp to
+# audit. Removing it would have deleted the freshness signal from the half of
+# the plan that is about freshness.
+UNKNOWN = "UNKNOWN"
+
+DO_NOT_EDIT = (
+    "DO-NOT-EDIT: generated file. Edits are overwritten on the next run "
+    "without warning and without a diff."
+)
+
+
+def artifact_header(tool, subcommand, inputs, input_digest, generated_at=None):
+    """The self-describing header every generated artifact carries.
+
+    `inputs` is the list of source paths this artifact was built from, and
+    `input_digest` the set hash over them -- the two together let a reader
+    re-derive whether the artifact still matches its sources without trusting
+    anything the artifact says about itself.
+
+    ⛔ A FIELD THAT CANNOT BE DETERMINED READS "UNKNOWN", never a plausible
+    placeholder. "TBD" or "n/a" is indistinguishable from a real value that
+    happens to be those characters -- DEC-001, applied inside a generated file.
+    """
+    return {
+        "do_not_edit": DO_NOT_EDIT,
+        "generated_by": {
+            "tool": tool or UNKNOWN,
+            "subcommand": subcommand or UNKNOWN,
+        },
+        "generated_at": generated_at or datetime.now(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "as_of_note": (
+            "generated_at is when this file was WRITTEN. What it describes is "
+            "as fresh as `inputs` were at that moment -- compare input_digest "
+            "against the sources to find out whether it still holds."
+        ),
+        "inputs": list(inputs) if inputs else [],
+        "input_count": len(inputs) if inputs else 0,
+        "input_digest": input_digest or UNKNOWN,
+    }

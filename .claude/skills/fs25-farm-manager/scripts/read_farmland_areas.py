@@ -125,13 +125,12 @@ METHOD -- the gates above, which are recomputed every run and refuse to
 produce numbers when they fail. Read the gate output, not this prose.
 
 ===========================================================================
-3. FIELD -> FARMLAND MAPPING -- AN ASSUMPTION, AND IT IS NOT FALSIFIABLE HERE
+3. FIELD -> FARMLAND MAPPING -- A MEASURED SPATIAL JOIN (TECH-DEBT-095, HIGH)
 ===========================================================================
 The savegame carries NO field->farmland link. Re-measured 2026-08-05: every
 `<field>` in fields.xml has `id` plus fourteen crop-state attributes
 (fruitType, growthState, weedState, ...) and NOTHING ELSE -- no area, no
-position, no farmland reference, no child elements. The relationship is
-spatial, and it lives in the raster this script decodes.
+position, no farmland reference, no child elements.
 
 ⛔ A FALSE ENGINE CLAIM WAS REMOVED FROM THIS DOCSTRING 2026-08-07. It read
 that "a farmland answers `getField()`", cited to `FarmlandManager.md`.
@@ -140,36 +139,45 @@ that "a farmland answers `getField()`", cited to `FarmlandManager.md`.
 five functions -- delete, load, new, setArea, setIndicatorPosition -- and none
 is `getField`. The corpus's only `getField` is `AbstractFieldMission:getField()`,
 a MISSION-scoped class, so it answers the join only for fields under contract
-and is not a general accessor. Spec rev 8 reports the same measurement
-independently. This is exactly the mis-attribution that rev 8 calls its own
-most useful correction, and it had been shipping in the emitted licence text.
+and is not a general accessor.
 
-What the engine actually does: the join is RUNTIME-ONLY and positional. Every
-ownership accessor the engine documents is keyed by world position or by
-farmland id -- `getFarmlandIdAtWorldPosition`, `getFarmlandOwner`,
-`getOwnedFarmlandIdsByFarmId`, `getIsValidFarmlandId` and the rest -- and none
-takes a field id. `getFarmlandIdAtWorldPosition` is the engine's general answer
-to this question, and it consumes a WORLD POSITION, which a savegame parser
-does not have. This script is an offline parser with no `g_farmlandManager`, so
-it cannot call any of them.
+What the engine actually does: `getFarmlandIdAtWorldPosition` is its general
+answer to this question, and it consumes a WORLD POSITION. This script is an
+offline parser with no `g_farmlandManager`, so it cannot CALL that accessor --
+but the map's own `map.i3d` authors every field as a polygon in the same
+world-coordinate space that accessor consumes (a "fields" scene-graph node,
+one child per field, each holding a point-container of vertices), and
+infoLayer_farmlands.grle is the exact raster that accessor samples. So this
+script REPLICATES the engine's own read, offline: decode the polygon, find
+its own area centroid (polygon_area_centroid), transform world -> raster via
+the engine's own convertWorldToLocalPosition formula (CITE_WORLD_TO_RASTER,
+cited from FS25 Community LUADOC), and sample the same raster gate 1/gate 2
+already validated (sample_farmland_id).
 
-So the join below is an ASSUMPTION: `field_id == farmland_id`. It was derived
-once (2026-07-16) from this map's `AutoDrive_config.xml` -- an external,
-map-specific file -- by testing all 8 axis-orientation candidates for the
-world->raster transform and keeping the only one that put every field on a
-distinct, non-background parcel. It is NOT re-derived per run, and re-deriving
-it would mean shipping that coordinate search here, which is out of scope.
+⛔ UNTIL 2026-09-04 THIS WAS AN ASSUMPTION -- `field_id == farmland_id`,
+licensed by the retired ruling ARCH-R3-04, scoped to one map, derived once
+from an external AutoDrive_config.xml and never re-derived per run. It is
+GONE, not patched: TECH-DEBT-095 (HIGH) measured it FALSE on MapUS/
+savegame3 (the map's own field ids and the save's overlap 64/77, with 13 on
+each side the other lacks -- oversight/reports/VERIFY-plan-field-resolver-
+premises-2026-09-04.md sec. 3.1), and the identity guard could never fire on
+a map where the id spaces happen to be a subset of each other regardless of
+whether the correspondence was real.
 
-⛔ AND THE GUARD ON IT CANNOT FIRE ON THIS MAP. The only check available
-offline is "is this field id also a parcel id". Where the field ids are a
-subset of the parcel ids -- which is this map -- a WRONG correspondence is
-indistinguishable from a right one, so zero unmatched fields is NOT evidence
-the assumption holds; it is evidence the check has nothing to catch. The
-script therefore reports the assumption, its basis, and whether it was
-falsifiable at all, and it never presents the join as measured:
-`identity_basis` on every row, and `interpretation_guarantee` +
-`id_space_overlap` on the field_ownership section. Resolving this properly is
-spatial work and is deliberately NOT attempted here.
+ARCH-R3-06 replaces it (build_arch_r3_06). Unlike its predecessor its AREA
+claim is falsifiable per save. ⚠ ITS JOIN CLAIM IS NOT (TECH-DEBT-107): both
+corroborations carried in the same object are silent about WHERE a polygon
+sits -- the shoelace sum is invariant under rotation and translation, and
+field_coverage compares id SETS, never geometry. The two carried are:
+`field_coverage` (do the map's and the save's field ids form the same set?
+build_field_coverage) and `shoelace_label_check` (does this parser's own
+polygon-area formula -- item 3, shoelace_area_ha -- reproduce the map
+author's own printed `<Note text="fieldN\\nN.NN ha"/>` label? verified on
+this build: 0/175 mismatches across savegame1/Montana and savegame2/
+LoneStar, and 0/77 on MapUS). A single centroid sample still cannot see a
+field that genuinely straddles two farmland parcels -- every vertex is also
+sampled, and `straddles_farmland` flags that case on the affected row rather
+than silently picking a side.
 
 (This is the mistake the engine's own naming invites and that shipped mods
 make: `AbstractFieldMission:getFarmlandId()` returns `field:getId()`, and
@@ -192,23 +200,25 @@ Output contract:
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import struct
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
 from collections import Counter
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
-from xml_utils import load_xml, emit, arg_or_exit
+from xml_utils import load_xml, emit, arg_or_exit, finite_number
 
 # ---------------------------------------------------------------- sec. 6.2 --
 SCHEMA_VERSION = 1
 DOMAIN = "land"
 SET = "land"
 GENERATOR = "read_farmland_areas.py"
-GENERATOR_VERSION = "2.0.0"
+GENERATOR_VERSION = "3.0.0"
 CAPABILITY_IDS = ("b13", "b14")
 
 SECTION_MAP = "map_calibration"
@@ -216,21 +226,33 @@ SECTION_PARCELS = "farmland_parcels"
 SECTION_OWNED = "owned_land"
 SECTION_FIELDS = "field_ownership"
 
-# The label every field row carries so no consumer can read the join as
-# measured. This replaces a docstring reference to a constant named
-# FIELD_ID_EQUALS_FARMLAND_ID THAT NEVER EXISTED -- grep found the name only
-# inside the prose that named it, so a reader who checked concluded the
-# assumption had been removed. The assumption is real; this is its name.
-IDENTITY_BASIS = "assumed_equal_id"
-IDENTITY_RULE = "field_id == farmland_id"
+# TECH-DEBT-095 (HIGH). ARCH-R3-04's `field_id == farmland_id` identity
+# assumption -- permanently unfalsifiable, scoped to one map -- is RETIRED,
+# not patched. It was measured false on MapUS/savegame3: the map's own field
+# polygons and the save's own field ids overlap 64/77, with 13 on each side
+# the other lacks (oversight/reports/VERIFY-plan-field-resolver-premises-
+# 2026-09-04.md sec. 3.1). Replaced below by a MEASURED spatial join --
+# ARCH-R3-06 -- that samples infoLayer_farmlands.grle at each field polygon's
+# own area centroid (map.i3d), instead of assuming the ids coincide.
+SPATIAL_JOIN_BASIS = "spatial_centroid_raster_join"
 
-# ⚖ ARCH-R3-04's SCOPE. The ruling is MINTED (William 2026-08-05c, spec rev 8
-# sec. 6.5; DEC-070) and it is scoped to THIS MAP ONLY: "Pointed at any other
-# map, the ruling is void and calibration_needed is the honest output."
-# Held as a named constant rather than inline so the scope check is greppable
-# and so a test can assert the licence names the map it is scoped to even when
-# it does not apply.
-RULED_MAP_ID = "FS25_Montana_4X.MapMontana"
+# fs25-lookup, FS25 Community LUADOC @24afb18e7cfb788b7686b9ec791671e0dcba32b9,
+# docs/script/Economy/FarmlandManager.md, function convertWorldToLocalPosition
+# (emit-clean, no repair applied -- quoted verbatim):
+#     math.floor(localMapWidth  * (worldPosX + terrainSize*0.5) / terrainSize)
+#     math.floor(localMapHeight * (worldPosZ + terrainSize*0.5) / terrainSize)
+# Applied per-axis below using this map's own declared width/height in place
+# of a single terrainSize -- gate 2 already requires them equal within
+# tolerance (square pixels), so this is the same formula, not a new one.
+CITE_WORLD_TO_RASTER = (
+    "FS25 Community LUADOC @24afb18e7cfb788b7686b9ec791671e0dcba32b9, "
+    "docs/script/Economy/FarmlandManager.md, function "
+    "convertWorldToLocalPosition (emit-clean, no repair applied): "
+    "math.floor(localMapWidth * (worldPosX + terrainSize*0.5) / terrainSize), "
+    "math.floor(localMapHeight * (worldPosZ + terrainSize*0.5) / terrainSize). "
+    "Applied per-axis with this map's own declared width/height in place of "
+    "a single terrainSize."
+)
 
 # ⛔ DEC-057 (9). The farms.xml <fieldPurchase> cross-check ships DISABLED,
 # NOT DELETED. Two things follow, and both are the point:
@@ -314,6 +336,153 @@ def find_mods_dir(explicit, config_path=None):
     return None, "no sanctum/config.json found above this script, and no mods_dir given"
 
 
+def find_install_dir(explicit, config_path=None):
+    """Locate the FS25 game install dir: the flag, else --config's
+    config.json, else the same sanctum/config.json walk-up find_mods_dir()
+    uses above -- deliberately mirrored rather than shared, for the same
+    reason find_mods_dir()'s own docstring gives: no import-time coupling
+    between sibling scripts, wording kept in sync by hand.
+
+    TECH-DEBT-103b. A MOD map never needs this -- it is only consulted as a
+    fallback when the mod-zip lookup in main() fails, to resolve a BASE-GAME
+    map that ships no zip at all (e.g. MapUS). Unresolved is reported, never
+    guessed: no hardcoded Windows/WSL path (FRICTION-LOG.md F-007) -- this
+    would be baked into a PUBLIC mod and wrong on every machine but the one
+    it was written on.
+
+    Returns (path_or_None, how_or_reason)."""
+    if explicit:
+        if not os.path.isdir(explicit):
+            return None, f"install_dir {explicit!r} is not a directory"
+        return explicit, "explicit install_dir (--install-dir)"
+    if config_path:
+        if not os.path.isfile(config_path):
+            return None, f"--config {config_path!r} does not exist"
+        try:
+            with open(config_path) as f:
+                paths = (json.load(f).get("paths") or {})
+            idir = paths.get("install_dir")
+        except (OSError, json.JSONDecodeError) as e:
+            return None, f"found {config_path} but could not read paths.install_dir: {e}"
+        if not idir:
+            return None, f"{config_path} has no paths.install_dir"
+        if not os.path.isdir(idir):
+            return None, f"paths.install_dir {idir!r} from --config {config_path!r} is not a directory"
+        return idir, f"--config {config_path!r} -> paths.install_dir"
+    here = os.path.abspath(os.path.dirname(__file__))
+    for _ in range(6):
+        cfg = os.path.join(here, "sanctum", "config.json")
+        if os.path.isfile(cfg):
+            try:
+                with open(cfg) as f:
+                    paths = (json.load(f).get("paths") or {})
+                idir = paths.get("install_dir")
+            except (OSError, json.JSONDecodeError) as e:
+                return None, f"found {cfg} but could not read paths.install_dir: {e}"
+            if not idir:
+                return None, f"{cfg} has no paths.install_dir"
+            if not os.path.isdir(idir):
+                return None, f"paths.install_dir {idir!r} from config.json is not a directory"
+            return idir, "sanctum/config.json -> paths.install_dir"
+        parent = os.path.dirname(here)
+        if parent == here:
+            break
+        here = parent
+    return None, "no sanctum/config.json found above this script, and no install_dir given"
+
+
+def find_base_game_map_dir(install_dir, map_id):
+    """The base-game map directory for a `mapId` that has no mod-zip form.
+
+    ⚠ CASE-INSENSITIVE, AND MEASURED WHY: the savegame's careerSavegame.xml
+    reports mapId 'MapUS'; the on-disk directory is 'mapUS' (measured
+    2026-09-03, <install_dir>/data/maps/mapUS/) -- an exact-case match would
+    silently fail on the very map this fallback exists for.
+
+    ⚠ MATCHED ON THE FULL DIRECTORY NAME ONLY, never a substring or prefix --
+    the F-019 rule ("resolve the path, never the basename") applied to a
+    directory instead of a file: a fuzzy match here could resolve a genuinely
+    different base-game map and publish a confidently wrong farmland raster.
+
+    Returns (path_or_None, reason_or_None)."""
+    maps_root = os.path.join(install_dir, "data", "maps")
+    if not os.path.isdir(maps_root):
+        return None, f"{maps_root} is not a directory"
+    target = map_id.lower()
+    try:
+        entries = os.listdir(maps_root)
+    except OSError as e:
+        return None, f"could not list {maps_root}: {e}"
+    matches = [d for d in entries
+              if d.lower() == target and os.path.isdir(os.path.join(maps_root, d))]
+    if not matches:
+        return None, f"no directory named {map_id!r} (case-insensitive) under {maps_root}"
+    if len(matches) > 1:
+        return None, (
+            f"{len(matches)} directories under {maps_root} match {map_id!r} "
+            f"case-insensitively: {sorted(matches)} -- refusing to guess which one")
+    return os.path.join(maps_root, matches[0]), None
+
+
+def _dir_namelist(root_dir):
+    """The on-disk equivalent of ZipFile.namelist() for a base-game map
+    directory -- SCOPED to where the files this script reads actually live,
+    not a full recursive walk.
+
+    A base-game map directory also carries textures/, sounds/, envMaps/,
+    guidedTour/, licensePlates/ and missions/ siblings of config/ and data/
+    that this script has no use for and that a full walk would pay to
+    enumerate for nothing (measured: mapUS/data/ alone is 24MB across 110
+    entries; the sibling asset directories are considerably larger). Root-
+    level files cover the map's own declaring XML; config/ and data/ are
+    walked recursively to match the depth a mod zip's own internal layout can
+    carry (mods routinely wrap their content in one extra folder --
+    'mapUS/config/farmlands.xml' inside the installed FS25_Montana_4X.zip,
+    confirmed 2026-09-03 -- so this must tolerate that depth too, not assume
+    either shape)."""
+    names = []
+    try:
+        entries = os.listdir(root_dir)
+    except OSError:
+        return names
+    for entry in entries:
+        if os.path.isfile(os.path.join(root_dir, entry)):
+            names.append(entry)
+    for sub in ("config", "data"):
+        sub_root = os.path.join(root_dir, sub)
+        if not os.path.isdir(sub_root):
+            continue
+        for dirpath, _dirs, files in os.walk(sub_root):
+            rel_dir = os.path.relpath(dirpath, root_dir)
+            for fn in files:
+                names.append((f"{rel_dir}/{fn}" if rel_dir != "."
+                             else fn).replace(os.sep, "/"))
+    return names
+
+
+class _DirEntries:
+    """Duck-types the subset of zipfile.ZipFile this script actually calls
+    (.namelist, .read, .close) over a plain directory, so a base-game map --
+    which ships as files on disk, never a zip -- can be searched and read by
+    find_zip_entry() / find_map_dimensions_xml() and by main()'s own
+    zf.read() calls exactly like a mod's zip contents, with none of that
+    downstream code needing to know which kind of source it got."""
+
+    def __init__(self, root_dir):
+        self.root_dir = root_dir
+        self._names = _dir_namelist(root_dir)
+
+    def namelist(self):
+        return self._names
+
+    def read(self, relpath):
+        with open(os.path.join(self.root_dir, relpath), "rb") as f:
+            return f.read()
+
+    def close(self):
+        pass
+
+
 def decode_grle(data):
     """Decode a GRLE file's bytes to (pixel_bytes, width, height).
     Raises ValueError with a clear message on structural problems -- never
@@ -369,12 +538,21 @@ def find_zip_entry(namelist, suffix_lower):
 def find_map_dimensions_xml(zf, namelist):
     """Find the map's top-level XML declaring <map width=... height=...>.
     Tries the conventional '<top>/<top>.xml' pattern first, then scans all
-    top-level .xml files for the tag."""
-    candidates = [n for n in namelist if n.count("/") == 1 and n.lower().endswith(".xml")]
+    top-level .xml files for the tag.
+
+    ⚠ TECH-DEBT-103b WIDENED THIS FROM count("/") == 1 TO <= 1. A mod zip
+    routinely wraps its content in one extra folder (confirmed 2026-09-03:
+    'mapUS/mapUS.xml' inside the installed FS25_Montana_4X.zip -- 1 slash).
+    A BASE-GAME map directory carries no such wrapper -- its own declaring
+    XML sits at 0 slashes ('mapUS.xml' directly under
+    <install_dir>/data/maps/mapUS/, confirmed the same day). Widening rather
+    than branching on source kind: this function does not need to know which
+    kind of source it was handed, only how deep to look."""
+    candidates = [n for n in namelist if n.count("/") <= 1 and n.lower().endswith(".xml")]
     for name in candidates:
         try:
             text = zf.read(name).decode("utf-8", errors="ignore")
-        except (KeyError, zipfile.BadZipFile):
+        except (KeyError, zipfile.BadZipFile, OSError):
             continue
         m = re.search(r'<map\s[^>]*\bwidth="([\d.]+)"[^>]*\bheight="([\d.]+)"', text)
         if m:
@@ -382,25 +560,77 @@ def find_map_dimensions_xml(zf, namelist):
     return None, None, None
 
 
+def find_map_i3d_entry(namelist, map_xml_name):
+    """TECH-DEBT-095. The map's own field-bearing i3d, found by matching its
+    BASENAME to the already-located map XML's basename: 'mapUS/mapUS.xml' ->
+    'mapUS/mapUS.i3d' (Montana, and the base game); 'config/map.xml' ->
+    'map.i3d' (Lone Star Plains -- a DIFFERENT directory, same basename).
+    Verified against all three maps this project has real files for; never
+    assumed same-directory, because Lone Star's own config/map.xml sits one
+    folder away from the root-level map.i3d it declares.
+
+    Depth-restricted to <=1 slash (mirrors find_map_dimensions_xml's own
+    rule for the map's declaring XML) and refuses to guess if more than one
+    entry shares that basename at that depth."""
+    if not map_xml_name:
+        return None, "no map xml located; cannot locate its i3d"
+    stem = os.path.splitext(os.path.basename(map_xml_name))[0] + ".i3d"
+    matches = [n for n in namelist
+              if n.count("/") <= 1 and os.path.basename(n) == stem]
+    if not matches:
+        return None, f"no <=1-deep .i3d entry named {stem!r} found"
+    if len(matches) > 1:
+        return None, (f"{len(matches)} entries named {stem!r} found: {matches} "
+                      "-- refusing to guess which one")
+    return matches[0], None
+
+
 def parse_pricing_xml(xml_bytes):
-    """Parse the map's config/farmlands.xml -> (price_per_ha, {id: (priceScale, npcName)})."""
-    import xml.etree.ElementTree as ET
+    """Parse the map's config/farmlands.xml -> (price_per_ha, {id: (priceScale, npcName)}).
+
+    ⛔ TECH-DEBT-103. `Farmland:load` (FS25 Community LUADOC @ 24afb18e7cf,
+    docs/script/Economy/Farmland.md, function `load`, emit-repaired) reads TWO
+    mutually exclusive forms per parcel:
+        self.fixedPrice = xmlFile:getValue(key .. "#price")
+        if self.fixedPrice == nil then
+            self.priceFactor = xmlFile:getValue(key .. "#priceScale", 1)
+        end
+        self.price = self.fixedPrice or 1
+        self:updatePrice()
+    A parcel that declares `price=` gets `fixedPrice`; `priceScale` is only
+    consulted when `price=` is ABSENT. `updatePrice()`'s body is not one of
+    Farmland.md's five documented functions (delete, load, new, setArea,
+    setIndicatorPosition), so what it does with `fixedPrice` is undocumented
+    here -- this parser has never computed that form and does not start now.
+    `fixed_price_declared` records only the ATTRIBUTE'S PRESENCE so the caller
+    can refuse to publish the derived (priceScale) figure for that parcel --
+    see the sensor in main()'s per-parcel loop and compute_owned_totals()."""
     root = ET.fromstring(xml_bytes)
     farmlands_elem = root.find("farmlands")
     if farmlands_elem is None:
         return None, {}
-    price_per_ha = farmlands_elem.attrib.get("pricePerHa")
-    price_per_ha = float(price_per_ha) if price_per_ha is not None else None
+    # TECH-DEBT-108: finite_number, not float(). These two attributes are the
+    # ONLY inputs to land_value, which is what the manager actually reads, and
+    # a nan here propagates through the multiplication into the land envelope's
+    # JSON as a bare `NaN` -- invalid JSON, failing a strict consumer on the
+    # whole document. None means "no usable figure" and is already the value
+    # this parser reports for an absent attribute, so downstream refusal paths
+    # are the existing ones rather than new ones.
+    price_per_ha = finite_number(farmlands_elem.attrib.get("pricePerHa"))
     pricing = {}
     for fl in farmlands_elem.findall("farmland"):
         try:
             fid = int(fl.attrib["id"])
         except (KeyError, ValueError):
             continue
-        scale = fl.attrib.get("priceScale")
         pricing[fid] = {
-            "price_scale": float(scale) if scale is not None else None,
+            # TECH-DEBT-108, same reason as pricePerHa above.
+            "price_scale": finite_number(fl.attrib.get("priceScale")),
             "npc_name": fl.attrib.get("npcName"),
+            # TECH-DEBT-103: presence only, per Farmland:load above -- never
+            # coerced to a number, because this parser does not compute the
+            # fixedPrice form and must not imply it read a value it did not use.
+            "fixed_price_declared": fl.attrib.get("price") is not None,
         }
     return price_per_ha, pricing
 
@@ -451,10 +681,10 @@ def build_raw_id_conformance(root):
         "nonconforming": nonconforming,
         "holds": not nonconforming if checked else None,
         # None, never False, where nothing was measured (spec § 6.5 rev 10).
-        # DERIVED FROM THE DATA, the same construct ARCH-R3-04's sibling uses
-        # (`"falsifiable": not fields.issubset(set(parcel_ids))` in
-        # build_identity_overlap): true exactly where the check found a
-        # contradiction, never merely where it was able to look.
+        # DERIVED FROM THE DATA, the same shape ARCH-R3-06's own
+        # falsifiable_on_this_save uses (build_arch_r3_06): true exactly
+        # where the check found a contradiction, never merely where it was
+        # able to look.
         "falsifiable_on_this_save": bool(nonconforming) if checked else None,
         "note": ("ARCH-R3-05 can be falsified by one non-integer value and can "
                  "never be confirmed: extending this census over more saves is "
@@ -618,8 +848,8 @@ def read_field_purchase_window(farms_root, farm_id, current_day):
         "coverage_note": (
             "Sum of ALL stored slots. Whether the stored window spans the farm's "
             "whole life cannot be determined from the savegame: the engine's "
-            "retention policy for <finances><stats> is undocumented (BUG-014 "
-            "sec. 6 condition 4). Where window_reaches_current_day is false the "
+            "retention policy for <finances><stats> is undocumented (a condition of correcting the "
+            "single-period land-cost read). Where window_reaches_current_day is false the "
             "window has demonstrably rolled and this sum is a LOWER BOUND on "
             "lifetime spend, not the total."
         ),
@@ -646,101 +876,526 @@ def pixels_to_hectares(pixel_count, area_per_pixel_m2):
     return pixel_count * area_per_pixel_m2 / M2_PER_HECTARE
 
 
+def compute_parcel_cost(fid, area_ha, price_per_ha, price_info, pricing_name):
+    """One parcel's (cost_or_None, price_scale, calibration_note_or_None).
+
+    ⛔ TECH-DEBT-103, EXTRACTED FROM main()'s per-parcel loop SO IT CAN BE
+    TESTED AT ALL -- the same reason pixels_to_hectares was extracted
+    2026-08-07. No map available to this project declares a per-parcel
+    `price` (measured across all 12 installed maps plus the base game, 2026-
+    09-03), so this branch has no real fixture to run against; a synthetic
+    one, driven straight at this function, is the only way to prove it has
+    teeth.
+
+    See parse_pricing_xml for the Farmland:load citation this sensor rests
+    on: a declared `price=` sets fixedPrice and the engine never derives that
+    parcel's price from areaInHa*pricePerHa*priceScale, so publishing the
+    derived figure for it would be a confident wrong number, not a stale one.
+    cost is therefore None -- never the derived float, never 0 -- and
+    compute_owned_totals() propagates that absence into the aggregate rather
+    than silently summing past it."""
+    if price_info is not None and price_info.get("fixed_price_declared"):
+        scale = (price_info["price_scale"] if price_info.get("price_scale") is not None
+                 else 1.0)
+        note = (
+            f"farmland id {fid}: declares a per-parcel price= in {pricing_name} -- "
+            "Farmland:load reads that into fixedPrice and does not derive this "
+            "parcel's price from areaInHa*pricePerHa*priceScale (FS25 Community "
+            "LUADOC docs/script/Economy/Farmland.md, function load); this parser "
+            "computes only the derived form, so this parcel's cost is unknown, "
+            "not the derived figure")
+        return None, scale, note
+
+    if price_info is None or price_info["price_scale"] is None:
+        scale = 1.0
+        note = f"farmland id {fid}: no priceScale found in {pricing_name}, assumed 1.0"
+    else:
+        scale = price_info["price_scale"]
+        note = None
+    cost = round(area_ha * price_per_ha * scale, 2)
+    return cost, scale, note
+
+
 def compute_owned_totals(parcels, farm_id):
     """The owned parcel ids, their total hectares and their total value.
 
     ⛔ ALSO EXTRACTED FROM main() 2026-08-07, same reason. Returns a tuple so
     the three figures cannot drift apart: they are derived from one filter over
-    one dict, and a test can pin the arithmetic rather than the fixture."""
+    one dict, and a test can pin the arithmetic rather than the fixture.
+
+    ⛔ TECH-DEBT-103: total_value is None when ANY owned parcel's own cost is
+    None (a declared fixed price -- see main()'s per-parcel loop). Summing the
+    known costs and silently skipping the unknown one would UNDER-report the
+    farm's land value while looking like a complete total -- the exact
+    "confident wrong number" this sensor exists to refuse. Absence must
+    propagate to the aggregate, not vanish into it."""
     owned_ids = sorted(fid for fid, p in parcels.items()
                        if p["owner_farm_id"] == farm_id)
     total_area_ha = round(sum(parcels[fid]["area_ha"] for fid in owned_ids), 4)
-    total_value = round(sum(parcels[fid]["cost"] for fid in owned_ids), 2)
+    owned_costs = [parcels[fid]["cost"] for fid in owned_ids]
+    total_value = (None if any(c is None for c in owned_costs)
+                   else round(sum(owned_costs), 2))
     return owned_ids, total_area_ha, total_value
 
 
-def build_field_rows(field_ids, parcels, farm_id, calibration_notes):
-    """One ownership row per field, via the ASSUMED identity rule.
+### ------------------------------------------------------- field polygons --
+# TECH-DEBT-095 (HIGH). The map's own map.i3d authors each field as a
+# TransformGroup scene-graph node: a "fields" root, one child per field named
+# "field<N>", each holding a point-container child whose own children are
+# "point<N>" leaves carrying a translation relative to their parent. World
+# position composes every ancestor's own translation, plus Y-axis rotation
+# where an ancestor declares one, down to the point.
+_FIELD_NAME_RE = re.compile(r"^field(\d+)$")
+_POINT_NAME_RE = re.compile(r"^point\d+$")
+_NOTE_AREA_RE = re.compile(r"field\d+&#xA;([\d.]+) ha")
 
-    Lives here rather than inline in main() so the honesty suite can exercise
-    THE SHIPPED ROW BUILDER. An earlier draft of that suite built its own rows
-    and then asserted they carried `identity_basis` -- which tested the
-    fixture, not the code, and would have stayed green with the label deleted
-    from this file. A test that cannot fail for a real reason is not a test.
 
-    Appends to `calibration_notes` in place for the unmatched branch."""
+def _tvec(attrib_value):
+    """'x y z' -> (x, y, z) floats. Missing/empty -> (0.0, 0.0, 0.0), the i3d
+    format's own default for an omitted translation/rotation attribute."""
+    if not attrib_value:
+        return (0.0, 0.0, 0.0)
+    parts = attrib_value.split()
+    if len(parts) != 3:
+        raise ValueError(f"malformed i3d vector attribute {attrib_value!r}")
+    return tuple(float(p) for p in parts)
+
+
+def find_fields_block_text(i3d_text):
+    """Isolate '<TransformGroup name="fields" ...>...</TransformGroup>' from
+    a full i3d document's text, by depth-counting tags rather than a naive
+    regex. The subtree nests TransformGroup/Shape/Note to arbitrary depth,
+    and a non-greedy '.*?' up to the next two consecutive closing tags stops
+    at the WRONG one on any field with more than two children -- measured:
+    mapUS field54 has three (polygonPoints, then fieldMapIndicator, THEN its
+    own close). Returns None if no 'fields' node exists."""
+    idx = i3d_text.find('name="fields"')
+    if idx == -1:
+        return None
+    start = i3d_text.rfind("<TransformGroup", 0, idx)
+    if start == -1:
+        return None
+    tag_re = re.compile(r"<(/?)(TransformGroup|Shape|Note)\b[^>]*?(/?)>")
+    depth = 0
+    end = None
+    for m in tag_re.finditer(i3d_text, start):
+        closing, _tag, selfclose = m.groups()
+        if selfclose:
+            continue
+        if closing:
+            depth -= 1
+            if depth == 0:
+                end = m.end()
+                break
+        else:
+            depth += 1
+    return None if end is None else i3d_text[start:end]
+
+
+def parse_field_polygons(i3d_text):
+    """The map's field polygons -> ({field_id: entry}, fields_root_translation,
+    fields_root_rotation, error_or_None).
+
+    Each entry: field_translation/field_rotation (this field's OWN transform,
+    relative to the fields root), container_translation/container_rotation
+    (its point-container's transform), points (raw per-point translation
+    tuples, relative to the container), authored_area_ha (the map's own
+    <Note text="fieldN\\nN.NN ha"/> label, or None), and `unsupported`
+    (a reason string, or None) for a field this parser refuses to position
+    rather than approximate -- see compose_field_world_points.
+
+    ⛔ NEVER MATCHES THE POINT-CONTAINER OR LABEL BY A FIXED NAME. mapUS
+    field54 names its point container "fieldDimensions", not "polygonPoints"
+    -- verified 2026-09-04 by running this parser against every field on
+    every map this project has real files for and getting 76/77 (missing
+    exactly field54) matching by NAME, 77/77 matching by STRUCTURE (a
+    TransformGroup whose own children are point<N> leaves). The area label
+    lives under "nameIndicator" on Montana/Lone Star/most of mapUS but under
+    "fieldMapIndicator" on 64 of mapUS's 77 fields -- found the same way, by
+    structure (any Note descendant of the field group) rather than by
+    container name."""
+    block = find_fields_block_text(i3d_text)
+    if block is None:
+        return None, None, None, 'no <TransformGroup name="fields"> node in this map\'s i3d'
+    try:
+        root = ET.fromstring(block)
+    except ET.ParseError as e:
+        return None, None, None, f"fields subtree of map.i3d did not parse as XML: {e}"
+
+    try:
+        root_translation = _tvec(root.attrib.get("translation"))
+        root_rotation = _tvec(root.attrib.get("rotation"))
+    except ValueError as e:
+        return None, None, None, f"fields root: {e}"
+    if root.attrib.get("scale"):
+        return None, None, None, (
+            "the fields root declares a scale= this parser does not support")
+
+    fields = {}
+    for fnode in root.findall("TransformGroup"):
+        m = _FIELD_NAME_RE.match(fnode.attrib.get("name", ""))
+        if not m:
+            continue
+        fid = int(m.group(1))
+        unsupported = None
+        try:
+            field_translation = _tvec(fnode.attrib.get("translation"))
+            field_rotation = _tvec(fnode.attrib.get("rotation"))
+        except ValueError as e:
+            return None, None, None, f"field{fid}: {e}"
+        if field_rotation[0] != 0.0 or field_rotation[2] != 0.0:
+            unsupported = (
+                f"field{fid} declares a non-Y rotation {field_rotation} this "
+                "parser does not compose")
+        if fnode.attrib.get("scale"):
+            unsupported = f"field{fid} declares a scale= this parser does not support"
+
+        container = None
+        for child in fnode.findall("TransformGroup"):
+            if any(_POINT_NAME_RE.match(gc.attrib.get("name", ""))
+                  for gc in child.findall("TransformGroup")):
+                container = child
+                break
+        if container is None:
+            continue  # a field group with no point polygon at all -- not this field's row to build
+
+        try:
+            container_translation = _tvec(container.attrib.get("translation"))
+            container_rotation = _tvec(container.attrib.get("rotation"))
+        except ValueError as e:
+            return None, None, None, f"field{fid} polygon container: {e}"
+        if unsupported is None:
+            if container_rotation[0] != 0.0 or container_rotation[2] != 0.0:
+                unsupported = (
+                    f"field{fid}'s polygon container declares a non-Y rotation "
+                    f"{container_rotation} this parser does not compose")
+            elif container.attrib.get("scale"):
+                unsupported = (
+                    f"field{fid}'s polygon container declares a scale= this "
+                    "parser does not support")
+
+        points = []
+        for pnode in container.findall("TransformGroup"):
+            if not _POINT_NAME_RE.match(pnode.attrib.get("name", "")):
+                continue
+            try:
+                points.append(_tvec(pnode.attrib.get("translation")))
+            except ValueError as e:
+                return None, None, None, f"field{fid} point: {e}"
+        if len(points) < 3:
+            continue  # not a real polygon; drop rather than fabricate one
+
+        authored_area_ha = None
+        for note in fnode.iter("Note"):
+            nm = _NOTE_AREA_RE.search(note.attrib.get("text", ""))
+            if nm:
+                authored_area_ha = float(nm.group(1))
+                break
+
+        fields[fid] = {
+            "field_translation": field_translation,
+            "field_rotation": field_rotation,
+            "container_translation": container_translation,
+            "container_rotation": container_rotation,
+            "points": points,
+            "authored_area_ha": authored_area_ha,
+            "unsupported": unsupported,
+        }
+    if not fields:
+        return None, None, None, "map.i3d's 'fields' node has no field<N> polygon children"
+    return fields, root_translation, root_rotation, None
+
+
+def _rotate_y(x, z, degrees):
+    """Rotate (x, z) by `degrees` about the Y (up) axis. The only rotation
+    axis observed on a field or point-container node across all three maps
+    this project has real files for: LoneStar field53 declares rotation="0
+    0.360994 0" (X and Z exactly zero); every other field/container on all
+    three maps declares no rotation at all. Untested sign convention for a
+    genuinely mixed-axis rotation -- see parse_field_polygons's `unsupported`
+    flag, which refuses to compose one rather than guess."""
+    if degrees == 0.0:
+        return x, z
+    theta = math.radians(degrees)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    return x * cos_t + z * sin_t, -x * sin_t + z * cos_t
+
+
+def compose_field_world_points(entry, fields_root_translation, fields_root_rotation):
+    """A field polygon's points, transform-composed to world (x, z) pairs, or
+    (None, reason) when this parser refuses to compose the transform.
+
+    Regression-validated end to end (not merely unit-tested): with this
+    composition, the polygon AREA CENTROID (polygon_area_centroid) of every
+    field on savegame1/Montana (122/122) and savegame2/LoneStar (53/53)
+    resolves, via world_to_raster_pixel + sample_farmland_id, to the SAME
+    farmland id the retired field_id==farmland_id assumption claimed -- see
+    test_td095_field_farmland_resolver.py."""
+    if entry.get("unsupported"):
+        return None, entry["unsupported"]
+    root_rx, _root_ry, root_rz = fields_root_rotation
+    if root_rx != 0.0 or root_rz != 0.0:
+        return None, (
+            f"fields root declares a non-Y rotation {fields_root_rotation} "
+            "this parser does not compose")
+    ftx, _fty, ftz = entry["field_translation"]
+    fry = entry["field_rotation"][1]
+    ctx, _cty, ctz = entry["container_translation"]
+    croty = entry["container_rotation"][1]
+    root_tx, _root_ty, root_tz = fields_root_translation
+    root_ry = fields_root_rotation[1]
+
+    world_points = []
+    for (px, _py, pz) in entry["points"]:
+        x, z = _rotate_y(px, pz, croty)
+        x += ctx
+        z += ctz
+        x, z = _rotate_y(x, z, fry)
+        x += ftx
+        z += ftz
+        x, z = _rotate_y(x, z, root_ry)
+        x += root_tx
+        z += root_tz
+        world_points.append((x, z))
+    return world_points, None
+
+
+def polygon_area_centroid(points):
+    """(cx, cz), signed_area_m2 -- the polygon's AREA centroid (shoelace-
+    weighted), never the plain average of its vertices.
+
+    ⛔ THE VERTEX AVERAGE IS WRONG, AND MEASURED WRONG. On Montana field 65
+    (297 vertices, unevenly spaced -- hundreds of points along one long
+    curved edge, few on the straight ones) the vertex average resolved to a
+    DIFFERENT farmland parcel than the polygon itself, breaking the 122/122
+    regression by exactly one field; the area centroid does not (verified
+    122/122). A dense, curved edge pulls a plain average toward itself; the
+    area centroid is invariant to how densely a boundary happens to be
+    authored."""
+    n = len(points)
+    signed_area = 0.0
+    cx = 0.0
+    cz = 0.0
+    for i in range(n):
+        x1, z1 = points[i]
+        x2, z2 = points[(i + 1) % n]
+        cross = x1 * z2 - x2 * z1
+        signed_area += cross
+        cx += (x1 + x2) * cross
+        cz += (z1 + z2) * cross
+    signed_area *= 0.5
+    if abs(signed_area) < 1e-9:
+        # Degenerate (zero-area / collinear) polygon -- fall back to the
+        # vertex average rather than divide by ~zero. Not the normal path.
+        return (sum(p[0] for p in points) / n, sum(p[1] for p in points) / n), signed_area
+    return (cx / (6 * signed_area), cz / (6 * signed_area)), signed_area
+
+
+def shoelace_area_ha(points):
+    """The polygon's own area (item 3), in hectares -- the same shoelace sum
+    polygon_area_centroid computes, kept as its own function per this file's
+    established convention (pixels_to_hectares, compute_parcel_cost) of
+    extracting anything that feeds a headline number so it can be tested and
+    mutated on its own."""
+    n = len(points)
+    total = 0.0
+    for i in range(n):
+        x1, z1 = points[i]
+        x2, z2 = points[(i + 1) % n]
+        total += x1 * z2 - x2 * z1
+    return abs(total) / 2.0 / M2_PER_HECTARE
+
+
+def world_to_raster_pixel(world_x, world_z, map_width_m, map_height_m,
+                          raster_width, raster_height):
+    """World (x, z) -> raster (px, pz), or None if outside the raster. See
+    CITE_WORLD_TO_RASTER for the engine formula this applies verbatim."""
+    px = math.floor(raster_width * (world_x + map_width_m / 2.0) / map_width_m)
+    pz = math.floor(raster_height * (world_z + map_height_m / 2.0) / map_height_m)
+    if not (0 <= px < raster_width and 0 <= pz < raster_height):
+        return None
+    return px, pz
+
+
+def sample_farmland_id(pixels, raster_width, pixel):
+    """Row-major sample of the decoded GRLE raster: pixels[pz*width + px].
+
+    Row-major, x-fast, validated (not assumed) against the 175 fields across
+    savegame1/Montana and savegame2/LoneStar whose farmland id is
+    independently known from the retired field_id==farmland_id result: all
+    175/175 resolve to that same id through this indexing. Column-major and
+    both single-axis flips were tried and rejected -- 0/175 each."""
+    px, pz = pixel
+    return pixels[pz * raster_width + px]
+
+
+def resolve_spatial_field_farmland(field_polygons, fields_root_translation,
+                                   fields_root_rotation, pixels, raster_width,
+                                   raster_height, map_width_m, map_height_m):
+    """{field_id: result} for every field the MAP knows about (not the save --
+    see build_spatial_field_rows for the save-side join). result is:
+        {"farmland_id": int or None, "area_ha": float or None,
+         "authored_area_ha": float or None, "straddles_farmland": bool or None,
+         "reason": str or None}
+    `reason` is set (and farmland_id/area_ha/straddles_farmland are None)
+    exactly when the field could not be resolved -- never a guess, never a
+    silently dropped field."""
+    results = {}
+    for fid, entry in field_polygons.items():
+        authored = entry.get("authored_area_ha")
+        world_points, reason = compose_field_world_points(
+            entry, fields_root_translation, fields_root_rotation)
+        if world_points is None:
+            results[fid] = {"farmland_id": None, "area_ha": None,
+                            "authored_area_ha": authored,
+                            "straddles_farmland": None, "reason": reason}
+            continue
+        (cx, cz), _signed_area = polygon_area_centroid(world_points)
+        pixel = world_to_raster_pixel(cx, cz, map_width_m, map_height_m,
+                                      raster_width, raster_height)
+        if pixel is None:
+            results[fid] = {"farmland_id": None, "area_ha": None,
+                            "authored_area_ha": authored,
+                            "straddles_farmland": None,
+                            "reason": "field polygon's area centroid falls "
+                                     "outside this map's raster bounds"}
+            continue
+        farmland_id = sample_farmland_id(pixels, raster_width, pixel)
+        # Straddle check: sample every VERTEX, not only the centroid. A field
+        # whose vertices land on more than one distinct farmland id crosses a
+        # parcel boundary; the centroid answer is still reported (the best
+        # single answer this parser has), but the crossing becomes visible
+        # instead of silently absorbed into one id.
+        vertex_ids = set()
+        for (vx, vz) in world_points:
+            vpixel = world_to_raster_pixel(vx, vz, map_width_m, map_height_m,
+                                           raster_width, raster_height)
+            if vpixel is not None:
+                vertex_ids.add(sample_farmland_id(pixels, raster_width, vpixel))
+        results[fid] = {
+            "farmland_id": farmland_id,
+            "area_ha": round(shoelace_area_ha(world_points), 4),
+            "authored_area_ha": authored,
+            "straddles_farmland": len(vertex_ids - {None}) > 1,
+            "reason": None,
+        }
+    return results
+
+
+def build_spatial_field_rows(field_ids, spatial_results, parcels, farm_id,
+                             calibration_notes):
+    """One ownership row per SAVE-side field id, via the spatial join.
+    `spatial_results` is keyed by the MAP's own field ids (resolve_spatial_
+    field_farmland, run over the map's polygons); a save-side field id absent
+    from it has no map-side polygon at all and reports null with a reason,
+    appended to calibration_notes exactly like the retired identity join's
+    unmatched branch did.
+
+    Appends to `calibration_notes` in place, for the unresolved and
+    straddling branches."""
     rows = []
     for field_id in field_ids:
-        if field_id in parcels:
-            parcel = parcels[field_id]
-            rows.append({
-                "field_id": field_id,
-                "farmland_id": field_id,
-                # The label that stops a consumer reading an assumed join as a
-                # measured one. See build_identity_overlap().
-                "identity_basis": IDENTITY_BASIS,
-                "owned": parcel["owner_farm_id"] == farm_id,
-                "owner_farm_id": parcel["owner_farm_id"],
-            })
-        else:
+        r = spatial_results.get(field_id)
+        if r is None:
             calibration_notes.append(
-                f"field id {field_id} has no matching farmland id in the decoded "
-                "raster -- the field_id==farmland_id assumption does not hold for "
-                "this field; reported with farmland_id=null rather than guessed")
-            rows.append({
-                "field_id": field_id,
-                "farmland_id": None,
-                "identity_basis": None,
-                "owned": None,
-                "owner_farm_id": None,
-            })
+                f"field id {field_id} has no matching polygon in this map's "
+                "i3d -- reported with farmland_id=null rather than guessed")
+            rows.append({"field_id": field_id, "farmland_id": None,
+                        "identity_basis": None, "owned": None,
+                        "owner_farm_id": None, "area_ha": None,
+                        "authored_area_ha": None, "straddles_farmland": None})
+            continue
+        if r["farmland_id"] is None:
+            calibration_notes.append(f"field id {field_id}: {r['reason']}")
+            rows.append({"field_id": field_id, "farmland_id": None,
+                        "identity_basis": None, "owned": None,
+                        "owner_farm_id": None, "area_ha": None,
+                        "authored_area_ha": r["authored_area_ha"],
+                        "straddles_farmland": None})
+            continue
+        parcel = parcels.get(r["farmland_id"])
+        owner_farm_id = parcel["owner_farm_id"] if parcel else None
+        if r["straddles_farmland"]:
+            calibration_notes.append(
+                f"field id {field_id}: polygon vertices resolve to more than "
+                "one farmland id -- the field straddles a parcel boundary; "
+                f"farmland_id {r['farmland_id']} is this field's centroid "
+                "parcel, not a full-coverage answer")
+        rows.append({
+            "field_id": field_id,
+            "farmland_id": r["farmland_id"],
+            "identity_basis": SPATIAL_JOIN_BASIS,
+            "owned": (owner_farm_id == farm_id) if parcel else None,
+            "owner_farm_id": owner_farm_id,
+            "area_ha": r["area_ha"],
+            "authored_area_ha": r["authored_area_ha"],
+            "straddles_farmland": r["straddles_farmland"],
+        })
     return rows
 
 
-def build_identity_overlap(field_ids, parcel_ids):
-    """Report whether the field_id == farmland_id assumption was FALSIFIABLE
-    on this save -- which is a different question from whether it held.
+def build_field_coverage(map_field_ids, save_field_ids):
+    """TECH-DEBT-095's required output: the coverage between the map's own
+    field polygons and the save's own field ids. Not a falsifiability check
+    on an assumption -- there is no assumption left to falsify -- a MEASURED
+    count of which side has data the other lacks.
 
-    ⛔ THIS IS THE DEFECT THE LAND SET WAS BUILT TO FIX. The only check
-    available offline is "is this field id also a parcel id". Where the field
-    ids are a SUBSET of the parcel ids, that check cannot fail for any input,
-    so it certifies nothing: a coincidence and a correspondence produce
-    identical output. On the live save every field id is also a parcel id, so
-    the historic "0 unmatched, 0 calibration notes" was the guard being unable
-    to fire, and it was being read as the guard passing.
-
-    `falsifiable` is therefore emitted next to the result. It answers "could
-    this check have caught a wrong answer?", and where it is false the count
-    of unmatched fields carries no evidential weight at all.
-
-    There is no stronger check to reach for -- re-measured 2026-08-05, a
-    savegame <field> carries id plus crop state and NOTHING that could refute
-    a mis-join: no area, no position, no farmland reference. Making this
-    detectable requires spatial resolution and is deliberately out of scope."""
-    if field_ids is None:
+    Either side being None (map i3d unreadable / save fields.xml unreadable)
+    still reports rather than crashing."""
+    if map_field_ids is None or save_field_ids is None:
         return {
             "checked": False,
-            "reason": "fields.xml unreadable -- no field ids to check",
-            "falsifiable": None,
+            "reason": ("map field polygons unavailable" if map_field_ids is None
+                      else "save fields.xml unavailable"),
         }
-    fields = set(field_ids)
-    outside = sorted(fields - set(parcel_ids))
+    map_ids = set(map_field_ids)
+    save_ids = set(save_field_ids)
+    map_only = sorted(map_ids - save_ids)
+    save_only = sorted(save_ids - map_ids)
+    overlap = sorted(map_ids & save_ids)
     return {
         "checked": True,
-        "rule": IDENTITY_RULE,
-        "field_id_count": len(fields),
-        "parcel_id_count": len(parcel_ids),
-        "field_ids_outside_parcel_id_space": outside,
-        "unmatched_count": len(outside),
-        # The whole point. A subset means the guard has no reachable failing
-        # input on this map, so its "pass" carries no information.
-        "falsifiable": not fields.issubset(set(parcel_ids)),
+        "map_field_id_count": len(map_ids),
+        "save_field_id_count": len(save_ids),
+        "overlap_count": len(overlap),
+        "map_only_count": len(map_only),
+        "save_only_count": len(save_only),
+        "map_only_field_ids": map_only,
+        "save_only_field_ids": save_only,
         "note": (
-            "unmatched_count is only evidence when falsifiable is true. Where "
-            "the field ids are a subset of the parcel ids, a WRONG "
-            "correspondence produces the same zero as a right one, so zero "
-            "unmatched fields is not evidence the join is correct."
+            "save_only field ids have no map-side polygon and resolve to "
+            "farmland_id=null with a reason -- see field_ownership.data. "
+            "map_only field ids are on the map but the save has no matching "
+            "<field>; they never appear as a row here."
         ),
+    }
+
+
+def build_shoelace_label_check(field_results):
+    """Item 3's self-check: this parser's own shoelace area against the map's
+    own authored <Note text="fieldN\\nN.NN ha"/> label, for every field that
+    carries one. Corroboration, not a blocking gate -- a map author is free
+    to omit the label (none of the three maps this project has do), so its
+    absence must not fail the run. Reported so a wrong shoelace computation
+    is VISIBLE rather than silently trusted."""
+    checked = 0
+    mismatches = []
+    for fid, r in field_results.items():
+        if r["authored_area_ha"] is None or r["area_ha"] is None:
+            continue
+        checked += 1
+        diff = round(abs(r["area_ha"] - r["authored_area_ha"]), 4)
+        # The label is authored to 2 decimals; a hair looser than the 0.005ha
+        # of pure rounding noise on both sides, tight enough to still catch a
+        # genuinely wrong area (an axis swap, a missed point).
+        if diff > 0.02:
+            mismatches.append({"field_id": fid, "computed_area_ha": r["area_ha"],
+                              "authored_area_ha": r["authored_area_ha"],
+                              "diff_ha": diff})
+    return {
+        "checked": checked,
+        "mismatches": mismatches,
+        "agrees": checked > 0 and not mismatches,
     }
 
 
@@ -860,6 +1515,7 @@ ELEM_PRICE_PER_HA = "config/farmlands.xml:farmlands@pricePerHa"
 ELEM_PRICE_SCALE = "config/farmlands.xml:farmlands/farmland@priceScale"
 ELEM_RASTER = "infoLayer_farmlands.grle:*"
 ELEM_MAP_DIMS = "map.xml:map@width"
+ELEM_MAP_I3D_FIELDS = "map.i3d:fields/field<N>/*/point<N>@translation"
 # environment.xml is opened EVERY run by parse_current_day(), regardless of
 # CROSS_CHECK_ENABLED, and was previously declared nowhere -- absent from every
 # section's source_elements, from provenance.sources and from source_set_hash.
@@ -876,7 +1532,7 @@ ELEM_CURRENT_DAY = "environment.xml:environment/currentDay"
 # non-coercion would be a claim about a guarantee that is not being used." Most
 # figures this domain reports are COMPUTED -- decoded from a raster, then
 # multiplied -- so no schema governs them and there is nothing to cite. They
-# carry an explicit non-schema note instead, per William's ruling 2026-08-07:
+# carry an explicit non-schema note instead, per the owner's ruling 2026-08-07:
 # silence is indistinguishable from "never written", which is the defect being
 # closed here. That is DEC-001 applied to a trust note rather than to a parser.
 #
@@ -945,14 +1601,27 @@ GUARANTEE_TOTAL_AREA_HA = _COMPUTED + (
 GUARANTEE_LAND_VALUE = _COMPUTED + (
     "Derived as the sum of cost over the parcels this farm owns.")
 GUARANTEE_FARMLAND_ID = (
-    "DERIVED, NOT COERCED -- the identity join's output (a field_id read as a "
-    "farmland_id), not a value read from any file. The join is licensed in "
-    "interpretation_guarantee (ARCH-R3-04) and never here.")
+    "DERIVED, NOT COERCED -- the spatial join's output (a raster sample at "
+    "the field polygon's own area centroid), not a value read from any "
+    "file. The join is licensed in interpretation_guarantee (ARCH-R3-06) "
+    "and never here.")
 GUARANTEE_OWNED = (
     "DERIVED, NOT COERCED -- the boolean result of comparing this parcel's "
     "owner_farm_id against the queried farm_id.")
+GUARANTEE_FIELD_AREA_HA = _COMPUTED + (
+    "Derived via the shoelace formula (shoelace_area_ha) over the field "
+    "polygon's world-composed vertices (map.i3d).")
+GUARANTEE_STRADDLES_FARMLAND = (
+    "DERIVED, NOT COERCED -- true when the field polygon's own vertices "
+    "sample more than one distinct farmland id (resolve_spatial_field_"
+    "farmland's straddle check), false when they agree, null when the "
+    "field itself could not be resolved.")
+GUARANTEE_AUTHORED_AREA_HA = (
+    "READ, NOT COERCED -- the map author's own printed <Note text=\"fieldN"
+    "\\nN.NN ha\"/> label (map.i3d), parsed as a float. No schema governs "
+    "this optional developer annotation; null where a field carries none.")
 
-# ⚖ ARCH-R3-05 -- William 2026-08-07b, spec § 6.5 rev 10, carried under DEC-077.
+# ⚖ ARCH-R3-05 -- the owner 2026-08-07b, spec § 6.5 rev 10, carried under DEC-077.
 #
 # "In the savegame's farmland.xml, farmlands/farmland@id and
 # farmlands/farmland@farmId may be coerced to int, anywhere in the file, by any
@@ -987,10 +1656,83 @@ def build_arch_r3_05(raw_id_conformance):
             "not a measurement. It licenses the coercion ONLY: it says nothing "
             "about what the ids MEAN -- not that @farmId joins to farms.xml, not "
             "that @farmId=0 means unowned, and not that a parcel id relates to a "
-            "field id (that reading is ARCH-R3-04's, on its own evidence). It is "
+            "field id (that reading is ARCH-R3-06's, on its own evidence). It is "
             "not a licence to aggregate, and it does not license the silent "
             "`except (KeyError, ValueError): continue` that drops a malformed row."
         ),
+    }
+
+
+# ⚖ ARCH-R3-06, TECH-DEBT-095 (HIGH), 2026-09-04. Replaces ARCH-R3-04, which
+# licensed `field_id == farmland_id` -- permanently unfalsifiable, scoped to
+# one map. That assumption was measured FALSE on MapUS/savegame3 (map/save
+# field-id overlap 64/77; see build_field_coverage). ARCH-R3-06 is not
+# scoped to one map: it is the METHOD every map now uses.
+#
+# ⚠ ITS AREA CLAIM IS FALSIFIABLE PER SAVE. ITS JOIN CLAIM IS NOT
+# (TECH-DEBT-107). This comment previously made the per-save claim unqualified
+# and cited both carried measurements as its evidence -- including
+# build_field_coverage, whose OWN docstring disclaims being one ("Not a
+# falsifiability check on an assumption ... a MEASURED count"). A shoelace
+# MISMATCH does refute the join, because the sample is taken at the polygon's
+# area centroid; shoelace AGREEMENT refutes nothing about position, because the
+# sum is invariant under rotation and translation. The join's position rests on
+# a build-time cross-map regression instead. See build_arch_r3_06's `text`.
+def build_arch_r3_06(field_coverage, shoelace_check):
+    """One entry per ruling, never split, never merged (§ 6.2.1 rule 3)."""
+    return {
+        "kind": "design_ruling",
+        "ruling": "ARCH-R3-06",
+        # DERIVED FROM THE DATA, copying build_raw_id_conformance (ARCH-R3-05,
+        # :679) rather than inventing a second shape: TRUE EXACTLY WHERE THE
+        # CHECK FOUND A CONTRADICTION, never merely where it was able to look.
+        # None where nothing was measured -- the spec forbids a default `false`.
+        # ⚠ TECH-DEBT-107. This shipped as `bool(checked)`, which is "we were
+        # able to look" -- the exact shape the comment at :676 names as wrong.
+        # A shoelace MISMATCH does falsify this ruling: the join samples the
+        # polygon's AREA CENTROID, so a polygon whose area is provably wrong
+        # has a provably wrong centroid and lands in the wrong parcel.
+        # Shoelace AGREEMENT corroborates nothing about the join -- see `text`.
+        "falsifiable_on_this_save": (
+            bool(shoelace_check.get("mismatches"))
+            if shoelace_check and shoelace_check.get("checked") else None),
+        "text": (
+            "Field ownership is attributed by sampling infoLayer_farmlands.grle "
+            "at the AREA CENTROID of the field's own polygon (map.i3d), after "
+            "transforming world -> raster via the engine's own "
+            "FarmlandManager:convertWorldToLocalPosition formula (see "
+            "CITE_WORLD_TO_RASTER / typing_guarantee.farmland_id). This "
+            "replaces ARCH-R3-04's field_id == farmland_id identity "
+            "assumption, retired 2026-09-04 after a HIGH-severity finding "
+            "demonstrated it false on MapUS/savegame3. Unlike ARCH-R3-04 "
+            "this is a MEASURED join, not a permanently unfalsifiable design "
+            "decision. TWO CLAIMS LIVE HERE AND THEY CARRY DIFFERENT "
+            "EVIDENCE, so do not read one as the other. "
+            "(1) The AREA is corroborated per save: shoelace_label_check "
+            "compares this parser's own polygon-area formula against the map "
+            "author's own printed ha label, and a mismatch is a genuine "
+            "refutation -- a polygon whose area is wrong has a wrong area "
+            "centroid, so the sample lands in the wrong parcel. "
+            "(2) The JOIN'S POSITION is NOT corroborated per save, and no "
+            "measurement carried in this object can corroborate it. The "
+            "shoelace sum is INVARIANT UNDER ROTATION AND TRANSLATION -- "
+            "precisely the two degrees of freedom the world-space transform "
+            "consists of -- so shoelace AGREEMENT is silent about where the "
+            "polygon sits. field_coverage compares field-id SETS and never "
+            "geometry; it documents itself as a measured count, not a "
+            "falsifier. The join's position rests instead on a BUILD-TIME "
+            "CROSS-MAP REGRESSION against the retired identity result "
+            "(Montana 122/122, LoneStar 53/53), which is evidence but is NOT "
+            "a per-save falsifier: `checked: N` means N fields had an area "
+            "label to compare, never that N fields had their POSITION "
+            "corroborated. A "
+            "single centroid sample cannot see a field that genuinely "
+            "straddles two farmland parcels; straddles_farmland flags "
+            "exactly that case on the affected rows rather than silently "
+            "picking a side."
+        ),
+        "field_coverage": field_coverage,
+        "shoelace_label_check": shoelace_check,
     }
 
 
@@ -1005,47 +1747,39 @@ def build_arch_r3_05(raw_id_conformance):
 
 
 def build_sections(map_record, parcels, owned_ids, owned_total_area_ha,
-                   owned_land_value, fields_out, field_err, identity_overlap,
-                   calibration_notes=None, raw_id_conformance=None):
+                   owned_land_value, fields_out, field_err, field_coverage,
+                   calibration_notes=None, raw_id_conformance=None,
+                   shoelace_check=None):
     """The four sec. 6.2 sections this domain emits, every run.
 
     `calibration_notes` is the SAME list main() later hands to
     build_legacy_top_level, which derives `calibration_needed` from its
-    length -- so appending here is how the scope void reaches that flag.
-    Defaulted for fixtures that do not care; never skipped, only discarded.
+    length -- so appending here is how a per-field resolution failure reaches
+    that flag. Defaulted for fixtures that do not care; never skipped, only
+    discarded.
 
     `raw_id_conformance` carries ARCH-R3-05's per-save falsifier. Defaulted so
     existing fixtures keep working; where it is None the ruling still ships and
     reports `falsifiable_on_this_save: null`, which is the spec's required value
-    for a measurement not taken -- never `false`."""
+    for a measurement not taken -- never `false`.
+
+    `field_coverage` (build_field_coverage) and `shoelace_check`
+    (build_shoelace_label_check) are the two measurements ARCH-R3-06 carries.
+    ⚠ THEY CORROBORATE THE AREA, NOT THE JOIN'S POSITION (TECH-DEBT-107); this
+    paragraph previously attributed per-save corroboration to the spatial join
+    itself, which is the claim the ruling no longer makes -- and
+    build_field_coverage disclaims being a falsifier in its own docstring. See
+    build_arch_r3_06's `text` for what each can and cannot refute. Both default to
+    None for fixtures that do not care; a None `shoelace_check` reports
+    `falsifiable_on_this_save: null` on the ruling -- the spec's required
+    value for a measurement not taken, never `false`, exactly as ARCH-R3-05
+    does two paragraphs up. ⚠ This docstring claimed `false` until
+    TECH-DEBT-107; that contradicted the paragraph above it AND the shipped
+    behaviour it described was itself the defect."""
     if calibration_notes is None:
         calibration_notes = []
     raster_elements = [ELEM_RASTER, ELEM_PRICE_PER_HA, ELEM_PRICE_SCALE,
                        ELEM_FARMLAND_ID, ELEM_FARMLAND_OWNER]
-
-    # ⚖ ARCH-R3-04 IS SCOPED TO ONE MAP, and this is the gate that enforces it.
-    # Spec: "Pointed at any other map, the ruling is void and
-    # calibration_needed is the honest output." Before this gate the parser
-    # applied the join unconditionally -- a confident ownership claim on a map
-    # the ruling does not cover -- and the spec's own mandated "red on scope"
-    # mutation had nothing to fire against. The suite's own fixtures passed
-    # map_id "m" and "mapUS" and stayed green, which is the same gap seen from
-    # the inside.
-    on_ruled_map = map_record.get("map_id") == RULED_MAP_ID
-
-    # ⚖ OWNER RULING, William 2026-08-07: calibration_needed DOES fire on the
-    # scope void. The spec sentence quoted above names it as the honest output
-    # and the gate implemented only the first half of it -- the free-text
-    # `reason` said so while the one machine-readable flag a consumer branches
-    # on stayed False. The unmatched-field branch below already does this
-    # correctly; this is the same signal for the other way the join can fail
-    # to apply. Both review lanes found the asymmetry and split on whether it
-    # was a patch or a decision; it was ruled a patch.
-    if not on_ruled_map:
-        calibration_notes.append(
-            "map %r is not %s: ARCH-R3-04 does not cover it, so no "
-            "field->farmland ownership is claimed and this map needs its own "
-            "calibration" % (map_record.get("map_id"), RULED_MAP_ID))
 
     # The area math is the engine's own, and this is a citation rather than
     # an argument: FarmlandManager:loadFarmlandData computes
@@ -1053,7 +1787,7 @@ def build_sections(map_record, parcels, owned_ids, owned_total_area_ha,
     # transformFactor^2, ha = areaToHa(pixelCount, pixelToSqm) -- one factor
     # for BOTH axes, which is why gate 2 refuses non-square pixels rather than
     # averaging them.
-    # ⚖ OWNER RULING, William 2026-08-07: NO DESIGN RULING IS INTENDED HERE, so
+    # ⚖ OWNER RULING, the owner, 2026-08-07: NO DESIGN RULING IS INTENDED HERE, so
     # this section stops declaring one. It shipped `kind: "design_ruling"` with
     # `ruling: None` -- a middle state sec. 6.5 does not define. The spec gives
     # exactly two shapes (`null`, or an object whose `kind` is `schema_cited` or
@@ -1081,10 +1815,10 @@ def build_sections(map_record, parcels, owned_ids, owned_total_area_ha,
     # corroboration held non-licensing is, by its own terms, not a licence. The
     # gates it describes are enforced in code and tested; none of that moved.
     # ⛔ The retired `ruling: None  # TODO ARCH-R3-04` cross-reference does NOT
-    # come back with any future object here. ARCH-R3-04 licenses the IDENTITY
-    # JOIN (spec sec. 6.5), not the raster area derivation, so filling it in
-    # would never have licensed this block and a reader resolving the ruling
-    # would have believed otherwise.
+    # come back with any future object here. ARCH-R3-06 (ARCH-R3-04's
+    # successor) licenses the SPATIAL JOIN (spec sec. 6.5), not the raster
+    # area derivation, so filling it in would never have licensed this block
+    # and a reader resolving the ruling would have believed otherwise.
     # ⚖ DEC-077 / § 6.2.1: this field is now a LIST. ONE form only -- `[]` when
     # there is no ruled reading, never `null`; a one-element list when there is
     # one, never a bare object. Uniformly iterable, so no consumer branches on
@@ -1149,6 +1883,27 @@ def build_sections(map_record, parcels, owned_ids, owned_total_area_ha,
         data={str(k): v for k, v in sorted(parcels.items())},
     )
 
+    # ⛔ TECH-DEBT-103: a farm that owns land whose price cannot be computed is
+    # neither "ok" (land_value is not a real figure) nor "unknown_by_design"
+    # (owned_ids is non-empty -- the farm does have parcels). "partial" is the
+    # honest third state: the section ran, some of its data is unavailable, and
+    # the roll-up in sec. 6.3.3 already treats "partial" as outranking "ok" for
+    # exactly this reason.
+    if not owned_ids:
+        owned_status = "unknown_by_design"
+        owned_reason = "farm owns no farmland parcels on this map"
+    elif owned_land_value is None:
+        owned_status = "partial"
+        owned_reason = (
+            "at least one owned parcel declares a per-parcel price= (see "
+            "farmland_parcels for which one) -- this parser "
+            "computes only the derived areaInHa*pricePerHa*priceScale form, "
+            "not fixedPrice, so land_value is unknown rather than a wrong "
+            "derived figure")
+    else:
+        owned_status = "ok"
+        owned_reason = None
+
     owned_section = _section(
         # sec. 6.3.3 status table: "the script ran; the container is present and
         # holds nothing" -> unknown_by_design + empty_means, count 0. No
@@ -1157,8 +1912,8 @@ def build_sections(map_record, parcels, owned_ids, owned_total_area_ha,
         # ⛔ This was hardcoded "ok" while `empty_means` beside it was already
         # computed correctly and conditionally, so a zero-parcel farm emitted
         # `ok` + `farm_has_none` at once -- a pairing the table forbids.
-        status="unknown_by_design" if not owned_ids else "ok",
-        reason=("farm owns no farmland parcels on this map" if not owned_ids else None),
+        status=owned_status,
+        reason=owned_reason,
         shape="record",
         capability_ids=CAPABILITY_IDS,
         typing={"total_area_ha": "float", "land_value": "float"},
@@ -1204,183 +1959,51 @@ def build_sections(map_record, parcels, owned_ids, owned_total_area_ha,
             blocked_by=None, count=0, data=[],
         )
     else:
-        # ⛔ B3: OFF THE RULED MAP THE LICENCE IS VOID, so the rows must stop
-        # claiming an ownership answer too. Voiding the licence while leaving
-        # `owned: true` on every row would move the dishonesty rather than
-        # remove it. Done here, in one place, so the licence and the rows can
-        # never disagree about whether the join applied.
-        if not on_ruled_map:
-            fields_out = [
-                {**row, "farmland_id": None, "identity_basis": None,
-                 "owned": None, "owner_farm_id": None}
-                for row in fields_out
-            ]
-
-        # A3: the reason is DERIVED from the per-save falsifiability, never
-        # hardcoded. It previously asserted "could not falsify on this save"
-        # unconditionally while `falsifiable` was computed per save, so on a
-        # non-subset save the section contradicted itself.
-        falsifiable = identity_overlap.get("falsifiable")
-        if not on_ruled_map:
-            reason = (
-                f"ARCH-R3-04 does not cover map {map_record.get('map_id')!r} -- the "
-                f"ruling is scoped to {RULED_MAP_ID}. The identity "
-                f"{IDENTITY_RULE} is NOT applied here and no field->farmland "
-                "ownership is claimed; calibration is needed for this map."
-            )
-        elif falsifiable:
-            reason = (
-                "field->farmland ownership rests on the identity "
-                f"{IDENTITY_RULE}, licensed by ARCH-R3-04 and not re-derived "
-                "per run. On this save the id-space check WAS falsifiable and "
-                "unmatched fields are reported (see "
-                "interpretation_guarantee.id_space_overlap)."
-            )
+        # ⚖ ARCH-R3-06. Every row here rests on a MEASURED spatial join, but
+        # not every row necessarily resolved -- a field with no map-side
+        # polygon, an unsupported ancestor transform, or a centroid outside
+        # the raster still reports null (see build_spatial_field_rows). The
+        # section status follows the rows: "ok" only when every one of them
+        # resolved, "partial" when at least one did not.
+        unresolved = [r for r in fields_out if r["farmland_id"] is None]
+        if not unresolved:
+            reason = None
+            status = "ok"
         else:
+            status = "partial"
             reason = (
-                "field->farmland ownership rests on the identity "
-                f"{IDENTITY_RULE}, licensed by ARCH-R3-04, which this script "
-                "does not re-derive and could not falsify on this save (see "
-                "interpretation_guarantee.id_space_overlap)."
+                f"{len(unresolved)} of {len(fields_out)} fields could not be "
+                "spatially resolved to a farmland id (no map-side polygon, an "
+                "unsupported ancestor transform, or a centroid outside this "
+                "map's raster) -- see calibration_notes and "
+                "interpretation_guarantee.field_coverage."
             )
 
         fields_section = _section(
-            # PARTIAL, NOT OK, AND THIS IS THE HONEST STATUS. Every row here
-            # rests on a DESIGN RULING, not a measurement: ARCH-R3-04 is
-            # `kind: design_ruling` permanently and carries
-            # falsifiable_on_this_save: false. "ok" would read as a measured
-            # join. sec. 6.5's worked example shows "ok", but it names the
-            # section "fields" where this domain ships "field_ownership", so it
-            # is illustrative rather than a key-by-key mandate -- and neither
-            # review lane raised the status. FLAGGED for the step-4 review
-            # rather than flipped here, because it changes the domain roll-up
-            # every consumer sees.
-            status="partial",
+            status=status,
             reason=reason,
             shape="record_list", capability_ids=CAPABILITY_IDS,
-            # ⛔ DECLARE WHAT IS ACTUALLY EMITTED. This declared four
-            # non-nullable types unconditionally, while off the ruled map the
-            # scope gate sets farmland_id, identity_basis, owned and
-            # owner_farm_id to None on EVERY row -- so `owned: "bool"` described
-            # a NoneType, universally rather than occasionally, and
-            # typing_guarantee ({}) licensed nothing. sec. 6.5 rule 3's
-            # un-claiming default again: off-map only field_id survives as a
-            # typed value, so only field_id is declared. Sibling suites enforce
-            # typing-vs-data conformance and would have caught this.
-            typing=({"field_id": "int", "farmland_id": "int",
-                     "owned": "bool", "owner_farm_id": "int"}
-                    if on_ruled_map else {"field_id": "int"}),
-            # MIRRORS `typing` ABOVE, and must keep mirroring it: off the ruled
-            # map the scope gate nulls every field but field_id, so only
-            # field_id survives as a typed value and only it carries a
-            # guarantee. Declaring more here than `typing` declares would
-            # re-create the defect the comment above describes, one key over.
-            # `owner_farm_id` is absent because typing_guarantee is citations
-            # only and its licence is ARCH-R3-05, in interpretation_guarantee
-            # below -- see the note beside the constants.
-            typing_guarantee=({
+            # Every row carries every one of these keys -- value None where
+            # a field did not resolve, exactly like parcels_section's own
+            # `cost` (typed float, sometimes None per compute_parcel_cost).
+            typing={"field_id": "int", "farmland_id": "int", "owned": "bool",
+                    "owner_farm_id": "int", "area_ha": "float",
+                    "authored_area_ha": "float", "straddles_farmland": "bool"},
+            typing_guarantee={
                 "field_id": CITE_FIELD_ID,
                 "farmland_id": GUARANTEE_FARMLAND_ID,
                 "owned": GUARANTEE_OWNED,
-            } if on_ruled_map else {"field_id": CITE_FIELD_ID}),
+                "area_ha": GUARANTEE_FIELD_AREA_HA,
+                "authored_area_ha": GUARANTEE_AUTHORED_AREA_HA,
+                "straddles_farmland": GUARANTEE_STRADDLES_FARMLAND,
+            },
             identity_fields=["field_id"],
             empty_means=None,
             absence_guarantee=None,
-            # ⚖ SAME OWNER RULING, fourth section. Off the ruled map this
-            # emitted `kind: "design_ruling"` with `ruling: None` -- the same
-            # undefined middle state as the raster block, and by sec. 6.5 rule 2
-            # a design_ruling that names no ruling is a build failure. Off-map
-            # the section now takes rule 3's un-claiming default and reports
-            # what it observed without the interpretation.
-            #
-            # ⚠ What a consumer uses instead, off-map: `reason` names the map
-            # and says the join was not applied, and `calibration_needed` is now
-            # true (the companion ruling above). The rows themselves carry
-            # `owned: None`. Nothing that mattered was load-bearing on this
-            # object -- no script reads interpretation_guarantee at all; it is
-            # asserted only by the suites.
-            # ⚖ DEC-077 / § 6.2.1 -- A LIST, and the two rulings have DIFFERENT
-            # SCOPES, which is the whole reason the shapes differ here:
-            #   ARCH-R3-04 is MAP-SCOPED  -> stays inside the on_ruled_map
-            #                                conditional; off-map the list simply
-            #                                does not contain it.
-            #   ARCH-R3-05 is FILE-WIDE   -> appended OUTSIDE the conditional, so
-            #                                it is present on every save.
-            # ⛔ ARCH-R3-04's object below is WRAPPED, not retyped and not
-            # rewritten. Merging the two into one entry is § 6.2.1 rule 3's
-            # forbidden case: two rulings with different falsifiers under one id
-            # cannot be refuted independently, and refuting either would appear
-            # to refute both.
-            interpretation_guarantee=([] if not on_ruled_map else [{
-                # ⛔ kind is design_ruling PERMANENTLY and may NEVER be
-                # relabelled schema_cited. The available substitute is a census
-                # of conforming ids, and a census is INDUCTION, never a
-                # citation (spec sec. 6.5).
-                "kind": "design_ruling",
-                # ⚖ MINTED -- William 2026-08-05c (spec rev 8 sec. 6.5, DEC-070).
-                # This shipped as `ruling: None` + `ruling_status: "UNMINTED"`
-                # while the ruling was already minted, and a test PINNED that
-                # declaration, so the suite went red on the correct fix and
-                # stayed green on the defect. Voided off-map -- see below.
-                # Unconditional: this object now exists ONLY on the ruled map,
-                # so the ruling always resolves. The `if on_ruled_map else None`
-                # that used to sit here was the null-ruling state itself.
-                "ruling": "ARCH-R3-04",
-                # The map the ruling is scoped to, kept so a reader can see what
-                # the licence is bounded by without resolving the id.
-                "map_id": RULED_MAP_ID,
-                # ⚖ OWNER RULING, William 2026-08-07: THE PER-SAVE MEASUREMENT
-                # WINS, so this is DERIVED and never hardcoded.
-                # It shipped as a bare `False` three lines from a `reason` that
-                # the A3 fix had already made per-save, so on a non-subset save
-                # the same JSON object reported that the id-space check FIRED
-                # and that it CANNOT fire. A3 fixed one of three siblings; this
-                # is the other two. The spec's mutation table still mandates the
-                # literal `false` -- the spec is being corrected to match the
-                # measurement, not the measurement bent to match the spec.
-                "falsifiable_on_this_save": falsifiable,
-                "text": (
-                    f"{IDENTITY_RULE}: a field id from fields.xml is read as the "
-                    "id of the farmland parcel containing that field, on "
-                    f"{RULED_MAP_ID} ONLY. The reading is a DECISION, not a "
-                    "measurement. The engine exposes this join only at RUNTIME "
-                    "(FarmlandManager:getFarmlandIdAtWorldPosition), and it is "
-                    "uncallable from a savegame parser. fields.xml carries id "
-                    "plus 14 crop-state attributes and no position, area or "
-                    "farmland reference, so NO data in the savegame can "
-                    "contradict this reading. "
-                    # ⚖ Same ruling, same reason: this sentence asserted a
-                    # SUBSET RELATION THAT IS FALSE on a non-subset save, in the
-                    # licence text a reader trusts most.
-                    + (
-                        "On this save the field ids are NOT a strict subset of "
-                        "the parcel ids, so the range guard's else branch IS "
-                        "reachable and the unmatched fields reported in "
-                        "id_space_overlap are real evidence (sec. 6.5)."
-                        if falsifiable else
-                        "On this save the field ids are a strict subset of the "
-                        "parcel ids, so the range guard's else branch is "
-                        "unreachable and '0 unmatched' is NOT evidence of "
-                        "correctness (sec. 6.5)."
-                    )
-                ),
-                # ⛔ CORROBORATION, HELD NON-LICENSING -- the sec. 6.3.4 pattern.
-                # It rests on a third-party mod artifact AND on the GRLE decoder
-                # BUG-014 sec. 8 records as never independently re-validated, so
-                # it shares a dependency with the component most likely to be
-                # wrong and cannot falsify itself.
-                "corroboration_non_licensing": (
-                    "Derived once on 2026-07-16 from this map's AutoDrive_config.xml "
-                    "(122 'Feld N' mapmarkers) against the GRLE raster, transform "
-                    "selected from 8 candidates, yielding 122/122 farmland_id == "
-                    "field_id with zero collisions. This CORROBORATES the ruling and "
-                    "is deliberately held NON-LICENSING: it is a third-party artifact "
-                    "plus a decoder BUG-014 sec. 8 records as never independently "
-                    "re-validated, and it is not re-derived per run."
-                ),
-                "id_space_overlap": identity_overlap,
-            }]) + [arch_r3_05],
-            source_elements=[ELEM_FIELD_ID, ELEM_FARMLAND_OWNER, ELEM_RASTER],
+            interpretation_guarantee=[
+                build_arch_r3_06(field_coverage, shoelace_check), arch_r3_05],
+            source_elements=[ELEM_FIELD_ID, ELEM_FARMLAND_OWNER, ELEM_RASTER,
+                             ELEM_MAP_I3D_FIELDS],
             blocked_by=None,
             count=len(fields_out),
             data=fields_out,
@@ -1547,14 +2170,26 @@ def parse_args(argv):
              "from its own directory (item #12: that walk-up assumes a "
              "per-project install and cannot resolve on a personal one)",
     )
+    # TECH-DEBT-103b: OPTIONAL. A map that ships as a mod zip needs none of
+    # this -- only a BASE-GAME map (no mod zip at all, e.g. MapUS) is looked
+    # up here, as a fallback when the mod-zip lookup fails. Never required,
+    # never defaulted to a guessed path (F-007).
+    parser.add_argument(
+        "--install-dir", dest="install_dir_flag", default=None, metavar="PATH",
+        help="where FS25 itself is installed, for resolving a BASE-GAME map "
+             "that ships no mod zip; if omitted, resolved from --config's "
+             "config.json paths.install_dir, else the same sanctum/config.json "
+             "walk-up --mods-dir uses. Unresolvable is not fatal by itself -- "
+             "it only matters if the mod-zip lookup fails too.",
+    )
     ns = parser.parse_args(argv[1:])
     # --mods-dir (explicit flag) wins over the positional form if both given.
     mods_dir = ns.mods_dir_flag or ns.positional_mods_dir
-    return ns.savegame_dir, mods_dir, ns.farm_id, ns.config_path
+    return ns.savegame_dir, mods_dir, ns.farm_id, ns.config_path, ns.install_dir_flag
 
 
 def main():
-    savegame_dir, mods_dir, farm_id, config_path = parse_args(sys.argv)
+    savegame_dir, mods_dir, farm_id, config_path, install_dir_flag = parse_args(sys.argv)
 
     # Check the savegame BEFORE the mods dir, because the old order reported
     # the wrong subject. find_mods_dir() ran first, so a bad savegame path
@@ -1585,21 +2220,48 @@ def main():
 
     mod_zip_name = map_id.split(".")[0] + ".zip"
     mod_zip_path = os.path.join(mods_dir, mod_zip_name)
+    map_source_kind = "mod"
+    base_map_dir = None
+    base_map_dir_reason = None
     if not os.path.isfile(mod_zip_path):
-        available = sorted(f for f in os.listdir(mods_dir) if f.lower().endswith(".zip")) if os.path.isdir(mods_dir) else []
-        emit({
-            "error": (
-                f"map mod zip not found: {mod_zip_path} (derived from careerSavegame.xml mapId "
-                f"'{map_id}'). {len(available)} .zip files present in {mods_dir}."
-            ),
-            "calibration_needed": True,
-            "mods_dir_zip_sample": available[:10],
-        })
-        return
+        # ⛔ TECH-DEBT-103b. A missing mod zip does not necessarily mean the
+        # map is unresolvable -- BASE-GAME maps (e.g. MapUS) ship no mod zip
+        # at all and live on disk under <install_dir>/data/maps/<name>/
+        # instead. Try that before giving up. install_dir is resolved lazily,
+        # only here, so a mod-map save that never needs it pays nothing for
+        # this branch existing.
+        install_dir, install_dir_how = find_install_dir(install_dir_flag, config_path)
+        if install_dir is not None:
+            base_map_dir, base_map_dir_reason = find_base_game_map_dir(install_dir, map_id)
+        else:
+            base_map_dir_reason = f"install_dir not resolved: {install_dir_how}"
+
+        if base_map_dir is None:
+            available = sorted(f for f in os.listdir(mods_dir) if f.lower().endswith(".zip")) if os.path.isdir(mods_dir) else []
+            emit({
+                "error": (
+                    f"map mod zip not found: {mod_zip_path} (derived from careerSavegame.xml mapId "
+                    f"'{map_id}'). {len(available)} .zip files present in {mods_dir}. Also tried "
+                    f"the base game: {base_map_dir_reason}."
+                ),
+                "calibration_needed": True,
+                "mods_dir_zip_sample": available[:10],
+            })
+            return
+        map_source_kind = "base_game"
 
     try:
-        zf = zipfile.ZipFile(mod_zip_path)
-    except zipfile.BadZipFile as e:
+        if map_source_kind == "base_game":
+            zf = _DirEntries(base_map_dir)
+            # `mod_zip_path` carries this domain's ONE "where the map data
+            # came from" value all the way to provenance and the legacy shim
+            # (build_legacy_top_level's `sources.map_mod_zip`) -- reusing the
+            # variable rather than adding a second one keeps that contract
+            # frozen (TECH-DEBT-103b brief: "output schema stays frozen").
+            mod_zip_path = base_map_dir
+        else:
+            zf = zipfile.ZipFile(mod_zip_path)
+    except (zipfile.BadZipFile, OSError) as e:
         emit({"error": f"could not open {mod_zip_path}: {e}", "calibration_needed": True})
         return
 
@@ -1608,14 +2270,14 @@ def main():
     pricing_name = find_zip_entry(namelist, "config/farmlands.xml")
     if not isinstance(grle_name, str):
         emit({
-            "error": f"could not uniquely locate infoLayer_farmlands.grle inside {mod_zip_name}",
+            "error": f"could not uniquely locate infoLayer_farmlands.grle inside {mod_zip_path}",
             "calibration_needed": True,
             "candidates": grle_name,
         })
         return
     if not isinstance(pricing_name, str):
         emit({
-            "error": f"could not uniquely locate config/farmlands.xml inside {mod_zip_name}",
+            "error": f"could not uniquely locate config/farmlands.xml inside {mod_zip_path}",
             "calibration_needed": True,
             "candidates": pricing_name,
         })
@@ -1624,14 +2286,42 @@ def main():
     map_xml_name, map_width_m, map_height_m = find_map_dimensions_xml(zf, namelist)
     if map_width_m is None:
         emit({
-            "error": f"could not find a top-level XML declaring <map width= height=> inside {mod_zip_name}",
+            "error": f"could not find a top-level XML declaring <map width= height=> inside {mod_zip_path}",
             "calibration_needed": True,
         })
         return
 
+    # TECH-DEBT-095 (HIGH). ARCH-R3-06's spatial join needs this map's own
+    # field polygons. Located and read here, alongside the grle/pricing
+    # reads, so the zip/dir handle can still close right after -- an
+    # unresolved i3d degrades field_ownership to per-field nulls (see below)
+    # rather than failing the whole run: owned_land/farmland_parcels/
+    # map_calibration have nothing to do with field polygons at all.
+    i3d_name, i3d_locate_reason = find_map_i3d_entry(namelist, map_xml_name)
+
     grle_bytes = zf.read(grle_name)
     pricing_bytes = zf.read(pricing_name)
+    i3d_bytes = zf.read(i3d_name) if i3d_name else None
     zf.close()
+
+    field_polygons = None
+    fields_root_translation = (0.0, 0.0, 0.0)
+    fields_root_rotation = (0.0, 0.0, 0.0)
+    i3d_error = i3d_locate_reason
+    if i3d_bytes is not None:
+        field_polygons, fields_root_translation, fields_root_rotation, i3d_error = \
+            parse_field_polygons(i3d_bytes.decode("utf-8", errors="ignore"))
+
+    # For provenance: a mod zip is one file, hashed whole (file_provenance's
+    # own docstring) -- the i3d is already inside it, so nothing more to add.
+    # A base-game map has no single archive to hash the same way -- hash
+    # exactly the files actually read instead, which is more precise than
+    # the zip case, not less.
+    map_source_paths = (
+        [os.path.join(base_map_dir, grle_name), os.path.join(base_map_dir, pricing_name)]
+        + ([os.path.join(base_map_dir, i3d_name)] if i3d_name else [])
+        if map_source_kind == "base_game" else [mod_zip_path]
+    )
 
     try:
         pixels, raster_width, raster_height = decode_grle(grle_bytes)
@@ -1709,12 +2399,9 @@ def main():
     for fid, pixel_count in histogram.items():
         area_ha = round(pixels_to_hectares(pixel_count, area_per_pixel_m2), 4)
         price_info = pricing.get(fid)
-        if price_info is None or price_info["price_scale"] is None:
-            scale = 1.0
-            calibration_notes.append(f"farmland id {fid}: no priceScale found in {pricing_name}, assumed 1.0")
-        else:
-            scale = price_info["price_scale"]
-        cost = round(area_ha * price_per_ha * scale, 2)
+        cost, scale, note = compute_parcel_cost(fid, area_ha, price_per_ha, price_info, pricing_name)
+        if note is not None:
+            calibration_notes.append(note)
         parcels[fid] = {
             "area_ha": area_ha,
             "price_scale": scale,
@@ -1779,18 +2466,31 @@ def main():
                 "match": abs(recorded - owned_total_cost) < 1.0,
             })
 
-    # --- Field -> farmland -> ownership, via the ASSUMED identity rule --------
-    # Every row carries identity_basis so no consumer can read the join as
-    # measured, and the section carries id_space_overlap so "0 unmatched" can
-    # never again be read as "0 problems". See build_identity_overlap().
+    # --- Field -> farmland, via ARCH-R3-06's MEASURED spatial join ------------
+    # Every row carries identity_basis so a consumer can see this is a join,
+    # not a coerced value, and the section carries field_coverage /
+    # shoelace_label_check so "every field resolved" can be told apart from
+    # "there was nothing here that could have failed" -- TECH-DEBT-095.
     field_ids, field_err = parse_savegame_field_ids(os.path.join(savegame_dir, "fields.xml"))
     fields_out = None
+    shoelace_check = None
+    spatial_results = {}
     if field_ids is None:
         calibration_notes.append(f"could not read fields.xml for field->farmland mapping: {field_err}")
     else:
-        fields_out = build_field_rows(field_ids, parcels, farm_id, calibration_notes)
+        if field_polygons is None:
+            calibration_notes.append(f"could not read this map's field polygons: {i3d_error}")
+        else:
+            spatial_results = resolve_spatial_field_farmland(
+                field_polygons, fields_root_translation, fields_root_rotation,
+                pixels, raster_width, raster_height, map_width_m, map_height_m)
+            shoelace_check = build_shoelace_label_check(spatial_results)
+        fields_out = build_spatial_field_rows(
+            field_ids, spatial_results, parcels, farm_id, calibration_notes)
 
-    identity_overlap = build_identity_overlap(field_ids, set(parcels))
+    field_coverage = build_field_coverage(
+        list(field_polygons.keys()) if field_polygons is not None else None,
+        field_ids)
 
     gates_passed = {
         "gate1_id_set_matches_savegame": True,
@@ -1813,7 +2513,13 @@ def main():
         # in neither provenance.sources nor source_set_hash, so an edit to it
         # moved no hash and a stale cache read as fresh.
         os.path.join(savegame_dir, "environment.xml"),
-        mod_zip_path,
+        # TECH-DEBT-103b: mod_zip_path is a DIRECTORY for a base-game map, and
+        # file_provenance() below requires a FILE -- appending it here would
+        # silently vanish from provenance.sources (os.path.isfile() filters
+        # it out with no error), which is exactly the "absence dressed as
+        # completeness" shape this file exists to refuse. map_source_paths is
+        # the two files actually read in that case; see its own comment.
+        *map_source_paths,
     ]
     if field_ids is not None:
         source_paths.append(os.path.join(savegame_dir, "fields.xml"))
@@ -1835,12 +2541,17 @@ def main():
         owned_land_value=owned_total_cost,
         fields_out=fields_out,
         field_err=field_err,
-        identity_overlap=identity_overlap,
-        # The live list, so a scope-void note raised inside build_sections
-        # reaches calibration_needed in the legacy block below.
+        field_coverage=field_coverage,
+        # The live list, so an unresolved-field note raised inside
+        # build_spatial_field_rows reaches calibration_needed in the legacy
+        # block below.
         calibration_notes=calibration_notes,
         # ARCH-R3-05's per-save falsifier, read as RAW TEXT before coercion.
         raw_id_conformance=raw_id_conformance,
+        # ARCH-R3-06's per-save corroboration OF THE AREA (never of the
+        # join's position -- TECH-DEBT-107): does this parser's own
+        # polygon-area formula reproduce the map author's printed ha label?
+        shoelace_check=shoelace_check,
     )
     top_status, top_reason = roll_up(sections)
 

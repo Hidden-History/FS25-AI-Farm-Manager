@@ -131,7 +131,7 @@ def compact(obj, key=None):
                 out[k] = {
                     "_omitted": True,
                     "note": f"{k} omitted to keep collect_state.py's output small "
-                            "(FRICTION-LOG.md F-006) -- rerun with --debug for the full value.",
+                            "-- rerun with --debug for the full value.",
                 }
             else:
                 out[k] = compact(v, key=k)
@@ -211,7 +211,7 @@ def main():
 
     if not debug:
         snapshot["_debug_note"] = (
-            "This output is compacted (FRICTION-LOG.md F-006): generic_dump/"
+            "This output is compacted: generic_dump/"
             "all_settings fields and list entries beyond the first "
             f"{MAX_LIST_ITEMS} are omitted with a note, not silently dropped -- "
             "summary counts (field_count, owned_count, price_stat_count, ...) "

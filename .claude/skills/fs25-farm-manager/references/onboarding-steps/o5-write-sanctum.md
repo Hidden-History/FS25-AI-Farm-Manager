@@ -1,15 +1,16 @@
 ---
 name: o5-write-sanctum
+nextStepFile: './o6-arm-watcher.md'
 description: 'Write the three files onboarding owns — config.json, creed, decision-making — filled from what the save showed, then confirm ready.'
 ---
 
 # O5: Write the sanctum and confirm ready
 
-**Progress: Step 5 of 5** — Final step of onboarding
+**Progress: Step 5 of 6**
 
-## Write exactly three files
+## Write exactly three files by hand
 
-**Write the sanctum** from the templates — and ⛔ **exactly these three, no more:**
+**Write the sanctum** from the templates — and ⛔ **exactly these three by hand, no more** (the field plan below is written by its script, not by hand):
 
 1. **`sanctum/config.json`** — savegame path, the `paths` block from O1, slot,
    `player_name` and `language` from **O1**, `session_count: 0`, and `sanctum_schema_version`.
@@ -45,6 +46,34 @@ its first **Current focus** and **Standing directives** as the first real decisi
 the player, and the first index row is appended at the first closeout. Writing them now invents a
 plan the player never agreed to.
 
+## Build the field plan now — it is a standing duty, not something to wait to be asked for
+
+The per-field crop plan is **not** `PLAN.md`, and the rule above does not stop it: `PLAN.md`'s
+directives are the player's to agree, but the next crop on each field is the manager's standing
+duty from the first session (duty D-02). Before you confirm ready:
+
+1. Run `project_crop_calendar.py` (`references/crop-calendar.md`) for the plant windows and each
+   owned field's ready and dead windows. **Never build this from a script of your own.**
+2. The merged-fields answer from O3 is recorded **before** this point, which is why this section
+   sits at O5. The writer refuses to run until it is (the merge table is unassessed). **If it
+   refuses for that reason, go back and ask O3's merged-fields question and record the answer with
+   `record_field_merges.py`, then retry; never edit the plan file or any marker to get round the
+   refusal.** Now write **a next crop and plant window for every
+   owned field** — a field with a crop standing included — with
+   `python3 ".claude/skills/fs25-farm-manager/scripts/record_field_plan.py" sanctum --set <FIELD> "<NEXT CROP>" "<PLANT WINDOW>" [--set ...]`.
+   Never edit `sanctum/state/field-plan.md` by hand. **On a save where seasonal growth is off**
+   (the calendar's `seasonal_table_applies` is false, every window `unknown`; a DAILY save) the
+   `unknown` is the answer, not a gap: write the row with the plant window
+   `Any time (seasonal growth is off)`, exactly as D-02 step 0 says. A field you really cannot fill
+   (no crop you can choose, or an `unknown` on a save where seasons are ON) is a **gap**: leave no
+   row and say so.
+3. Every row you write is `reviewed: no`. **Show the plan to the player in this onboarding and ask
+   him to approve it** (the player approves the crop plan unless he asks
+   otherwise), as a decision with options, not as a finished plan he must accept. Mark a row
+   with `record_field_plan.py sanctum --reviewed <FIELD> ...` **only on his yes**. Rows he has
+   not approved stay `no`, and you keep showing them until he does. If he says to stop asking,
+   record that as D-02 step 4 says, in `identity/decision-making.md`.
+
 ## Fill identity from what the save showed — never a blank slate
 
 **Fill identity from what O2 found**, never from a blank-slate assumption. The position is already on
@@ -61,5 +90,5 @@ answer was actually recorded or merely heard.
 
 ## Done
 
-Onboarding is complete. The manager is now bound to this save; continue with the first session
-(`references/workflow-briefing.md`).
+The manager is now bound to this save and the sanctum is written. **One step remains**: the two-way
+watcher is not armed yet, and nothing else on this path arms it. Read fully and follow: {nextStepFile}

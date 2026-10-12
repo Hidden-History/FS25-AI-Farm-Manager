@@ -186,7 +186,7 @@ TYPING_GUARANTEE_B39 = (
 TYPING_GUARANTEE_B40 = (
     "MIXED -- floats, ints and at least one zero-padded bitfield "
     "(treeTypesCut=\"000000\"). No schema guarantee of lossless numeric "
-    "coercion exists, so DEC-047's default applies: raw."
+    "coercion exists, so the default (keep the value raw) applies."
 )
 
 
@@ -330,7 +330,7 @@ def build_finance_ledger(target, farm_id):
         # § 6.8.2 tooth 1's intersection is glob-aware and BIDIRECTIONAL, so
         # this section's broad "farms.xml:farm/finances/stats/*" does match the
         # registry's specific ".../fieldPurchase" and the declaration is owed.
-        blocked_by={"bug": "BUG-014", "permitted_use_ref": PERMITTED_USE_REF_B39},
+        blocked_by={"bug": "land-cost-single-period-read", "permitted_use_ref": PERMITTED_USE_REF_B39},
     )
 
     # EVERY SIBLING IS ACCOUNTED FOR, NOT JUST THE FIRST. find() returns the
@@ -714,7 +714,7 @@ def build_lifetime_averages(target, farm_id):
             "denominator": {
                 "playTime_minutes": play_minutes,
                 "playTime_hours": round(play_hours, 6),
-                "unit": "REAL minutes of play (DEC-114, settled by measurement "
+                "unit": "REAL minutes of play (settled by measurement "
                         "against 8 timestamped savegameBackup snapshots)",
                 "timeScale_is_not_applied": (
                     "timeScale is a mutable setting's snapshot, not a lifetime "
@@ -724,7 +724,7 @@ def build_lifetime_averages(target, farm_id):
                     "Read from THIS farm's <statistics> element. Whether "
                     "farms.xml playTime is per-farm or a global mirror is "
                     "UNDETERMINED; reading per farm is correct under either "
-                    "answer and is scope-safe (BUG-016)."),
+                    "answer and is scope-safe."),
             },
             "averages": averages,
             "unreadable_counters": unreadable,
